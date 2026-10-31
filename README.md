@@ -4,7 +4,7 @@ Phase 1 is a standalone order-domain baseline for a future workflow:
 
 ChatGPT Tech Lead → MCP Workflow Server → Codex CLI Coder → GitHub → ChatGPT Tech Lead Review → Notification.
 
-Only the order domain and review documents exist here. TASK-001 is proposed, not implemented. No MCP server, dashboard, scheduling or orchestration is included.
+Only the order domain and review documents exist here. TASK-001 idempotent creation is implemented on its task branch and awaits Tech Lead review. No MCP server, dashboard, scheduling or orchestration is included.
 
 ## Setup and tests
 
@@ -28,7 +28,7 @@ assert order.total == Decimal("25.00")
 assert service.get_order(order.order_id) is order
 ```
 
-Storage is in memory and local to one service instance; concurrent use is unsupported. Totals use Decimal with the caller's precision and no currency quantization. Repeated creation currently produces different IDs.
+Storage is in memory and local to one service instance; concurrent use is unsupported. Totals use Decimal with the caller's precision and no currency quantization. Creation without a key produces different IDs; an optional idempotency_key returns the original order on matching retries and rejects conflicting reuse.
 
 ## Review context
 
@@ -38,7 +38,7 @@ Storage is in memory and local to one service instance; concurrent use is unsupp
 - [Proposed review policy](docs/review-policy.md)
 - [TASK-001: proposed idempotent creation](docs/tasks/TASK-001.md)
 
-Future implementation uses a dedicated Git worktree/branch, committed and pushed for exact-head-SHA review by ChatGPT Tech Lead. Review effort is requested per task (`instant`, `medium`, `high`), with at most two rounds. Codex cannot approve its own work. Do not implement TASK-001 before Tech Lead authorization or merge without explicit authorization.
+Future implementation uses a dedicated Git worktree/branch, committed and pushed for exact-head-SHA review by ChatGPT Tech Lead. Review effort is requested per task (`instant`, `medium`, `high`), with at most two rounds. Codex cannot approve its own work. TASK-001 implementation was authorized by ChatGPT Tech Lead; do not merge without explicit authorization.
 
 ## Initial publication recovery
 

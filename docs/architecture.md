@@ -8,7 +8,7 @@
 - An order contains at least one valid item in an immutable tuple. The service copies the incoming iterable before storing an order. Invalid creation does not store anything or consume an ID.
 - Line total is quantity times unit price; order total is the sum of line totals. No taxes, discounts, currency conversion or quantization are implied. Calculations use the caller's Decimal context (default precision 28); extreme magnitudes are outside this small POC's guarantees.
 - Domain models do not depend on the service or external systems. The service depends on models and Python's standard library only. There is no persistence, network access or workflow implementation.
-- IDs and storage are scoped to one service instance. Data is lost on restart; concurrent access is unsupported. Repeated valid creation calls currently produce distinct orders. Idempotency is a proposed future task only.
+- IDs and storage are scoped to one service instance. Data is lost on restart; concurrent access is unsupported. Creation without a key (or with None) produces distinct orders. Optional nonblank string keys map to immutable orders within the same service instance. Every request is fully validated before key lookup. A matching retry returns the original object; conflicting reuse raises ValueError without changing state or consuming an ID. Item tuples compare in order, including duplicate lines, using numeric Decimal equality. Keys are exact and case-sensitive; only whitespace-only keys are rejected, with no key or product normalization. No persistence or concurrency guarantees are added.
 
 ## Errors and verification
 
