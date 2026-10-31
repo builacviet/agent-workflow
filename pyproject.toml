@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "techlead-review-poc"
-version = "0.1.0"
-description = "Small order domain for the ChatGPT Tech Lead review POC"
+version = "0.2.0"
+description = "Independent order domain and MCP workflow engine for Tech Lead review"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
+mcp = ["mcp==1.30.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -18,3 +19,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.setuptools.package-data]
+my_wfc = ["schema.sql", "resources/*.md"]
