@@ -55,3 +55,17 @@ Review status: awaiting ChatGPT Tech Lead
 3. Validate before lookup or mutation: test_invalid_key_changes_no_state; test_invalid_items_are_rejected_before_retry_lookup; test_invalid_item_values_cannot_bypass_request_validation. Cases cover fresh/reused keys, corrected retries, invalid quantities/prices and unchanged next ID; baseline validation tests remain intact.
 4. Omitted/None key retains distinct creation, totals, validation, immutability and lookup: baseline suite plus test_keys_are_exact_and_instance_local_and_none_keeps_baseline_behavior.
 5. Keys are exact/case-sensitive, different keys may share item data, and instances do not share mappings: test_keys_are_exact_and_instance_local_and_none_keeps_baseline_behavior; invalid-key cases cover blank/whitespace keys.
+
+## TASK-001 F-001 correction — awaiting Review Round 2
+
+- Task ID: TASK-001. Tech Lead Round 1 verdict: CHANGES_REQUESTED at 6352c8ff5ea83450a93cd1077d6447170c9dedaa; finding F-001 (AC3).
+- Summary: service now calls OrderItem.__post_init__(item) directly instead of dynamically dispatching item.__post_init__(). Subclasses overriding the hook cannot bypass the base domain validator. Validation remains before key lookup and all state mutation; models and exception conventions are unchanged.
+- Files changed in correction: src/order_service/service.py; tests/test_order_service.py; docs/handoff.md.
+- Regression: test_subclass_cannot_override_request_validation has 12 cases covering the exact reproducer, invalid quantity/price independently, bool quantity, NaN and float price, for fresh and existing keys. Checks missing order after rejection, corrected request using the same key, original order/mapping preservation, matching retry identity and next ID.
+- Exact test command (from D:\WORK\Project\techlead-review-poc-TASK-001): `D:/WORK/Project/techlead-review-poc/.venv/Scripts/python.exe -m pytest -q`.
+- Actual result: 77 passed in 0.12s, exit 0 (Python 3.12.10 / pytest 9.2.0); all 65 previous cases retained, covering all five ACs.
+- Branch: task/TASK-001. Approved base SHA unchanged: 015ccc535b85ce1d0ad00da787b827970b9bf39a.
+- Head SHA and push verification: literal correction SHA supplied in final handoff after commit/push; resolve with git rev-parse task/TASK-001 and compare git ls-remote origin refs/heads/task/TASK-001.
+- Risks / limitations unchanged: in-memory only, no persistence/eviction/concurrency guarantees, caller-controlled Decimal context; no new dependencies or expanded scope.
+- Requested review effort: high; automated High review verification remains unavailable, with no claim it was applied.
+- Status: final permitted automatic correction cycle completed; awaiting ChatGPT Tech Lead Review Round 2. No self-approval, merge or follow-up implementation.

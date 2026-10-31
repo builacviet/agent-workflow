@@ -218,3 +218,37 @@ def test_keys_are_exact_and_instance_local_and_none_keeps_baseline_behavior():
     other = OrderService().create_order(items, "Key")
     assert other.order_id == "1"
     assert other is not orders[0]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("quantity, price, error", [
+    (0, Decimal("-1"), ValueError),
+    (0, Decimal("1"), ValueError),
+    (1, Decimal("-1"), ValueError),
+    (True, Decimal("1"), TypeError),
+    (1, Decimal("NaN"), ValueError),
+    (1, 1.0, TypeError),
+])
+def test_subclass_cannot_override_request_validation(existing, quantity, price, error):
+    class UncheckedItem(OrderItem):
+        def __post_init__(self):
+            pass
+
+    service = OrderService()
+    valid = [OrderItem("book", 1, Decimal("1"))]
+    original = service.create_order(valid, "K") if existing else None
+    bad = UncheckedItem("book", quantity, price)
+    with pytest.raises(error):
+        service.create_order([bad], "K")
+
+    # Rejection neither stores an order nor reserves/replaces the key.
+    with pytest.raises(KeyError):
+        service.get_order("2" if existing else "1")
+    recovered = service.create_order(valid, "K")
+    assert recovered.order_id == "1"
+    assert recovered.items == tuple(valid)
+    if existing:
+        assert recovered is original
+        assert service.get_order("1") is original
+    assert service.create_order(valid, "K") is recovered
+    assert service.create_order(valid).order_id == "2"

@@ -16,8 +16,8 @@ class OrderService:
         # Validate the full incoming request before consulting key state.
         order = Order(order_id=str(len(self._orders) + 1), items=tuple(items))
         for item in order.items:
-            # Recheck values even for retries and externally supplied instances.
-            item.__post_init__()
+            # Call the domain validator directly so subclass overrides cannot bypass it.
+            OrderItem.__post_init__(item)
         if idempotency_key is not None:
             if not isinstance(idempotency_key, str):
                 raise TypeError("idempotency_key must be a string or None")
