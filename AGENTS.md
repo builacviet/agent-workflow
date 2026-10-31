@@ -1,7 +1,7 @@
 # Project rules
 
 - Target Python 3.11+. Use type hints in application code, PEP 8 naming, small functions and explicit errors. Monetary inputs are finite, nonnegative `Decimal` values; never convert floats implicitly.
-- Keep runtime dependencies empty. No database, HTTP server, external services, MCP integration, scheduling or orchestration in Phase 1.
+- Keep order_service runtime dependencies empty. The authorized Phase 2.2 migration adds an independent my_wfc package with the optional mcp dependency extra. Preserve its SQLite, authenticated MCP and review policies; do not add scheduler/dispatch/dashboard/OAuth features. Neither package imports the other.
 - Add deterministic pytest coverage for behavior changes, invalid inputs and regressions. Run `python -m pytest -q` before every implementation handoff; record the actual command and outcome. Never invent evidence.
 - Before implementing a task, read this file, `docs/architecture.md`, `docs/review-policy.md`, `docs/handoff.md` and the authorized task. TASK-001 is proposed and must not be implemented until ChatGPT Tech Lead authorizes it.
 - Baseline bootstrap may use `main`. Future tasks require a dedicated branch and Git worktree, e.g. `git worktree add ../techlead-review-poc-TASK-001 -b task/TASK-001 main`. Keep the main checkout clean; do not modify unrelated repositories.

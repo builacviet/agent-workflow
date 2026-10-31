@@ -1,55 +1,35 @@
-# ChatGPT Tech Lead Review POC
+# Tech Lead Review POC
 
-Phase 1 is a standalone order-domain baseline for a future workflow:
+Two independently importable Python packages share this repository:
 
-ChatGPT Tech Lead → MCP Workflow Server → Codex CLI Coder → GitHub → ChatGPT Tech Lead Review → Notification.
+- `order_service`: small immutable in-memory order domain using Decimal. Application source and tests are unchanged from target main.
+- `my_wfc`: migrated FastMCP workflow engine with SQLite, authenticated workflow tools, leases, GitHub SHA checks and two-round review history. It does not import or call order_service.
 
-Only the order domain and review documents exist here. TASK-001 is proposed, not implemented. No MCP server, dashboard, scheduling or orchestration is included.
-
-## Setup and tests
-
-Requires Python 3.11+. From the repository root (PowerShell):
+Requires Python 3.11+. From the checkout root:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e '.[test]'
+.venv\Scripts\python.exe -m pip install -e '.[mcp,test]'
 .venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m my_wfc.admin seed-history
+.venv\Scripts\python.exe -m my_wfc.admin seed-synthetic
+.venv\Scripts\python.exe -m my_wfc.server
 ```
 
-After activating the environment, the equivalent test command is `python -m pytest -q`. Runtime dependencies are empty; pytest is a test dependency.
+The `mcp` extra is optional: `pip install -e '.[test]'` suffices for the sample application and its tests (`python -m pytest tests/test_order_service.py -q`). Running the full suite requires both extras. There are no mandatory distribution runtime dependencies for the order package.
 
-```python
-from decimal import Decimal
-from order_service import OrderItem, OrderService
+The server defaults to loopback port 8000 and /mcp. Do not start it on a port occupied by the original server. Migration verification uses temporary loopback ports; it does not switch the existing server, tunnel or plugin. Only ping/server_info are public; all seven workflow tools require protected transport authentication. No verified-effort attestation is configured, so verified High approval remains blocked.
 
-service = OrderService()
-order = service.create_order([OrderItem("book", 2, Decimal("12.50"))])
-assert order.total == Decimal("25.00")
-assert service.get_order(order.order_id) is order
-```
+Database initialization is idempotent on the first authenticated workflow call or local admin command. Default editable-install state is checkout/data/workflow.sqlite3; WFC_DB_PATH may specify an absolute alternative. `.env.example` lists settings without secrets and is not automatically loaded. Do not point the consolidated server at the original project's database.
 
-Storage is in memory and local to one service instance; concurrent use is unsupported. Totals use Decimal with the caller's precision and no currency quantization. Repeated creation currently produces different IDs.
-
-## Review context
+TASK-001 historical state is imported as ESCALATED, two completed rounds, with original SHAs and unverified effort. This is historical import, not a new review execution. The synthetic fixture uses a dedicated real branch `poc/review-baseline`, pinned to the original baseline; main may advance independently. Existing copied fixture metadata requires explicit operator handling described below.
 
 - [Project rules](AGENTS.md)
 - [Architecture](docs/architecture.md)
-- [Handoff format and baseline evidence](docs/handoff.md)
-- [Proposed review policy](docs/review-policy.md)
-- [TASK-001: proposed idempotent creation](docs/tasks/TASK-001.md)
+- [Workflow tools, schema, state machine and security](docs/my-wfc.md)
+- [Migration provenance, state backup/copy, fixture strategy and rollback](docs/migration-my-wfc.md)
+- [Handoff and actual verification evidence](docs/handoff.md)
+- [Review policy](docs/review-policy.md)
+- [Historical TASK-001 specification](docs/tasks/TASK-001.md)
 
-Future implementation uses a dedicated Git worktree/branch, committed and pushed for exact-head-SHA review by ChatGPT Tech Lead. Review effort is requested per task (`instant`, `medium`, `high`), with at most two rounds. Codex cannot approve its own work. Do not implement TASK-001 before Tech Lead authorization or merge without explicit authorization.
-
-## Initial publication recovery
-
-If GitHub authentication/publication is unavailable during bootstrap, sign in and publish from this new repository only:
-
-```powershell
-gh auth login -h github.com
-gh repo create techlead-review-poc --private --source . --remote origin --push
-gh repo view --json url,isPrivate,defaultBranchRef
-git rev-parse HEAD
-git ls-remote origin refs/heads/main
-```
-
-If creation reports an existing repository, inspect its owner and privacy before attaching any remote; do not overwrite an existing project. GitHub publication is complete only when privacy and matching local/remote commit SHAs are verified.
+The migration branch is for independent ChatGPT Tech Lead review. Codex does not approve its own work or merge branches. TASK-001 remains escalated; its branch and code are not changed by consolidation.
