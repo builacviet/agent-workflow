@@ -6,7 +6,7 @@ from my_wfc.security import poc_unauthenticated_enabled
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-CLOUDFLARE_HOST = "cut-possess-updating-appraisal.trycloudflare.com"
+CLOUDFLARE_HOST = "ban-diary-evaluated-sagem.trycloudflare.com"
 
 mcp = FastMCP(
     "Workflow MCP Lab",
