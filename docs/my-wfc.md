@@ -67,6 +67,55 @@ No auth token is an LLM tool argument. Missing/short token, absent reviewer labe
 
 The runtime has NO trusted reasoning-effort attestation provider. Client actual_effort/evidence never establishes verification. Stored actual_effort is null and verification_evidence is unverified unless a trusted server-side adapter independently verifies it. Verified High tasks cannot automatically approve in the default runtime; rejection leaves round count unchanged. Requested effort remains metadata/filtering. A future attestation adapter is an explicit integration point, not a model switch. Supported effort registry is injectable; no model versions are hardcoded.
 
+## Temporary unauthenticated POC test (UNSAFE; explicit opt-in)
+
+**Not a production configuration and not OAuth.** To exercise the seven protected MCP
+tools from a ChatGPT development plugin that does not send static Bearer credentials,
+the server supports a temporary bypass controlled by `WFC_POC_NO_AUTH=1`.
+With this flag active **anyone who obtains the Cloudflare tunnel URL can read and
+change the disposable workflow state**. A random Quick Tunnel hostname is not an
+access-control mechanism. Keep this window short, stop the tunnel immediately after
+testing, and never host private or real task data in the dedicated POC database.
+
+Bypass guardrails:
+
+- Off by default; ordinary Bearer validation and existing denial tests remain in place.
+- Requires `WFC_DB_PATH` to be an **absolute path** with exact filename
+  `workflow-poc-unauth.sqlite3`. Any unset, relative or other database filename
+  fails closed. This prevents accidentally using the normal `workflow.sqlite3` file.
+- Uses fixed reviewer label `poc-unauthenticated`; this is **not** authenticated
+  identity or a trusted reviewer attestation.
+- The two-round policy, GitHub SHA verification and transaction checks are unchanged.
+- This bypass is for **test fixtures only**. Never seed real history into this database
+  or repoint it to the real database. No credentials should be placed in the chat.
+
+On Windows PowerShell, after stopping the old MCP process, from the selected checkout
+with the changes installed and `gh` read access to the repository:
+
+```powershell
+$env:WFC_POC_NO_AUTH = "1"
+$env:WFC_DB_PATH = (Join-Path (Get-Location) "data/workflow-poc-unauth.sqlite3")
+# A fresh, empty file should be used. Do NOT copy an existing real workflow.sqlite3.
+python -m my_wfc.admin seed-synthetic
+python -m my_wfc.server
+```
+
+Keep the existing allowed-host/DNS-rebinding protection enabled; configure the
+currently assigned Cloudflare tunnel hostname separately. Confirm that `get_server_info()`
+reports `POC-UNAUTHENTICATED-UNSAFE`. In ChatGPT, exercise only the synthetic
+`POC-REVIEW-001` path. The historical TASK-001 is NOT seeded into this disposable DB.
+
+When finished, stop the Cloudflare tunnel **first**, stop the server, and in the
+PowerShell server session unset the variables to return to normal Bearer mode:
+
+```powershell
+Remove-Item Env:WFC_POC_NO_AUTH -ErrorAction SilentlyContinue
+Remove-Item Env:WFC_DB_PATH -ErrorAction SilentlyContinue
+```
+
+This mode is intentionally insecure: it is a temporary validation aid rather than
+a replacement for OAuth, Bearer authentication or a restricted development gateway.
+
 ## Start / restart / reconnect
 
 From the consolidated repository root:
