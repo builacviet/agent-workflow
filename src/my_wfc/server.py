@@ -1,10 +1,12 @@
 import os
 from datetime import datetime, timezone
 
+from my_wfc.security import poc_unauthenticated_enabled
+
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-CLOUDFLARE_HOST = "cut-possess-updating-appraisal.trycloudflare.com"
+CLOUDFLARE_HOST = "ban-diary-evaluated-sagem.trycloudflare.com"
 
 mcp = FastMCP(
     "Workflow MCP Lab",
@@ -32,7 +34,8 @@ def get_server_info() -> dict:
         "name": "Workflow MCP Lab",
         "version": "0.2.0",
         "status": "running",
-        "mode": "workflow-writes-denied-unless-authenticated",
+        "mode": ("POC-UNAUTHENTICATED-UNSAFE" if poc_unauthenticated_enabled()
+                 else "workflow-writes-denied-unless-authenticated"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -41,4 +44,11 @@ from my_wfc.tools import register_tools
 register_tools(mcp)
 
 if __name__ == "__main__":
+    if poc_unauthenticated_enabled():
+        print(
+            "WARNING: POC NO-AUTH MODE: all seven workflow tools are callable "
+            "without credentials by anyone who can reach this endpoint. "
+            "Use ONLY an isolated disposable SQLite DB and stop the tunnel after testing.",
+            flush=True,
+        )
     mcp.run(transport="streamable-http")

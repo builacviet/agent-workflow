@@ -276,7 +276,33 @@ def test_transaction_rollback_after_partial_review_write(env, monkeypatch):
     assert service.get_review_result("TEST")["completed_review_rounds"] == 1
 
 
+def test_poc_unauthenticated_mode_requires_disposable_database(monkeypatch, tmp_path):
+    monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
+    monkeypatch.delenv("WFC_DB_PATH", raising=False)
+    monkeypatch.delenv("WFC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("WFC_REVIEWER_ID", raising=False)
+
+    # Unsafe mode fails closed unless a dedicated absolute SQLite path is set.
+    with pytest.raises(PermissionError, match="WFC_DB_PATH"):
+        authorize_request(None)
+    monkeypatch.setenv("WFC_DB_PATH", "workflow-poc-unauth.sqlite3")
+    with pytest.raises(PermissionError, match="WFC_DB_PATH"):
+        authorize_request(None)
+    monkeypatch.setenv("WFC_DB_PATH", str(tmp_path / "workflow.sqlite3"))
+    with pytest.raises(PermissionError, match="WFC_DB_PATH"):
+        authorize_request(None)
+
+    monkeypatch.setenv("WFC_DB_PATH", str(tmp_path / "workflow-poc-unauth.sqlite3"))
+    assert authorize_request(None) == "poc-unauthenticated"
+
+    # Without the explicit flag, standard Bearer enforcement remains active.
+    monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
+    with pytest.raises(PermissionError):
+        authorize_request(None)
+
+
 def test_auth_denies_default_missing_and_wrong_token(monkeypatch):
+    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
     monkeypatch.delenv("WFC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("WFC_REVIEWER_ID", raising=False)
     request = lambda value: Request({"type": "http", "headers": [(b"authorization", value.encode())]})
