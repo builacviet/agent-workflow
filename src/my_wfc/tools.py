@@ -10,9 +10,24 @@ from my_wfc.service import WorkflowService
 
 
 def default_service():
+    verifier = GitHubVerifier({"builacviet/techlead-review-poc"})
+    if any(os.environ.get(key) for key in (
+            "WFC_GITHUB_APP_ID", "WFC_GITHUB_INSTALLATION_ID", "WFC_GITHUB_APP_PEM")):
+        from pathlib import Path
+        from my_wfc.app_auth import AppVerifier, GitHubApp
+        from my_wfc.github import WorkflowError
+        try:
+            verifier = AppVerifier(GitHubApp(
+                int(os.environ["WFC_GITHUB_APP_ID"]),
+                int(os.environ["WFC_GITHUB_INSTALLATION_ID"]),
+                Path(os.environ["WFC_GITHUB_APP_PEM"]),
+            ))
+        except (KeyError, ValueError, OSError):
+            raise WorkflowError("GitHub App configuration unavailable") from None
+
     return WorkflowService(
         database_path(),
-        GitHubVerifier({"builacviet/techlead-review-poc"}),
+        verifier,
     )
 
 

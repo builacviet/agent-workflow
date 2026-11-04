@@ -1,0 +1,25 @@
+{
+  "repository": "builacviet/techlead-review-poc",
+  "database": "D:/WORK/Project/techlead-review-poc-phase31/data/controller/workflow.sqlite3",
+  "app_id": 1,
+  "installation_id": 1,
+  "pem": "D:/WORK/Project/techlead-review-poc-phase31/.secret/coder-app.pem",
+  "openai_key": "D:/WORK/Project/techlead-review-poc-phase31/.secret/openai-api-key.txt",
+  "scratch": "D:/WORK/Project/techlead-review-poc-phase31/.runtime/jobs",
+  "image": "my-wfc-codex:phase31",
+  "model": "OPERATOR_SELECT_MODEL",
+  "timeout_seconds": 1800,
+  "tasks": {
+    "P31-SYNTHETIC": {
+      "worktree": "D:/WORK/Project/techlead-review-poc-controller-fixture",
+      "write_paths": [
+        "src/order_service",
+        "tests",
+        "docs/controller-fixture-handoff.md"
+      ],
+      "handoff_path": "docs/controller-fixture-handoff.md"
+    }
+  },
+  "seccomp_profile": "D:/WORK/Project/techlead-review-poc-phase31/docker/coder-seccomp.json",
+  "seccomp_sha256": "ae759f8cbb0a2dfe62d517be5e73c405666b309ec55988b1ef60f92b59d9a1f8"
+}

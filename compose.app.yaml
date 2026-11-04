@@ -1,0 +1,14 @@
+# Optional App authentication for the MCP verifier. No controller or Docker socket.
+services:
+  mcp:
+    environment:
+      WFC_GITHUB_APP_ID: ${WFC_GITHUB_APP_ID:?set App ID}
+      WFC_GITHUB_INSTALLATION_ID: ${WFC_GITHUB_INSTALLATION_ID:?set installation ID}
+      WFC_GITHUB_APP_PEM: /run/.secret/coder-app.pem
+    volumes:
+      - type: bind
+        source: ./.secret/coder-app.pem
+        target: /run/.secret/coder-app.pem
+        read_only: true
+        bind:
+          create_host_path: false

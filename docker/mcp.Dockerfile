@@ -5,7 +5,7 @@ WORKDIR /app
 
 # gh is required by the existing exact-SHA GitHub verification service.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gh \
+    && apt-get install -y --no-install-recommends ca-certificates gh openssl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /app/pyproject.toml

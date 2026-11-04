@@ -9,3 +9,7 @@
 - Complete the handoff fields with changes, files, tests, risks, branch, base/head SHA and limitations. A commit cannot embed its own SHA; use a separate handoff message or resolve the committed evidence anchor described in `docs/handoff.md`.
 - Codex is the Coder/Environment Builder: implement, test, commit, push and report evidence. Codex must never approve its own work or assign final approval to another agent.
 - ChatGPT Tech Lead owns task authorization, acceptance-criteria review, exact-SHA approval and escalation. Maximum two Tech Lead review rounds per task; follow `docs/review-policy.md`. Requested effort is task-level `instant`, `medium` or `high`; never claim unverified model/reasoning settings.
+
+## Authorized Phase 3.1 exception
+
+The owner authorized the independent my_wfc Codex Controller and GitHub App in docs/tasks/PHASE-3.1.md. That scope is an exception to the earlier no-scheduler/dispatch rule only. All review, authentication, package isolation, no-merge and no-v2-operation rules remain in force.
