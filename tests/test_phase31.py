@@ -443,14 +443,12 @@ def test_malformed_and_expired_installation_tokens(app):
 
 
 def test_app_http_error_never_exposes_token(monkeypatch):
-    from urllib.error import URLError
     import my_wfc.app_auth as module
 
-    class Opener:
-        def open(self, *args, **kwargs):
-            raise URLError("secret synthetic-token")
+    def fail(data):
+        raise OSError("secret synthetic-token")
 
-    monkeypatch.setattr(module, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(module, "_run_http_worker", fail)
     with pytest.raises(WorkflowError) as error:
         module.request_json("GET", "/app", "synthetic-token")
     assert "synthetic-token" not in str(error.value)
@@ -792,22 +790,16 @@ def test_shared_budget_caps_git_http_signing_and_sqlite_waits(
 
     monkeypatch.setattr(runtime.subprocess, "run", run)
 
-    class Response:
-        def __enter__(self):
-            return self
+    class Process:
+        returncode = 0
 
-        def __exit__(self, *args):
-            pass
-
-        def read(self, count):
-            return b"{}"
-
-    class Opener:
-        def open(self, request, *, timeout):
+        def communicate(self, data=None, *, timeout):
             limits.append(timeout)
-            return Response()
+            return b"{}", None
 
-    monkeypatch.setattr(auth, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(
+        auth.subprocess, "Popen", lambda *args, **kwargs: Process()
+    )
     connect = __import__("sqlite3").connect
 
     def limited_connect(*args, **kwargs):

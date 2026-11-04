@@ -1,4 +1,4 @@
-# PHASE-3.1 — isolated GitHub App coder controller
+# PHASE-3.1 â€” isolated GitHub App coder controller
 
 Owner authorization: current user request on 2026-11-04 authorizes this exception to the prior no-dispatch boundary. TASK-001 remains unauthorized and ESCALATED. Repository: builacviet/techlead-review-poc. Branch: codex/phase-3.1. Base: c5e0574ab793e5322f943a57206daf4d4efbea04. Requested review effort: high; actual model/effort unverified. Independent Tech Lead review pending, maximum two rounds; no merge.
 
@@ -22,3 +22,8 @@ Unit tests inject clocks, GitHub transport/signing and runtime callbacks. Real D
 ## Review follow-up F1/F2
 
 Input SHA: 1123267f7988e6f34202fc0a65fe2bb1548ba216. The review at https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5772173953 is a COMMENT with recommended CHANGES_REQUESTED, not a persisted formal Tech Lead verdict. Owner authorized correcting F1 (AC3/AC7) and F2 (AC4). Fix scope: allow the documented independent shared-DB filename while retaining canonical v2-directory rejection; extend the existing deadline through trusted Git/GitHub/SQLite publication and completion, retaining blocked reconciliation and post-expiry cleanup. Add deterministic config/clock/transport regressions and rerun complete suite/Docker. Acceptance criteria and the maximum-two-formal-round policy are unchanged; Codex records no verdict or approval. Awaiting independent review of the new exact SHA.
+
+
+## Owner-authorized residual F2 correction (2026-11-05)
+
+Input SHA: 4445f642e17289a9b6e428230c9930a7935b495a. Follow-up review COMMENT: https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5772386749. F1 is reported addressed; residual F2 is AC4's total HTTP deadline: a per-blocking-operation socket timeout does not bound delayed headers/trickling response bodies. Owner explicitly requested this further fix. Scope: isolate each trusted HTTP operation in a killable, bounded request process, preserve private credential handling/fixed origin/no redirects and uncertain-effect reconciliation, add real loopback slow-response regressions and rerun suite/Docker. No formal round counter is reset/incremented or third review authorized by Codex; any formal verdict/escalation remains the Tech Lead's decision under the unchanged two-round policy.

@@ -5,12 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
-from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from my_wfc.budget import check_deadline, operation_timeout
 from my_wfc.github import GitHubVerifier, WorkflowError
@@ -19,11 +18,45 @@ BOT = "builacviet-wfc-coder[bot]"
 REPOSITORY = "builacviet/techlead-review-poc"
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(
-        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
-    ) -> None:
-        raise WorkflowError("GitHub redirect refused")
+def _http_worker_command() -> list[str]:
+    # Script path also works from an installed wheel without PYTHONPATH changes.
+    return [sys.executable, str(Path(__file__).with_name("http_transport.py"))]
+
+
+def _stop_http_worker(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.kill()
+    try:
+        process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        raise WorkflowError(
+            "HTTP worker termination unconfirmed; reconciliation required"
+        ) from None
+
+
+def _run_http_worker(data: bytes) -> bytes:
+    # Preserve an absolute total limit across process startup and all socket IO.
+    end = time.monotonic() + operation_timeout(20)
+    process = subprocess.Popen(
+        _http_worker_command(),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        remaining = min(end - time.monotonic(), operation_timeout(20))
+        if remaining <= 0:
+            raise TimeoutError("HTTP request deadline exceeded")
+        output, _ = process.communicate(data, timeout=remaining)
+        check_deadline()
+        if process.returncode or len(output) > 2_000_000:
+            raise WorkflowError("GitHub App request failed")
+        return output
+    except BaseException:
+        # No background HTTP thread/request survives a completed cancellation.
+        # Reaping is cleanup, with its own bounded grace after execution expiry.
+        _stop_http_worker(process)
+        raise
 
 
 def request_json(
@@ -31,29 +64,21 @@ def request_json(
 ) -> Any:
     if not endpoint.startswith("/") or endpoint.startswith("//"):
         raise WorkflowError("invalid GitHub endpoint")
-    data = None if payload is None else json.dumps(payload).encode()
-    request = Request(
-        "https://api.github.com" + endpoint,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": "Bearer " + token,
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2026-03-10",
-            "Content-Type": "application/json",
-            "User-Agent": "my-wfc-phase31",
-        },
-    )
     try:
-        with build_opener(NoRedirect()).open(
-            request, timeout=operation_timeout(20)
-        ) as response:
-            body = response.read(2_000_001)
-        if len(body) > 2_000_000:
-            raise WorkflowError("GitHub response too large")
+        data = json.dumps(
+            {
+                "method": method,
+                "endpoint": endpoint,
+                "token": token,
+                "payload": payload,
+            }
+        ).encode()
+        body = _run_http_worker(data)
         return json.loads(body) if body else None
-    except (HTTPError, URLError, OSError, ValueError):
-        raise WorkflowError("GitHub App request failed") from None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise WorkflowError(
+            "GitHub App request failed or timed out; reconciliation required"
+        ) from None
 
 
 def sign_rs256(data: bytes, key: Path) -> bytes:
