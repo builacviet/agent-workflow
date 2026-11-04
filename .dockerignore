@@ -11,3 +11,6 @@ logs
 tests
 docs
 *.sqlite*
+
+# Local GitHub App private keys and other runtime-only secrets.
+.secret/
