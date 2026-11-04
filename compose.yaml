@@ -50,5 +50,13 @@ services:
     security_opt:
       - no-new-privileges:true
 
+# Explicit POC subnet to avoid Docker Desktop's exhausted default address pools.
+# Override WFC_DOCKER_SUBNET if it conflicts with the host/VPN routes.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${WFC_DOCKER_SUBNET:-10.254.240.0/24}
+
 volumes:
   mcp_state:
