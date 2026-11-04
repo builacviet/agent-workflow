@@ -19,3 +19,7 @@ logs/
 !.env.example
 *.pem
 *.key
+
+# Local Docker secret files; retain only committed templates.
+.runtime/*
+!.runtime/*.example
