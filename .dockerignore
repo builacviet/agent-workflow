@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+*.pyc
+data
+logs
+.runtime
+.env
+.env.*
+tests
+docs
+*.sqlite*
+
+# Local GitHub App private keys and other runtime-only secrets.
+.secret/

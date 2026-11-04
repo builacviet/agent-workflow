@@ -33,3 +33,13 @@ TASK-001 historical state is imported as ESCALATED, two completed rounds, with o
 - [Historical TASK-001 specification](docs/tasks/TASK-001.md)
 
 The migration branch is for independent ChatGPT Tech Lead review. Codex does not approve its own work or merge branches. TASK-001 remains escalated; its branch and code are not changed by consolidation.
+
+
+## Optional Docker MCP deployment
+
+A separate POC-only Docker Compose stack runs the MCP server with a persistent
+SQLite volume and an optional ngrok container using the stable domain
+`caddy-reopen-scotch.ngrok-free.dev`. It does not include the Codex Controller
+or reuse Workflow Console v2. See [Docker setup](docs/docker-mcp.md).
+Default protected workflow access remains unchanged; never enable public no-auth
+against non-synthetic data.

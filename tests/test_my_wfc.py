@@ -473,3 +473,29 @@ def test_old_synthetic_metadata_is_not_silently_retargeted(env):
     seed_synthetic(service)
     assert service.get_review_context("POC-REVIEW-001")["branch"] == "poc/review-baseline"
     assert service.get_review_context("TASK-001") == before
+
+
+def test_server_docker_bind_and_public_hostname_are_explicit(monkeypatch):
+    from my_wfc.server import server_bind_host, server_allowed_hosts
+    monkeypatch.delenv("WFC_MCP_HOST", raising=False)
+    monkeypatch.delenv("WFC_PUBLIC_HOST", raising=False)
+    assert server_bind_host() == "127.0.0.1"
+    assert server_allowed_hosts() == ["127.0.0.1:*", "localhost:*"]
+
+    monkeypatch.setenv("WFC_MCP_HOST", "0.0.0.0")
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "caddy-reopen-scotch.ngrok-free.dev")
+    hosts = server_allowed_hosts()
+    assert "mcp:*" in hosts
+    assert "caddy-reopen-scotch.ngrok-free.dev" in hosts
+    assert "caddy-reopen-scotch.ngrok-free.dev:*" in hosts
+
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "https://bad.example.com/mcp")
+    with pytest.raises(ValueError, match="plain DNS hostname"):
+        server_allowed_hosts()
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "bad..example.com")
+    with pytest.raises(ValueError, match="plain DNS hostname"):
+        server_allowed_hosts()
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "caddy-reopen-scotch.ngrok-free.dev")
+    monkeypatch.setenv("WFC_MCP_HOST", "localhost")
+    with pytest.raises(ValueError, match="WFC_MCP_HOST"):
+        server_bind_host()

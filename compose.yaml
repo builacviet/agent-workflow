@@ -1,0 +1,62 @@
+name: techlead-review-poc
+
+services:
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/mcp.Dockerfile
+    env_file:
+      - .runtime/mcp.env
+    environment:
+      # Only the container listens on all interfaces. The published host port is loopback-only.
+      WFC_MCP_HOST: "0.0.0.0"
+      WFC_PUBLIC_HOST: ${NGROK_DOMAIN:-caddy-reopen-scotch.ngrok-free.dev}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - mcp_state:/state
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8000), 2); s.close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  ngrok:
+    image: ngrok/ngrok:3-alpine
+    profiles:
+      - tunnel
+    env_file:
+      - .runtime/ngrok.env
+    command:
+      - http
+      - mcp:8000
+      - --url
+      - https://${NGROK_DOMAIN:-caddy-reopen-scotch.ngrok-free.dev}
+    depends_on:
+      mcp:
+        condition: service_healthy
+    # Never auto-reexpose an intentionally closed POC tunnel on daemon restart.
+    restart: "no"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+# Explicit POC subnet to avoid Docker Desktop's exhausted default address pools.
+# Override WFC_DOCKER_SUBNET if it conflicts with the host/VPN routes.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${WFC_DOCKER_SUBNET:-10.254.240.0/24}
+
+volumes:
+  mcp_state:

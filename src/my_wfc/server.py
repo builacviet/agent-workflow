@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 
 from my_wfc.security import poc_unauthenticated_enabled
@@ -6,19 +7,42 @@ from my_wfc.security import poc_unauthenticated_enabled
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-CLOUDFLARE_HOST = "ban-diary-evaluated-sagem.trycloudflare.com"
+def server_bind_host() -> str:
+    """Keep local source execution loopback-only unless explicitly containerized."""
+    host = os.environ.get("WFC_MCP_HOST", "127.0.0.1")
+    if host not in {"127.0.0.1", "0.0.0.0"}:
+        raise ValueError("WFC_MCP_HOST must be 127.0.0.1 or 0.0.0.0")
+    return host
+
+
+def server_allowed_hosts() -> list[str]:
+    """Explicit Host allowlist; never disable DNS-rebinding protection."""
+    hosts = ["127.0.0.1:*", "localhost:*"]
+    if server_bind_host() == "0.0.0.0":
+        # Internal Docker Compose service target for the ngrok agent.
+        hosts.append("mcp:*")
+    public_host = os.environ.get("WFC_PUBLIC_HOST", "").strip().lower()
+    if public_host:
+        labels = public_host.split(".")
+        if (
+            len(public_host) > 253
+            or len(labels) < 2
+            or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                for label in labels
+            )
+        ):
+            raise ValueError("WFC_PUBLIC_HOST must be a plain DNS hostname without scheme or port")
+        hosts.extend([public_host, public_host + ":*"])
+    return hosts
 
 mcp = FastMCP(
     "Workflow MCP Lab",
-    host="127.0.0.1",
+    host=server_bind_host(),
     port=8000,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=[
-            "127.0.0.1:*",
-            "localhost:*",
-            CLOUDFLARE_HOST,
-        ],
+        allowed_hosts=server_allowed_hosts(),
     ),
 )
 

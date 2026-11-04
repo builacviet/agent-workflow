@@ -19,3 +19,10 @@ logs/
 !.env.example
 *.pem
 *.key
+
+# Local Docker secret files; retain only committed templates.
+.runtime/*
+!.runtime/*.example
+
+# Local GitHub App private keys and other runtime-only secrets.
+.secret/
