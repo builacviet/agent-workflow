@@ -35,6 +35,40 @@ public ngrok endpoint can invoke all seven APIs**. Do not seed real history or
 copy real SQLite data into this volume. Stop the tunnel immediately afterwards.
 The path must remain exactly `/state/workflow-poc-unauth.sqlite3` in that mode.
 
+## Docker network address-pool exhaustion
+
+On hosts with many Compose test networks, Docker may fail with
+`all predefined address pools have been fully subnetted`. The POC therefore
+allocates `10.254.240.0/24` explicitly by default. This does **not** change,
+stop, prune or delete any existing Docker network.
+
+Check that the subnet is also free of collisions with local networks, VPN
+routes and other non-Docker interfaces before starting:
+
+```powershell
+route print -4
+docker network ls -q --filter driver=bridge | ForEach-Object {
+    docker network inspect $_ --format '{{.Name}}: {{range .IPAM.Config}}{{.Subnet}} {{end}}'
+}
+```
+
+If a VPN or network uses the proposed range (including a broader containing
+prefix such as `10.0.0.0/8`), choose another verified free CIDR and override
+Compose's default rather than editing shared Docker Desktop address pools:
+
+```powershell
+$env:WFC_DOCKER_SUBNET = "10.254.240.0/24"
+docker compose config --quiet
+docker compose up -d mcp
+```
+
+`WFC_DOCKER_SUBNET` is a Compose interpolation variable in the PowerShell
+environment or a local root `.env` file, **not** a variable from
+`.runtime/mcp.env`. The proposed default has been checked only against the
+network list supplied by the operator, not against the host's actual route
+table. Never run `docker network prune`, `docker compose down -v`, or
+change Workflow Console v2 networks as a troubleshooting shortcut.
+
 ## Build, seed, start
 
 From the repository root:
