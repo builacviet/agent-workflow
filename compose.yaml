@@ -43,7 +43,8 @@ services:
     depends_on:
       mcp:
         condition: service_healthy
-    restart: unless-stopped
+    # Never auto-reexpose an intentionally closed POC tunnel on daemon restart.
+    restart: "no"
     cap_drop:
       - ALL
     security_opt:
