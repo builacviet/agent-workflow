@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
+from my_wfc.budget import check_deadline, operation_timeout
 from my_wfc.contracts import Submission, TaskSpec
 from my_wfc.github import WorkflowError, validate_sha
 
@@ -35,7 +36,9 @@ class WorkflowService:
 
     @contextmanager
     def connection(self):
-        db = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        db = sqlite3.connect(
+            self.db_path, timeout=operation_timeout(30), isolation_level=None
+        )
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         try:
@@ -49,6 +52,10 @@ class WorkflowService:
             db.execute("BEGIN IMMEDIATE")
             try:
                 yield db
+                check_deadline()
+                db.execute(
+                    "PRAGMA busy_timeout=%d" % int(operation_timeout(30) * 1000)
+                )
                 db.commit()
             except Exception:
                 db.rollback()

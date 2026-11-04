@@ -627,3 +627,254 @@ def test_export_rejects_hardlinks(tmp_path):
     os.link(first, tmp_path / "b.py")
     with pytest.raises(WorkflowError):
         changes(tmp_path, {}, ["a.py", "b.py"])
+
+
+def test_documented_shared_database_configuration(config, tmp_path):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sample = json.loads(
+        (root / ".runtime/controller.json.example").read_text()
+    )
+    assert sample["database"].endswith("data/controller/workflow.sqlite3")
+    for key in (
+        "pem",
+        "openai_key",
+        "scratch",
+        "seccomp_profile",
+        "seccomp_sha256",
+    ):
+        sample[key] = config[key]
+    sample["database"] = str(tmp_path / "data/controller/workflow.sqlite3")
+    sample["tasks"] = config["tasks"]
+    validate_config(sample)
+    sample["database"] = str(
+        tmp_path / "agent_workflow_v2/data/workflow.sqlite3"
+    )
+    with pytest.raises(WorkflowError, match="v2 paths"):
+        validate_config(sample)
+
+
+@pytest.mark.parametrize(
+    "directory",
+    ["agent_workflow_v2", "workflow_console_v2", "workflow-console-v2"],
+)
+def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
+    from my_wfc.coder_runtime import independent_path
+
+    with pytest.raises(WorkflowError, match="v2 paths"):
+        independent_path(tmp_path / directory / "data/workflow.sqlite3")
+
+
+@pytest.mark.parametrize(
+    "expiry", ["after_test", "upload", "ref", "pr", "handoff"]
+)
+def test_publication_deadline_stops_later_effects_and_blocks(
+    state, app, tmp_path, monkeypatch, expiry
+):
+    import my_wfc.coder_runtime as module
+
+    client, _, now = app
+    now[0] = 1000
+    monkeypatch.setattr(module.time, "time", lambda: now[0])
+    client._token, client._expires = "synthetic-only", 5000
+    root = tmp_path / "worktree"
+    root.mkdir()
+    runtime = module.CoderRuntime(
+        {
+            "scratch": str(tmp_path / "jobs"),
+            "tasks": {
+                "P31": {
+                    "worktree": str(root),
+                    "write_paths": ["src", "docs"],
+                    "handoff_path": "docs/handoff.md",
+                }
+            },
+        },
+        client,
+        state,
+    )
+    calls = []
+    monkeypatch.setattr(runtime, "check_worktree", lambda *args: None)
+    monkeypatch.setattr(runtime, "verify", lambda *args: None)
+    monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("cleanup"))
+
+    def snapshot(root, sha, stage):
+        (stage / "src").mkdir()
+        (stage / "src/a.py").write_bytes(b"old")
+        return {"src/a.py": ("100644", b"old")}
+
+    monkeypatch.setattr(module, "snapshot", snapshot)
+
+    def docker(claim, stage, mode, prompt=""):
+        if mode == "code":
+            (stage / "src/a.py").write_bytes(b"new")
+        elif expiry == "after_test":
+            now[0] = 1061
+        return b"synthetic test evidence"
+
+    monkeypatch.setattr(runtime, "docker", docker)
+
+    def transport(method, endpoint, token, payload=None):
+        calls.append((method, endpoint))
+        if endpoint.startswith("/users/"):
+            return {"id": 123, "type": "Bot", "login": BOT}
+        if method == "GET" and "/git/commits/" in endpoint:
+            return {"tree": {"sha": BASE}}
+        if endpoint.endswith("/git/blobs") and expiry == "upload":
+            now[0] = 1061
+        if "/git/refs/" in endpoint and expiry == "ref":
+            now[0] = 1061
+        if "/pulls?" in endpoint:
+            return []
+        if endpoint.endswith("/pulls"):
+            if expiry == "pr":
+                now[0] = 1061
+            return {
+                "draft": True,
+                "user": {"login": BOT},
+                "html_url": "fixture",
+            }
+        return {"sha": HEAD}
+
+    client.transport = transport
+
+    def verify_handoff(*args):
+        calls.append("handoff_verify")
+        if expiry == "handoff":
+            now[0] = 1061
+
+    state.verify_remote = verify_handoff
+    with pytest.raises(TimeoutError):
+        run_once(
+            state,
+            DispatchLedger(state, clock=lambda: now[0]),
+            {"P31"},
+            runtime.execute,
+            timeout=60,
+        )
+    with state.connection() as db:
+        dispatch = dict(
+            db.execute("SELECT * FROM coder_dispatches").fetchone()
+        )
+    assert dispatch["status"] == "BLOCKED" and dispatch["slot"] == 1
+    task = state.get_review_context("P31")
+    assert task["status"] == "AWAITING_HANDOFF"
+    assert task["completed_review_rounds"] == 0
+    assert task["current_head_sha"] is None
+    effects = [item for item in calls if isinstance(item, tuple)]
+    if expiry == "after_test":
+        assert effects == []
+    if expiry in {"after_test", "upload"}:
+        assert not any("/git/refs/" in endpoint for _, endpoint in effects)
+    if expiry in {"after_test", "upload", "ref"}:
+        assert not any("/pulls" in endpoint for _, endpoint in effects)
+    if expiry != "handoff":
+        assert "handoff_verify" not in calls
+    assert calls[-1] == "cleanup"
+
+
+def test_shared_budget_caps_git_http_signing_and_sqlite_waits(
+    state, app, monkeypatch
+):
+    import my_wfc.budget as budget
+    import my_wfc.app_auth as auth
+    import my_wfc.coder_runtime as runtime
+    from types import SimpleNamespace
+
+    now = [1000]
+    monkeypatch.setattr(budget.time, "time", lambda: now[0])
+    limits = []
+
+    def run(*args, **kwargs):
+        limits.append(kwargs["timeout"])
+        return SimpleNamespace(stdout=b"synthetic")
+
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self, count):
+            return b"{}"
+
+    class Opener:
+        def open(self, request, *, timeout):
+            limits.append(timeout)
+            return Response()
+
+    monkeypatch.setattr(auth, "build_opener", lambda *args: Opener())
+    connect = __import__("sqlite3").connect
+
+    def limited_connect(*args, **kwargs):
+        limits.append(kwargs["timeout"])
+        return connect(*args, **kwargs)
+
+    monkeypatch.setattr(__import__("sqlite3"), "connect", limited_connect)
+    with budget.dispatch_budget(1003):
+        runtime.command(["fixture"])
+        auth.sign_rs256(b"fixture", app[0].pem)
+        auth.request_json("GET", "/fixture", "synthetic-only")
+        with state.connection():
+            pass
+    assert len(limits) == 4 and all(0 < limit <= 3 for limit in limits)
+
+
+def test_cleanup_remains_available_after_deadline(monkeypatch, state):
+    import my_wfc.budget as budget
+    import my_wfc.coder_runtime as runtime
+
+    now = [1000]
+    monkeypatch.setattr(budget.time, "time", lambda: now[0])
+
+    def command(*args, **kwargs):
+        assert budget.operation_timeout(30) == 30
+        return b""
+
+    monkeypatch.setattr(runtime, "command", command)
+    with budget.dispatch_budget(1001):
+        now[0] = 1002
+        runtime.CoderRuntime({}, None, state).stop("a" * 32)
+        with pytest.raises(TimeoutError):
+            budget.check_deadline()
+
+
+def test_expired_completion_never_marks_dispatch_done(state, monkeypatch):
+    import my_wfc.budget as budget
+
+    now = [1000]
+    monkeypatch.setattr(budget.time, "time", lambda: now[0])
+
+    def execute(claim, context):
+        now[0] = 1061
+        return HEAD
+
+    with pytest.raises(TimeoutError):
+        run_once(
+            state,
+            DispatchLedger(state, clock=lambda: now[0]),
+            {"P31"},
+            execute,
+            timeout=60,
+        )
+    with state.connection() as db:
+        row = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
+    assert row["status"] == "BLOCKED" and row["slot"] == 1
+    assert row["result_sha"] is None
+
+
+def test_wall_clock_rollback_does_not_extend_budget(monkeypatch):
+    import my_wfc.budget as budget
+
+    wall, monotonic = [1000], [500]
+    monkeypatch.setattr(budget.time, "time", lambda: wall[0])
+    monkeypatch.setattr(budget.time, "monotonic", lambda: monotonic[0])
+    with budget.dispatch_budget(1010):
+        wall[0] = 900
+        monotonic[0] = 511
+        with pytest.raises(TimeoutError):
+            budget.check_deadline()

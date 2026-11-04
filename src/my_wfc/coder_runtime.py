@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlencode
 
 from my_wfc.app_auth import AppVerifier, GitHubApp, REPOSITORY
+from my_wfc.budget import check_deadline, cleanup_budget, operation_timeout
 from my_wfc.github import WorkflowError
 from my_wfc.service import WorkflowService
 
@@ -63,6 +64,18 @@ def writable(path: str, prefixes: list[str]) -> bool:
     )
 
 
+def independent_path(path: Path, *, directory: bool = False) -> None:
+    forbidden = (
+        "agent_workflow_v2",
+        "workflow_console_v2",
+        "workflow-console-v2",
+    )
+    for candidate in (path, path.resolve()):
+        directories = candidate.parts if directory else candidate.parts[:-1]
+        if any(part.casefold().startswith(forbidden) for part in directories):
+            raise WorkflowError("v2 paths are forbidden")
+
+
 def validate_config(config: dict) -> None:
     if config.get("repository") != REPOSITORY or not config.get("tasks"):
         raise WorkflowError("explicit repository and task allowlist required")
@@ -70,21 +83,15 @@ def validate_config(config: dict) -> None:
         path = Path(config[key])
         if not path.is_absolute():
             raise WorkflowError("absolute operator paths required")
-        # Never reference v2 directories, credentials or data.
-        if any(
-            "workflow" in part.lower() or "console" in part.lower()
-            for part in path.parts
-            if part.lower().startswith(("agent_", "workflow", "console"))
-        ):
-            raise WorkflowError("v2 paths are forbidden")
+        independent_path(path, directory=key == "scratch")
     profile = Path(config["seccomp_profile"])
     if (
         not profile.is_absolute()
         or not profile.is_file()
         or profile.is_symlink()
-        or any("agent_workflow" in part.lower() for part in profile.parts)
     ):
         raise WorkflowError("absolute independent seccomp profile required")
+    independent_path(profile)
     if (
         hashlib.sha256(profile.read_bytes()).hexdigest()
         != config["seccomp_sha256"]
@@ -110,8 +117,7 @@ def validate_config(config: dict) -> None:
             raise WorkflowError("duplicate or noncanonical worktree")
         if not (root / ".git").is_file():
             raise WorkflowError("task requires linked Git worktree")
-        if any("agent_workflow" in part.lower() for part in root.parts):
-            raise WorkflowError("v2 worktree forbidden")
+        independent_path(root, directory=True)
         roots.add(root.resolve())
         if not task.get("write_paths"):
             raise WorkflowError("explicit write path allowlist required")
@@ -132,15 +138,17 @@ def command(
     timeout: int = 30,
 ) -> bytes:
     try:
-        return subprocess.run(
+        result = subprocess.run(
             args,
             cwd=cwd,
             input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=True,
-            timeout=timeout,
+            timeout=operation_timeout(timeout),
         ).stdout
+        check_deadline()
+        return result
     except (OSError, subprocess.SubprocessError):
         raise WorkflowError(
             "trusted command failed; output withheld"
@@ -249,7 +257,9 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
             payload = prompt.encode()
             while True:
                 try:
-                    process.communicate(payload, timeout=min(1, remaining))
+                    process.communicate(
+                        payload, timeout=operation_timeout(min(1, remaining))
+                    )
                     break
                 except subprocess.TimeoutExpired:
                     payload = None
@@ -260,6 +270,7 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
                         raise WorkflowError(
                             "runtime deadline or output budget exceeded"
                         )
+            check_deadline()
             size = output.tell()
             if process.returncode or size > 4_000_000:
                 raise WorkflowError(
@@ -283,32 +294,33 @@ class CoderRuntime:
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
             raise WorkflowError("invalid dispatch identifier")
-        for suffix in ("code", "test", "probe"):
-            name = f"my-wfc-{dispatch_id}-{suffix}"
-            # docker rm -f is scoped to our exact persisted names. No v2 operations.
-            found = command(
-                [
-                    "docker",
-                    "container",
-                    "ls",
-                    "-aq",
-                    "--filter",
-                    f"name=^/{name}$",
-                ]
-            )
-            if found.strip():
-                command(["docker", "rm", "-f", name])
-            if command(
-                [
-                    "docker",
-                    "container",
-                    "ls",
-                    "-aq",
-                    "--filter",
-                    f"name=^/{name}$",
-                ]
-            ).strip():
-                raise WorkflowError("runtime termination not confirmed")
+        with cleanup_budget():
+            for suffix in ("code", "test", "probe"):
+                name = f"my-wfc-{dispatch_id}-{suffix}"
+                # docker rm -f is scoped to our exact persisted names. No v2 operations.
+                found = command(
+                    [
+                        "docker",
+                        "container",
+                        "ls",
+                        "-aq",
+                        "--filter",
+                        f"name=^/{name}$",
+                    ]
+                )
+                if found.strip():
+                    command(["docker", "rm", "-f", name])
+                if command(
+                    [
+                        "docker",
+                        "container",
+                        "ls",
+                        "-aq",
+                        "--filter",
+                        f"name=^/{name}$",
+                    ]
+                ).strip():
+                    raise WorkflowError("runtime termination not confirmed")
 
     def docker(
         self, claim: dict, stage: Path, mode: str, prompt: str = ""
@@ -361,6 +373,9 @@ class CoderRuntime:
             args += ["--network=none"]
 
         remaining = int(claim["deadline"] - time.time())
+        if remaining <= 0:
+            raise WorkflowError("dispatch deadline exceeded")
+        remaining = int(operation_timeout(remaining))
         if remaining <= 0:
             raise WorkflowError("dispatch deadline exceeded")
         args += [
@@ -423,12 +438,13 @@ class CoderRuntime:
                     env=env,
                     capture_output=True,
                     check=True,
-                    timeout=30,
+                    timeout=operation_timeout(30),
                 )
             except (OSError, subprocess.SubprocessError):
                 raise WorkflowError(
                     "App-authenticated worktree fetch failed"
                 ) from None
+            check_deadline()
             if git(root, "rev-parse", "FETCH_HEAD").decode().strip() != sha:
                 raise WorkflowError(
                     "fetched head differs from authorized input"
@@ -617,8 +633,11 @@ class CoderRuntime:
                     "workflow assignment changed during coding"
                 )
             entries = self.handoff_entries(task, context, entries, summary)
+            check_deadline()
             sha = self.publish(context, claim["input_sha"], entries)
+            check_deadline()
             self.draft_pr(context, sha, summary)
+            check_deadline()
             self.service.register_task_handoff(
                 context["task_id"],
                 REPOSITORY,
@@ -628,6 +647,7 @@ class CoderRuntime:
                 task["handoff_path"],
                 summary,
             )
+            check_deadline()
             return sha
         finally:
             self.stop(claim["dispatch_id"])

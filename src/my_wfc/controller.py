@@ -13,6 +13,7 @@ import os
 from typing import Callable
 
 from my_wfc.app_auth import AppVerifier, GitHubApp, REPOSITORY
+from my_wfc.budget import dispatch_budget
 from my_wfc.github import WorkflowError, validate_sha
 from my_wfc.service import WorkflowService
 
@@ -119,17 +120,18 @@ def run_once(
     if claim is None:
         return False
     try:
-        context = service.get_coder_assignment(claim["task_id"])
-        if (
-            context["completed_review_rounds"] != claim["round_number"]
-            or context["status"]
-            not in {"AWAITING_HANDOFF", "CHANGES_REQUESTED"}
-            or (context["current_head_sha"] or context["base_sha"])
-            != claim["input_sha"]
-        ):
-            raise WorkflowError("assignment changed after dispatch")
-        sha = execute(claim, context)
-        ledger.finish(claim["dispatch_id"], sha)
+        with dispatch_budget(claim["deadline"]):
+            context = service.get_coder_assignment(claim["task_id"])
+            if (
+                context["completed_review_rounds"] != claim["round_number"]
+                or context["status"]
+                not in {"AWAITING_HANDOFF", "CHANGES_REQUESTED"}
+                or (context["current_head_sha"] or context["base_sha"])
+                != claim["input_sha"]
+            ):
+                raise WorkflowError("assignment changed after dispatch")
+            sha = execute(claim, context)
+            ledger.finish(claim["dispatch_id"], sha)
     except BaseException:
         ledger.block(claim["dispatch_id"])
         raise

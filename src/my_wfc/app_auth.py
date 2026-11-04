@@ -12,6 +12,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from my_wfc.budget import check_deadline, operation_timeout
 from my_wfc.github import GitHubVerifier, WorkflowError
 
 BOT = "builacviet-wfc-coder[bot]"
@@ -44,7 +45,9 @@ def request_json(
         },
     )
     try:
-        with build_opener(NoRedirect()).open(request, timeout=20) as response:
+        with build_opener(NoRedirect()).open(
+            request, timeout=operation_timeout(20)
+        ) as response:
             body = response.read(2_000_001)
         if len(body) > 2_000_000:
             raise WorkflowError("GitHub response too large")
@@ -55,13 +58,15 @@ def request_json(
 
 def sign_rs256(data: bytes, key: Path) -> bytes:
     try:
-        return subprocess.run(
+        result = subprocess.run(
             ["openssl", "dgst", "-sha256", "-sign", str(key)],
             input=data,
             capture_output=True,
             check=True,
-            timeout=10,
+            timeout=operation_timeout(10),
         ).stdout
+        check_deadline()
+        return result
     except (OSError, subprocess.SubprocessError):
         raise WorkflowError("GitHub App signing failed") from None
 
@@ -104,6 +109,18 @@ class GitHubApp:
         self.transport, self.signer, self.clock = transport, signer, clock
         self._token, self._expires = "", 0.0
 
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        token: str,
+        payload: dict | None = None,
+    ) -> Any:
+        check_deadline()
+        result = self.transport(method, endpoint, token, payload)
+        check_deadline()
+        return result
+
     def jwt(self) -> str:
         now = int(self.clock())
         header = b64(b'{"alg":"RS256","typ":"JWT"}')
@@ -119,8 +136,8 @@ class GitHubApp:
         if self._expires > self.clock() + 120:
             return self._token
         jwt = self.jwt()
-        app = self.transport("GET", "/app", jwt)
-        installation = self.transport(
+        app = self._request("GET", "/app", jwt)
+        installation = self._request(
             "GET", f"/repos/{REPOSITORY}/installation", jwt
         )
         if (
@@ -131,7 +148,7 @@ class GitHubApp:
             or installation.get("suspended_at") is not None
         ):
             raise WorkflowError("GitHub App or installation identity mismatch")
-        result = self.transport(
+        result = self._request(
             "POST",
             f"/app/installations/{self.installation_id}/access_tokens",
             jwt,
@@ -161,7 +178,7 @@ class GitHubApp:
     def api(
         self, method: str, endpoint: str, payload: dict | None = None
     ) -> Any:
-        return self.transport(method, endpoint, self.token(), payload)
+        return self._request(method, endpoint, self.token(), payload)
 
     def identity(self) -> tuple[str, str]:
         bot = self.api("GET", "/users/" + BOT)
@@ -176,7 +193,7 @@ class GitHubApp:
     def revoke(self) -> None:
         if self._token:
             try:
-                self.transport("DELETE", "/installation/token", self._token)
+                self._request("DELETE", "/installation/token", self._token)
             finally:
                 self._token, self._expires = "", 0.0
 
