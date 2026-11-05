@@ -22,8 +22,7 @@ or live ChatGPT login is claimed by this code commit.
 - Promote `Username-Password-Authentication` to domain-level for the
   third-party client. Consider disabling public sign-up for this test tenant.
 - Create one test user; copy its exact **User ID** (`auth0|...`) locally.
-  Record the exact ChatGPT **CIMD Client ID**, shown in its Auth0 Application
-  page. Do not put credentials, user password, secret or tokens in Git/chat.
+  Record the exact ChatGPT **external CIMD client identity URL** from the Auth0-imported CIMD document, such as `https://chatgpt.com/oauth/client.json`. The `tpc_...` value shown on the Auth0 application page is an Auth0-managed third-party application record identifier and may NOT be the OAuth `azp`/`client_id` value in the issued JWT. Do not put credentials, user password, secret or tokens in Git/chat.
 
 ## Runtime settings
 
@@ -37,8 +36,7 @@ overwrite an already-running Compose service.
 - `WFC_AUTH0_ISSUER=https://YOUR-TENANT.us.auth0.com/`: HTTPS Auth0
   issuer with trailing slash; do not substitute the ngrok domain.
 - `WFC_AUTH0_ALLOWED_SUB=auth0|...`: exact single allowed user subject.
-- `WFC_AUTH0_CLIENT_ID=...`: exact ChatGPT CIMD application client ID
-  (not the unrelated precreated TechLead WFC MCP application).
+- `WFC_AUTH0_CLIENT_ID=https://chatgpt.com/oauth/client.json`: pin the exact ChatGPT CIMD metadata URL used during Auth0 registration (or the exact callback-specific `https://chatgpt.com/oauth/{callback_id}/client.json` if that was registered). **Do not assume the Auth0 `tpc_...` internal client record equals the OAuth token's authorized party claim.** The verifier uses strict equality; neither URL wildcarding nor missing-client acceptance is enabled.
 - `WFC_AUTH0_SCOPE=wfc:workflow`: one required permission.
 - `WFC_PUBLIC_HOST=caddy-reopen-scotch.ngrok-free.dev`: DNS host only.
   The externally accessible resource URL is `https://HOST/mcp`.
@@ -112,7 +110,7 @@ ChatGPT shows `Authentication succeeded, action discovery failed` and
    not JWT contents or identifying values. Useful examples:
    `jwt_audience_mismatch` (wrong Auth0 API audience),
    `jwt_issuer_mismatch`, `subject_mismatch` (wrong allowed user ID),
-   `client_mismatch` (wrong ChatGPT CIMD client ID),
+   `client_mismatch_cimd_url` (JWT presents a ChatGPT CIMD metadata URL but configured value differs), `client_mismatch` (different nonmatching client identity), `client_claim_missing` (no client binding),
    `scope_missing` (token missing permission), `jwt_missing_required_claim`,
    `jwt_expired`, and `verified`. If `verified` appears but HTTP still
    responds 401, inspect the SDK boundary instead of weakening JWT checks.
@@ -123,3 +121,15 @@ ChatGPT shows `Authentication succeeded, action discovery failed` and
 
 **Never bypass token checks** to make tool discovery succeed. Diagnose the
 exact rejection before considering a narrow fix.
+
+### CIMD URL vs Auth0 `tpc_` client record
+
+OpenAI's ChatGPT CIMD client identity is the **metadata document URL**. Auth0
+also assigns a separate `tpc_` identifier to imported third-party clients.
+When troubleshooting `client_mismatch`, do not weaken client verification.
+With diagnostics enabled and the old `tpc_` value configured, a response
+`client_mismatch_cimd_url` is evidence that the signed token contains a
+ChatGPT CIMD URL. Update `WFC_AUTH0_CLIENT_ID` to the **exact** URL originally
+imported into Auth0. The client identity is still verified by exact match.
+This distinction depends on actual Auth0 claims; do not claim success until a
+new ChatGPT request logs `verified` and the MCP tools can be discovered.
