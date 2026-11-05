@@ -1,0 +1,154 @@
+"""Auth0 resource-server tests: synthetic RSA keys; never call the real provider."""
+
+import asyncio
+import time
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from my_wfc.auth0_oauth import Auth0TokenVerifier, load_auth0_config
+
+
+@pytest.fixture
+def auth_config(monkeypatch):
+    monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
+    monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
+    monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
+    monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
+    return load_auth0_config("test.example.org")
+
+
+@pytest.fixture
+def jwt_case(auth_config):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = int(time.time())
+    claims = dict(
+        iss=auth_config.issuer,
+        sub=auth_config.allowed_sub,
+        aud=auth_config.resource,
+        exp=now + 300,
+        iat=now - 1,
+        scope=auth_config.scope,
+        azp="chatgpt-client",
+    )
+    verifier = Auth0TokenVerifier(auth_config)
+    calls = []
+
+    async def fake_jwks():
+        calls.append(1)
+        return {"key-1": key.public_key()}
+
+    verifier._fetch_jwks = fake_jwks
+
+    def sign(**overrides):
+        return jwt.encode(
+            {**claims, **overrides}, key,
+            algorithm="RS256", headers={"kid": "key-1"},
+        )
+
+    return verifier, sign, calls
+
+
+def test_auth0_config_is_explicit_and_rejects_unsafe_modes(monkeypatch, auth_config):
+    assert auth_config.resource == "https://test.example.org/mcp"
+    for issuer in (
+        "http://example.com",
+        "https://example.com/path",
+        "https://u:p@example.com",
+        "https://bad..example.com",
+    ):
+        monkeypatch.setenv("WFC_AUTH0_ISSUER", issuer)
+        with pytest.raises(ValueError):
+            load_auth0_config("test.example.org")
+    monkeypatch.setenv("WFC_AUTH0_ISSUER", auth_config.issuer)
+    monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "")
+    with pytest.raises(ValueError, match="ALLOWED_SUB"):
+        load_auth0_config("test.example.org")
+    monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", auth_config.allowed_sub)
+    monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        load_auth0_config("test.example.org")
+
+
+def test_valid_token_binds_subject_resource_scopes_and_caches_jwks(jwt_case):
+    verifier, sign, fetches = jwt_case
+    verified = asyncio.run(verifier.verify_token(sign()))
+    assert verified.subject == "auth0|owner"
+    assert verified.resource == "https://test.example.org/mcp"
+    assert verified.client_id == "chatgpt-client"
+    assert verified.scopes == ["wfc:workflow"]
+    assert asyncio.run(verifier.verify_token(sign())) is not None
+    assert len(fetches) == 1
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"iss": "https://attacker.test/"},
+        {"aud": "https://other.example.org/mcp"},
+        {"sub": "auth0|someone-else"},
+        {"scope": "openid profile"},
+        {"exp": 1},
+        {"iat": int(time.time()) + 10000},
+        {"azp": ""},
+    ],
+)
+def test_wrong_issuer_audience_subject_scope_expiry_or_client_denied(jwt_case, override):
+    verifier, sign, _ = jwt_case
+    assert asyncio.run(verifier.verify_token(sign(**override))) is None
+
+
+def test_invalid_signatures_and_algorithms_denied(jwt_case):
+    verifier, sign, _ = jwt_case
+    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    claims = jwt.decode(sign(), options={"verify_signature": False})
+    wrong_key = jwt.encode(
+        claims, other, algorithm="RS256", headers={"kid": "key-1"}
+    )
+    wrong_algorithm = jwt.encode(
+        claims, "x" * 32, algorithm="HS256", headers={"kid": "key-1"}
+    )
+    for token in (wrong_key, wrong_algorithm, "not.a.jwt", "x" * 9000):
+        assert asyncio.run(verifier.verify_token(token)) is None
+
+
+def test_jwks_unavailable_fails_closed(jwt_case):
+    verifier, sign, _ = jwt_case
+
+    async def network_failure():
+        raise OSError("simulated outage")
+
+    verifier._fetch_jwks = network_failure
+    assert asyncio.run(verifier.verify_token(sign())) is None
+
+
+def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config):
+    from my_wfc.security import authorize_context
+    monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
+    with pytest.raises(PermissionError, match="OAuth"):
+        authorize_context(None)
+
+
+def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
+    from my_wfc.server import create_mcp_server
+    monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
+    monkeypatch.delenv("WFC_AUTH0_ISSUER", raising=False)
+    monkeypatch.delenv("WFC_AUTH0_ALLOWED_SUB", raising=False)
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "test.example.org")
+    with pytest.raises(ValueError, match="ISSUER"):
+        create_mcp_server()
+
+
+def test_auth0_transport_advertises_protected_resource(monkeypatch):
+    from my_wfc.server import create_mcp_server
+    monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
+    monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
+    monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
+    monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
+    monkeypatch.setenv("WFC_PUBLIC_HOST", "test.example.org")
+    oauth_server = create_mcp_server()
+    app = oauth_server.streamable_http_app()
+    paths = [getattr(route, "path", "") for route in app.routes]
+    assert "/mcp" in paths
+    assert "/.well-known/oauth-protected-resource/mcp" in paths
