@@ -159,3 +159,45 @@ def test_auth0_transport_advertises_protected_resource(monkeypatch):
     paths = [getattr(route, "path", "") for route in app.routes]
     assert "/mcp" in paths
     assert "/.well-known/oauth-protected-resource/mcp" in paths
+
+
+def test_oauth_diagnostics_disabled_by_default(jwt_case, monkeypatch, caplog):
+    verifier, sign, _ = jwt_case
+    monkeypatch.delenv("WFC_AUTH0_DIAGNOSTICS", raising=False)
+    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    assert asyncio.run(verifier.verify_token(sign(sub="auth0|other"))) is None
+    assert not [r for r in caplog.records if "auth0_oauth_validation" in r.message]
+
+
+def test_oauth_diagnostics_report_only_fixed_codes(jwt_case, monkeypatch, caplog):
+    verifier, sign, _ = jwt_case
+    monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
+    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    wrong_sub = sign(sub="auth0|someone-private")
+    wrong_aud = sign(aud="https://internal.private.example/mcp")
+    wrong_client = sign(azp="private-client-id")
+    for token in (wrong_sub, wrong_aud, wrong_client):
+        assert asyncio.run(verifier.verify_token(token)) is None
+    assert asyncio.run(verifier.verify_token(sign())) is not None
+
+    event_text = "\n".join(r.message for r in caplog.records
+                           if "auth0_oauth_validation" in r.message)
+    assert "code=subject_mismatch" in event_text
+    assert "code=jwt_audience_mismatch" in event_text
+    assert "code=client_mismatch" in event_text
+    assert "code=verified" in event_text
+    for sensitive in (wrong_sub, wrong_aud, wrong_client,
+                      "auth0|someone-private", "private-client-id",
+                      "https://internal.private.example/mcp"):
+        assert sensitive not in event_text
+
+
+def test_oauth_diagnostics_bounded(jwt_case, monkeypatch, caplog):
+    verifier, sign, _ = jwt_case
+    monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
+    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    invalid = sign(sub="auth0|other")
+    for _ in range(70):
+        assert asyncio.run(verifier.verify_token(invalid)) is None
+    assert len([r for r in caplog.records
+                if "auth0_oauth_validation" in r.message]) == 40
