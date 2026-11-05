@@ -36,6 +36,25 @@ def authorize_request(request) -> str:
 
 
 def authorize_context(ctx) -> str:
+    mode = os.environ.get("WFC_AUTH_MODE", "bearer")
+    if mode == "auth0":
+        # The SDK verifies the bearer token at the HTTP boundary. Never use
+        # an unverified tool argument or request header for OAuth identity.
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        verified = get_access_token()
+        allowed_sub = os.environ.get("WFC_AUTH0_ALLOWED_SUB", "")
+        scope = os.environ.get("WFC_AUTH0_SCOPE", "wfc:workflow")
+        if (
+            verified is None
+            or not allowed_sub
+            or verified.subject != allowed_sub
+            or scope not in verified.scopes
+        ):
+            raise PermissionError("workflow OAuth authorization required")
+        return "auth0:" + allowed_sub
+    if mode != "bearer":
+        raise PermissionError("unsupported workflow authentication mode")
     try:
         request = ctx.request_context.request
     except (AttributeError, ValueError):
