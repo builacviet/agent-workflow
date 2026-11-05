@@ -4,7 +4,7 @@
   "app_id": 1,
   "installation_id": 1,
   "pem": "D:/WORK/Project/techlead-review-poc-phase31/.secret/coder-app.pem",
-  "openai_key": "D:/WORK/Project/techlead-review-poc-phase31/.secret/openai-api-key.txt",
+  "codex_auth_volume": "techlead-review-poc_codex_auth",
   "scratch": "D:/WORK/Project/techlead-review-poc-phase31/.runtime/jobs",
   "image": "my-wfc-codex:phase31",
   "model": "OPERATOR_SELECT_MODEL",

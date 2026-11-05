@@ -397,7 +397,7 @@ def config(tmp_path):
         "installation_id": 2,
         "database": str(tmp_path / "state.sqlite3"),
         "pem": str(secret / "app.pem"),
-        "openai_key": str(secret / "openai.txt"),
+        "codex_auth_volume": "techlead-review-poc_codex_auth",
         "scratch": str(tmp_path / "jobs"),
         "seccomp_profile": str(profile),
         "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
@@ -424,7 +424,7 @@ def test_valid_config_and_profile_digest(config):
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("openai_key", "same-pem"),
+        ("codex_auth_volume", "workflow-console-v2-codex-auth-20261029"),
         ("scratch", "relative"),
         ("image", "bad image"),
         ("model", ""),
@@ -479,7 +479,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     assert sample["database"].endswith("data/controller/workflow.sqlite3")
     for key in (
         "pem",
-        "openai_key",
+        "codex_auth_volume",
         "scratch",
         "seccomp_profile",
         "seccomp_sha256",

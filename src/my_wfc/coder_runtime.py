@@ -77,7 +77,7 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
 def validate_config(config: dict) -> None:
     if config.get("repository") != REPOSITORY or not config.get("tasks"):
         raise WorkflowError("explicit repository and task allowlist required")
-    for key in ("database", "pem", "openai_key", "scratch"):
+    for key in ("database", "pem", "scratch"):
         path = Path(config[key])
         if not path.is_absolute():
             raise WorkflowError("absolute operator paths required")
@@ -95,13 +95,8 @@ def validate_config(config: dict) -> None:
         != config["seccomp_sha256"]
     ):
         raise WorkflowError("seccomp profile digest mismatch")
-    key = Path(config["openai_key"])
-    if (
-        key.suffix != ".txt"
-        or key.parent.name != ".secret"
-        or key.resolve() == Path(config["pem"]).resolve()
-    ):
-        raise WorkflowError("separate .secret OpenAI text key required")
+    if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
+        raise WorkflowError("dedicated POC Codex auth volume required")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", config["image"]):
         raise WorkflowError("invalid runtime image")
     if not isinstance(config.get("model"), str) or not config["model"].strip():
@@ -283,10 +278,13 @@ class CoderRuntime:
                 f"type=bind,src={key},dst=/run/.secret/coder-app.pem,readonly",
             ]
         if mode == "code":
-            key = Path(self.config["openai_key"]).resolve(strict=True)
+            volume = self.config.get("codex_auth_volume")
+            if volume != "techlead-review-poc_codex_auth":
+                raise WorkflowError("dedicated POC Codex auth volume required")
+            docker_command(["docker", "volume", "inspect", volume])
             args += [
                 "--mount",
-                f"type=bind,src={key},dst=/run/secrets/openai_api_key,readonly",
+                f"type=volume,src={volume},dst=/home/coder/.codex",
                 "--env",
                 "WFC_CODEX_MODEL=" + self.config["model"],
             ]

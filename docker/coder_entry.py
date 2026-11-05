@@ -52,9 +52,14 @@ if sys.argv[1:] == ["test"]:
     raise SystemExit(run(["python", "-m", "pytest", "-q"]))
 if sys.argv[1:] != ["code"]:
     raise SystemExit("expected code or test")
-os.environ["CODEX_API_KEY"] = (
-    Path("/run/secrets/openai_api_key").read_text().strip()
-)
+# Use the persisted ChatGPT device session; never silently prefer API-key auth.
+os.environ.pop("CODEX_API_KEY", None)
+os.environ.pop("OPENAI_API_KEY", None)
+auth = Path(os.environ["CODEX_HOME"]) / "auth.json"
+if auth.is_symlink() or not auth.is_file():
+    raise SystemExit(
+        "Device login missing: run codex login --device-auth with the POC auth volume"
+    )
 Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
 Path(os.environ["CODEX_HOME"]).mkdir(parents=True, exist_ok=True)
 # No repository configuration, hooks, Git metadata or host credentials are mounted.
@@ -64,6 +69,8 @@ raise SystemExit(
         [
             "codex",
             "exec",
+            "-c",
+            'cli_auth_credentials_store="file"',
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",

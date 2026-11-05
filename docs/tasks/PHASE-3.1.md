@@ -37,3 +37,8 @@ Supersedes conflicting original AC1/2/5/6 and prior remote-verification policy. 
 ## Owner-authorized three-P2 correction
 
 Revision base: 79e7bec2217dad106b2e4ba74f0117a028d95cea. Review COMMENT: https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5778369862. Owner requested narrow fixes only: valid standalone compose YAML; explicit staging and index-content verification including ignored additions/handoff; unambiguous length-framed source digest. Add regressions for compose parsing without starting services, real local bare-Git publication of ignored files, and the prior filename/content concatenation collision. Architecture, DB schema/repository boundary, two-round policy, no-merge/no-v2 restrictions remain unchanged. Requested effort high; execution model/effort unverified; no formal verdict/round assigned by Coder.
+
+
+## Owner-authorized device-login integration
+
+Base: 889c89dad4098c1789c42737f9dfac6e56fea4fd. Owner requested replacing API-key model authentication with the completed ChatGPT device login. Code phase alone mounts RW named volume techlead-review-poc_codex_auth at CODEX_HOME=/home/coder/.codex; validate the explicit volume name/existence, remove API-key env/file dependence, fail closed without auth.json, preserve CLI token refresh. Never mount this volume into test/prepare/publish/MCP or read/copy v2 auth. Keep credentials outside Git/logs. Add mount/config/entrypoint regressions, run full suite/Docker, update worker image/PR; no model job, GitHub live operation, merge or verdict authorized by this step. Requested effort high; actual model/effort unverified.
