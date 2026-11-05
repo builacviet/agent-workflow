@@ -25,6 +25,7 @@ class Auth0Config:
     issuer: str
     resource: str
     allowed_sub: str
+    client_id: str
     scope: str
 
 
@@ -34,6 +35,7 @@ def load_auth0_config(public_host: str) -> Auth0Config:
         raise ValueError("OAuth and public no-auth mode are mutually exclusive")
     issuer = os.environ.get("WFC_AUTH0_ISSUER", "").strip()
     allowed_sub = os.environ.get("WFC_AUTH0_ALLOWED_SUB", "").strip()
+    client_id = os.environ.get("WFC_AUTH0_CLIENT_ID", "").strip()
     scope = os.environ.get("WFC_AUTH0_SCOPE", "wfc:workflow").strip()
     parsed = urlsplit(issuer)
     if (
@@ -51,6 +53,8 @@ def load_auth0_config(public_host: str) -> Auth0Config:
         raise ValueError("WFC_AUTH0_ISSUER must be an HTTPS domain issuer")
     if not (1 <= len(allowed_sub) <= 256) or any(x.isspace() for x in allowed_sub):
         raise ValueError("WFC_AUTH0_ALLOWED_SUB must be the exact Auth0 user ID")
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", client_id):
+        raise ValueError("WFC_AUTH0_CLIENT_ID must be the registered ChatGPT CIMD client ID")
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", scope):
         raise ValueError("WFC_AUTH0_SCOPE must be a single OAuth permission")
     if not public_host:
@@ -62,6 +66,7 @@ def load_auth0_config(public_host: str) -> Auth0Config:
         # custom API's configured identifier (aud). An exact match is required.
         resource=f"https://{public_host}/mcp",
         allowed_sub=allowed_sub,
+        client_id=client_id,
         scope=scope,
     )
 
@@ -150,7 +155,7 @@ class Auth0TokenVerifier:
             if self.config.scope not in scopes:
                 return None
             client_id = claims.get("azp") or claims.get("client_id")
-            if not isinstance(client_id, str) or not client_id:
+            if not isinstance(client_id, str) or client_id != self.config.client_id:
                 return None
             return AccessToken(
                 token=token,
