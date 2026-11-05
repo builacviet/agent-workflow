@@ -27,3 +27,24 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: "no"
+
+  # Explicit opt-in: stop the existing POC ngrok tunnel before starting this one.
+  # Routes the same reserved hostname to the Phase 3.1 MCP/Controller database.
+  ngrok:
+    image: ngrok/ngrok:3-alpine
+    profiles:
+      - tunnel
+    env_file:
+      - .runtime/ngrok.env
+    command:
+      - http
+      - mcp:8000
+      - --url
+      - https://${NGROK_DOMAIN:-caddy-reopen-scotch.ngrok-free.dev}
+    depends_on:
+      - mcp
+    restart: "no"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
