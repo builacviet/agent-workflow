@@ -95,3 +95,31 @@ No automatic retry, merge, approval, Notion updates or v2 operations.
   gating still apply.
 - No claim that the Config/Auth0 features remain free after any account
   trial without validating Auth0's current plan and tenant state.
+
+## Diagnosing Auth0 consent success but MCP 401
+
+Auth0 consent success does not mean the MCP accepts the access token. If
+ChatGPT shows `Authentication succeeded, action discovery failed` and
+`POST /mcp` returns 401 after JWKS fetch:
+
+1. Set `WFC_AUTH0_DIAGNOSTICS=1` **temporarily** in the ignored
+   `.runtime/controller-mcp.env` file (never commit this value).
+2. Rebuild/restart **only** the OAuth test MCP:
+   `docker compose -f compose.controller.yaml up -d --build mcp`.
+3. Retry one ChatGPT tool discovery/connection. Read the MCP log using
+   `docker compose -f compose.controller.yaml logs --tail=80 mcp`.
+4. Look for `auth0_oauth_validation code=...`. Codes are fixed categories,
+   not JWT contents or identifying values. Useful examples:
+   `jwt_audience_mismatch` (wrong Auth0 API audience),
+   `jwt_issuer_mismatch`, `subject_mismatch` (wrong allowed user ID),
+   `client_mismatch` (wrong ChatGPT CIMD client ID),
+   `scope_missing` (token missing permission), `jwt_missing_required_claim`,
+   `jwt_expired`, and `verified`. If `verified` appears but HTTP still
+   responds 401, inspect the SDK boundary instead of weakening JWT checks.
+5. Set `WFC_AUTH0_DIAGNOSTICS=0`, restart OAuth MCP and disable diagnostic
+   mode after investigation. The diagnostic emits at most 40 events per
+   server process; it never emits the bearer token, JWT claims, client ID,
+   subject, headers, passwords or exceptions. Never share raw tokens.
+
+**Never bypass token checks** to make tool discovery succeed. Diagnose the
+exact rejection before considering a narrow fix.
