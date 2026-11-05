@@ -15,6 +15,7 @@ def auth_config(monkeypatch):
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "chatgpt-client")
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
     return load_auth0_config("test.example.org")
 
@@ -66,6 +67,10 @@ def test_auth0_config_is_explicit_and_rejects_unsafe_modes(monkeypatch, auth_con
     with pytest.raises(ValueError, match="ALLOWED_SUB"):
         load_auth0_config("test.example.org")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", auth_config.allowed_sub)
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "")
+    with pytest.raises(ValueError, match="CLIENT_ID"):
+        load_auth0_config("test.example.org")
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", auth_config.client_id)
     monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
     with pytest.raises(ValueError, match="mutually exclusive"):
         load_auth0_config("test.example.org")
@@ -92,6 +97,7 @@ def test_valid_token_binds_subject_resource_scopes_and_caches_jwks(jwt_case):
         {"exp": 1},
         {"iat": int(time.time()) + 10000},
         {"azp": ""},
+        {"azp": "other-oauth-client"},
     ],
 )
 def test_wrong_issuer_audience_subject_scope_expiry_or_client_denied(jwt_case, override):
@@ -146,6 +152,7 @@ def test_auth0_transport_advertises_protected_resource(monkeypatch):
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "chatgpt-client")
     monkeypatch.setenv("WFC_PUBLIC_HOST", "test.example.org")
     oauth_server = create_mcp_server()
     app = oauth_server.streamable_http_app()
