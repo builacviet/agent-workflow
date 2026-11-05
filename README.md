@@ -47,3 +47,13 @@ against non-synthetic data.
 Phase 3.1 adds an independent GitHub App / Codex Controller. See [operator runbook](docs/phase-3.1.md) and [authorized task / ACs](docs/tasks/PHASE-3.1.md). Activation requires local credentials and a synthetic live test; implementation does not authorize merge or operate Workflow Console v2.
 
 Current Phase 3.1: worker owns all Git/GitHub; WFC uses repository interfaces for local SQLite state only. See docs/phase-3.1.md.
+
+## Optional Auth0 OAuth for ChatGPT MCP
+
+The Phase 3.1 MCP can be configured as an Auth0-backed OAuth resource server
+without changing the default legacy Bearer configuration. It verifies RS256
+JWTs from a dedicated Auth0 tenant, publishes RFC 9728 metadata, and binds
+workflow access to one allowlisted Auth0 user ID. In OAuth mode the SDK protects
+all /mcp calls (including ping/info); legacy mode keeps those two tools public.
+See [Auth0 OAuth setup and one-shot E2E gate](docs/oauth-auth0.md). Do not turn on
+open dynamic client registration in a shared production Auth0 tenant.
