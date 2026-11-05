@@ -57,3 +57,8 @@ workflow access to one allowlisted Auth0 user ID. In OAuth mode the SDK protects
 all /mcp calls (including ping/info); legacy mode keeps those two tools public.
 See [Auth0 OAuth setup and one-shot E2E gate](docs/oauth-auth0.md). Do not turn on
 open dynamic client registration in a shared production Auth0 tenant.
+
+
+## Opt-in Auth0 OAuth resource-server POC
+
+For the isolated Auth0/CIMD OAuth implementation and prerequisites, see [Auth0 OAuth runbook](docs/auth0-oauth.md). It is stacked on Phase 3.1, disabled by default, and requires operator-run tests and actual Auth0 login before deployment. Existing bearer-mode MCP/ngrok remains unchanged until an explicit cutover.
