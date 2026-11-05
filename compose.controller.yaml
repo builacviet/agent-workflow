@@ -48,3 +48,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+# Allocate a distinct subnet when Docker Desktop's default pools are exhausted.
+# Must not overlap existing Docker networks, the host routing table or VPN routes.
+# Existing techlead-review-poc MCP uses 10.254.240.0/24 by default.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${WFC_PHASE31_DOCKER_SUBNET:-10.254.241.0/24}
