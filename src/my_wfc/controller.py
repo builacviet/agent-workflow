@@ -6,107 +6,18 @@ import argparse
 import json
 import sqlite3
 import time
-import uuid
 from pathlib import Path
 from contextlib import contextmanager
 import os
 from typing import Callable
 
-from my_wfc.app_auth import AppVerifier, GitHubApp, REPOSITORY
+REPOSITORY = "builacviet/techlead-review-poc"
 from my_wfc.budget import dispatch_budget
-from my_wfc.github import WorkflowError, validate_sha
+from my_wfc.github import WorkflowError
 from my_wfc.service import WorkflowService
 
 
-class DispatchLedger:
-    def __init__(
-        self, service: WorkflowService, *, clock: Callable = time.time
-    ) -> None:
-        self.service, self.clock = service, clock
-        with service.connection() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS coder_dispatches (
-                    dispatch_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
-                    round_number INTEGER NOT NULL, input_sha TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('ACTIVE','BLOCKED','DONE','ACKNOWLEDGED')),
-                    slot INTEGER UNIQUE CHECK(slot=1), deadline REAL NOT NULL,
-                    result_sha TEXT, detail TEXT NOT NULL DEFAULT '',
-                    UNIQUE(task_id,round_number,input_sha)
-                );
-            """)
-
-    def claim(self, task_ids: set[str], timeout: int) -> dict | None:
-        if type(timeout) is not int or not 60 <= timeout <= 3600:
-            raise WorkflowError("runtime timeout must be 60..3600 seconds")
-        with self.service.transaction() as db:
-            if db.execute(
-                "SELECT 1 FROM coder_dispatches WHERE slot=1"
-            ).fetchone():
-                return None
-            for row in db.execute(
-                "SELECT * FROM tasks WHERE status IN ('AWAITING_HANDOFF','CHANGES_REQUESTED') AND completed_review_rounds<2 ORDER BY task_id"
-            ):
-                task = dict(row)
-                if (
-                    task["task_id"] not in task_ids
-                    or task["repository"] != REPOSITORY
-                ):
-                    continue
-                sha = task["current_head_sha"] or task["base_sha"]
-                validate_sha(sha)
-                round_number = task["completed_review_rounds"]
-                if db.execute(
-                    "SELECT 1 FROM coder_dispatches WHERE task_id=? AND round_number=? AND input_sha=?",
-                    (task["task_id"], round_number, sha),
-                ).fetchone():
-                    continue
-                dispatch_id = uuid.uuid4().hex
-                deadline = self.clock() + timeout
-                db.execute(
-                    "INSERT INTO coder_dispatches(dispatch_id,task_id,round_number,input_sha,status,slot,deadline) VALUES(?,?,?,?,'ACTIVE',1,?)",
-                    (
-                        dispatch_id,
-                        task["task_id"],
-                        round_number,
-                        sha,
-                        deadline,
-                    ),
-                )
-                return {
-                    "dispatch_id": dispatch_id,
-                    "task_id": task["task_id"],
-                    "input_sha": sha,
-                    "deadline": deadline,
-                    "round_number": round_number,
-                }
-        return None
-
-    def finish(self, dispatch_id: str, sha: str) -> None:
-        validate_sha(sha)
-        with self.service.transaction() as db:
-            changed = db.execute(
-                "UPDATE coder_dispatches SET status='DONE',slot=NULL,result_sha=? WHERE dispatch_id=? AND status='ACTIVE' AND slot=1",
-                (sha, dispatch_id),
-            ).rowcount
-            if changed != 1:
-                raise WorkflowError("dispatch lease lost")
-
-    def block(self, dispatch_id: str) -> None:
-        with self.service.transaction() as db:
-            db.execute(
-                "UPDATE coder_dispatches SET status='BLOCKED',detail='Operator reconciliation required; do not retry automatically' WHERE dispatch_id=? AND slot=1",
-                (dispatch_id,),
-            )
-
-    def acknowledge(self, dispatch_id: str) -> None:
-        """Operator must first stop/inspect containers and reconcile external effects."""
-        with self.service.transaction() as db:
-            changed = db.execute(
-                "UPDATE coder_dispatches SET status='ACKNOWLEDGED',slot=NULL WHERE dispatch_id=? AND slot=1",
-                (dispatch_id,),
-            ).rowcount
-            if changed != 1:
-                raise WorkflowError("unknown active dispatch")
+from my_wfc.dispatch_repository import DispatchLedger
 
 
 def run_once(
@@ -193,12 +104,9 @@ def main() -> None:
 def operate(config: dict, args: argparse.Namespace) -> None:
     from my_wfc.coder_runtime import CoderRuntime
 
-    app = GitHubApp(
-        config["app_id"], config["installation_id"], Path(config["pem"])
-    )
-    service = WorkflowService(config["database"], AppVerifier(app))
+    service = WorkflowService(config["database"])
     ledger = DispatchLedger(service)
-    runtime = CoderRuntime(config, app, service)
+    runtime = CoderRuntime(config, service)
     if args.acknowledge:
         if not args.reconciled:
             raise WorkflowError(
@@ -207,31 +115,28 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         runtime.stop(args.acknowledge)
         ledger.acknowledge(args.acknowledge)
         return
-    try:
-        while True:
-            try:
-                run_once(
-                    service,
-                    ledger,
-                    set(config["tasks"]),
-                    runtime.execute,
-                    config.get("timeout_seconds", 1800),
-                )
-            except (WorkflowError, OSError, sqlite3.Error, ValueError):
-                # Never log subprocess output, prompts, credentials or task content.
-                print(
-                    "Controller blocked or unavailable; inspect local dispatch ledger",
-                    flush=True,
-                )
-                if args.once:
-                    raise WorkflowError(
-                        "Controller attempt failed; operator reconciliation may be required"
-                    ) from None
+    while True:
+        try:
+            run_once(
+                service,
+                ledger,
+                set(config["tasks"]),
+                runtime.execute,
+                config.get("timeout_seconds", 1800),
+            )
+        except (WorkflowError, OSError, sqlite3.Error, ValueError):
+            # Never log subprocess output, prompts, credentials or task content.
+            print(
+                "Controller blocked or unavailable; inspect local dispatch ledger",
+                flush=True,
+            )
             if args.once:
-                return
-            time.sleep(60)
-    finally:
-        app.revoke()
+                raise WorkflowError(
+                    "Controller attempt failed; operator reconciliation may be required"
+                ) from None
+        if args.once:
+            return
+        time.sleep(60)
 
 
 if __name__ == "__main__":

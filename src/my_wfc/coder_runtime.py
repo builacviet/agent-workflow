@@ -1,8 +1,7 @@
-"""Trusted Docker boundary and GitHub publication; task code never runs on host."""
+"""Docker-only Controller adapter; no Git/GitHub operations or credentials."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
@@ -12,9 +11,8 @@ import subprocess
 import time
 import tempfile
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote, urlencode
 
-from my_wfc.app_auth import AppVerifier, GitHubApp, REPOSITORY
+REPOSITORY = "builacviet/techlead-review-poc"
 from my_wfc.budget import check_deadline, cleanup_budget, operation_timeout
 from my_wfc.github import WorkflowError
 from my_wfc.service import WorkflowService
@@ -130,120 +128,36 @@ def validate_config(config: dict) -> None:
         raise WorkflowError("invalid timeout")
 
 
-def command(
-    args: list[str],
-    *,
-    cwd: Path | None = None,
-    input_bytes: bytes | None = None,
-    timeout: int = 30,
-) -> bytes:
-    try:
-        result = subprocess.run(
-            args,
-            cwd=cwd,
-            input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-            timeout=operation_timeout(timeout),
-        ).stdout
-        check_deadline()
-        return result
-    except (OSError, subprocess.SubprocessError):
-        raise WorkflowError(
-            "trusted command failed; output withheld"
-        ) from None
-
-
-def git(root: Path, *args: str) -> bytes:
-    return command(
-        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args]
-    )
-
-
-def snapshot(
-    root: Path, sha: str, destination: Path
-) -> dict[str, tuple[str, bytes]]:
-    baseline = {}
-    for entry in git(root, "ls-tree", "-rz", sha).split(b"\0"):
-        if not entry:
-            continue
-        meta, raw_path = entry.split(b"\t", 1)
-        mode, kind, oid = meta.decode().split()
-        path = raw_path.decode("utf-8")
-        if mode not in {"100644", "100755"} or kind != "blob":
-            raise WorkflowError("symlinks and submodules are not supported")
-        # Context may include AGENTS.md, but it is never publishable by the coder.
-        template = (
-            path == ".env.example"
-            or path.startswith(".runtime/")
-            and path.endswith(".example")
-        )
-        if path != "AGENTS.md" and not template:
-            safe_path(path)
-        content = git(root, "cat-file", "blob", oid)
-        if (
-            len(content) + sum(len(item[1]) for item in baseline.values())
-            > MAX_BYTES
-            or len(baseline) >= 2000
-        ):
-            raise WorkflowError("source snapshot limit exceeded")
-        target = destination / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        target.chmod(0o777 if mode == "100755" else 0o666)
-        for parent in target.parents:
-            if parent == destination:
-                break
-            parent.chmod(0o777)
-        baseline[path] = (mode, content)
-    return baseline
-
-
-def changes(stage: Path, baseline: dict, prefixes: list[str]) -> list[dict]:
-    files = {}
-    for directory, dirs, names in os.walk(stage, followlinks=False):
+def source_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort()
         for name in list(dirs):
-            path = Path(directory) / name
-            if is_linked(path):
-                raise WorkflowError("snapshot contains a linked directory")
+            if is_linked(Path(directory) / name):
+                raise WorkflowError("linked source directory")
             if name in GENERATED:
                 dirs.remove(name)
-        for name in names:
+        for name in sorted(files):
             path = Path(directory) / name
-            relative = path.relative_to(stage).as_posix()
-            info = path.lstat()
-            if (
-                is_linked(path)
-                or not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
-                or info.st_size > MAX_BYTES
-            ):
-                raise WorkflowError("snapshot contains unsafe file")
-            # Mode is preserved from Git for existing files; additions are ordinary files.
-            mode = baseline.get(relative, ("100644", b""))[0]
-            files[relative] = (mode, path.read_bytes())
-            if (
-                len(files) > 2000
-                or sum(len(item[1]) for item in files.values()) > MAX_BYTES
-            ):
-                raise WorkflowError("snapshot file count exceeded")
-    result = []
-    for path in sorted(set(files) | set(baseline)):
-        if files.get(path) == baseline.get(path):
-            continue
-        if not writable(path, prefixes):
-            raise WorkflowError("coder modified a path outside the allowlist")
-        result.append(
-            {
-                "path": path,
-                "mode": files.get(path, baseline.get(path))[0],
-                "content": files[path][1] if path in files else None,
-            }
-        )
-    if not result:
-        raise WorkflowError("coder produced no source changes")
-    return result
+            if is_linked(path) or not path.is_file():
+                raise WorkflowError("unsafe source file")
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def docker_command(args: list[str]) -> bytes:
+    if not args or args[0] != "docker":
+        raise WorkflowError("Controller may only launch Docker")
+    try:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            check=True,
+            timeout=operation_timeout(30),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise WorkflowError("Docker command failed") from None
 
 
 def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
@@ -285,20 +199,17 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
 
 
 class CoderRuntime:
-    def __init__(
-        self, config: dict, app: GitHubApp, service: WorkflowService
-    ) -> None:
-        self.config, self.app, self.service = config, app, service
-        self.verify = AppVerifier(app)
+    def __init__(self, config: dict, service: WorkflowService) -> None:
+        self.config, self.service = config, service
 
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
             raise WorkflowError("invalid dispatch identifier")
         with cleanup_budget():
-            for suffix in ("code", "test", "probe"):
+            for suffix in ("code", "test", "probe", "prepare", "publish"):
                 name = f"my-wfc-{dispatch_id}-{suffix}"
                 # docker rm -f is scoped to our exact persisted names. No v2 operations.
-                found = command(
+                found = docker_command(
                     [
                         "docker",
                         "container",
@@ -309,8 +220,8 @@ class CoderRuntime:
                     ]
                 )
                 if found.strip():
-                    command(["docker", "rm", "-f", name])
-                if command(
+                    docker_command(["docker", "rm", "-f", name])
+                if docker_command(
                     [
                         "docker",
                         "container",
@@ -361,6 +272,12 @@ class CoderRuntime:
                 "--tmpfs",
                 "/home/coder:rw,nosuid,nodev,size=128m,uid=10001,gid=10001,mode=0700",
             ]
+        if mode in {"prepare", "publish"}:
+            key = Path(self.config["pem"]).resolve(strict=True)
+            args += [
+                "--mount",
+                f"type=bind,src={key},dst=/run/.secret/coder-app.pem,readonly",
+            ]
         if mode == "code":
             key = Path(self.config["openai_key"]).resolve(strict=True)
             args += [
@@ -369,7 +286,7 @@ class CoderRuntime:
                 "--env",
                 "WFC_CODEX_MODEL=" + self.config["model"],
             ]
-        else:
+        elif mode not in {"prepare", "publish"}:
             args += ["--network=none"]
 
         remaining = int(claim["deadline"] - time.time())
@@ -386,268 +303,97 @@ class CoderRuntime:
         ]
         return run_container(args, prompt, remaining)
 
-    def check_worktree(self, root: Path, context: dict, sha: str) -> None:
-        if context["repository"] != REPOSITORY or context["branch"] in {
-            "main",
-            "master",
-        }:
-            raise WorkflowError("unauthorized repository or protected branch")
-        if (
-            git(root, "branch", "--show-current").decode().strip()
-            != context["branch"]
-        ):
-            raise WorkflowError("worktree branch mismatch")
-        if git(root, "status", "--porcelain", "--untracked-files=all").strip():
-            raise WorkflowError("worktree must be clean")
-        if git(root, "remote", "get-url", "origin").decode().strip() not in {
-            f"https://github.com/{REPOSITORY}.git",
-            f"git@github.com:{REPOSITORY}.git",
-        }:
-            raise WorkflowError("worktree origin mismatch")
-        self.verify(REPOSITORY, context["branch"], context["base_sha"], sha)
-        if git(root, "rev-parse", "HEAD").decode().strip() != sha:
-            # A previous App publication advances GitHub, not this local worktree.
-            # Fetch credentials exist only in this trusted child's environment.
-            auth = base64.b64encode(
-                ("x-access-token:" + self.app.token()).encode()
-            ).decode()
-            env = dict(os.environ)
-            env.update(
-                {
-                    "GIT_CONFIG_COUNT": "1",
-                    "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-                    "GIT_CONFIG_VALUE_0": "Authorization: Basic " + auth,
-                    "GIT_TERMINAL_PROMPT": "0",
-                }
-            )
-            try:
-                subprocess.run(
-                    [
-                        "git",
-                        "-c",
-                        "core.hooksPath=/dev/null",
-                        "-c",
-                        "credential.helper=",
-                        "-C",
-                        str(root),
-                        "fetch",
-                        "--no-tags",
-                        "origin",
-                        "refs/heads/" + context["branch"],
-                    ],
-                    env=env,
-                    capture_output=True,
-                    check=True,
-                    timeout=operation_timeout(30),
-                )
-            except (OSError, subprocess.SubprocessError):
-                raise WorkflowError(
-                    "App-authenticated worktree fetch failed"
-                ) from None
-            check_deadline()
-            if git(root, "rev-parse", "FETCH_HEAD").decode().strip() != sha:
-                raise WorkflowError(
-                    "fetched head differs from authorized input"
-                )
-            git(root, "merge", "--ff-only", "--no-edit", "FETCH_HEAD")
-        if git(root, "rev-parse", "HEAD").decode().strip() != sha:
-            raise WorkflowError("local worktree SHA mismatch")
-
-    def publish(
-        self, context: dict, input_sha: str, entries: list[dict]
-    ) -> str:
-        self.verify(
-            REPOSITORY, context["branch"], context["base_sha"], input_sha
-        )
-        name, email = self.app.identity()
-        prefix = f"/repos/{REPOSITORY}"
-        parent = self.app.api("GET", prefix + "/git/commits/" + input_sha)
-        tree_entries = []
-        for entry in entries:
-            oid = None
-            if entry["content"] is not None:
-                blob = self.app.api(
-                    "POST",
-                    prefix + "/git/blobs",
-                    {
-                        "content": base64.b64encode(entry["content"]).decode(),
-                        "encoding": "base64",
-                    },
-                )
-                oid = blob["sha"]
-            tree_entries.append(
-                {
-                    "path": entry["path"],
-                    "mode": entry["mode"],
-                    "type": "blob",
-                    "sha": oid,
-                }
-            )
-        tree = self.app.api(
-            "POST",
-            prefix + "/git/trees",
-            {"base_tree": parent["tree"]["sha"], "tree": tree_entries},
-        )
-        commit = self.app.api(
-            "POST",
-            prefix + "/git/commits",
-            {
-                "message": f"{context['task_id']}: implement authorized coder assignment",
-                "tree": tree["sha"],
-                "parents": [input_sha],
-                "author": {"name": name, "email": email},
-                "committer": {"name": name, "email": email},
-            },
-        )
-        sha = commit["sha"]
-        self.verify(
-            REPOSITORY, context["branch"], context["base_sha"], input_sha
-        )
-        self.app.api(
-            "PATCH",
-            prefix + "/git/refs/heads/" + quote(context["branch"], safe="/"),
-            {"sha": sha, "force": False},
-        )
-        self.verify(REPOSITORY, context["branch"], context["base_sha"], sha)
-        return sha
-
-    def draft_pr(self, context: dict, sha: str, summary: str) -> str:
-        prefix = f"/repos/{REPOSITORY}"
-        query = urlencode(
-            {
-                "state": "open",
-                "head": "builacviet:" + context["branch"],
-                "base": "main",
-            }
-        )
-        existing = self.app.api("GET", prefix + "/pulls?" + query)
-        if existing:
-            if (
-                len(existing) != 1
-                or not existing[0].get("draft")
-                or existing[0].get("user", {}).get("login")
-                != "builacviet-wfc-coder[bot]"
-            ):
-                raise WorkflowError(
-                    "existing PR is not the expected bot draft"
-                )
-            self.app.api(
-                "PATCH",
-                prefix + "/pulls/" + str(existing[0]["number"]),
-                {
-                    "body": f"Exact head: {sha}\n\n{summary}\n\nAwaiting ChatGPT Tech Lead; no merge authorization."
-                },
-            )
-            return existing[0]["html_url"]
-        pr = self.app.api(
-            "POST",
-            prefix + "/pulls",
-            {
-                "title": context["task_id"] + ": coder handoff",
-                "head": context["branch"],
-                "base": "main",
-                "draft": True,
-                "body": f"Exact head: {sha}\n\n{summary}\n\nAwaiting ChatGPT Tech Lead; maximum two rounds. No merge authorization.",
-            },
-        )
-        if pr.get("user", {}).get(
-            "login"
-        ) != "builacviet-wfc-coder[bot]" or not pr.get("draft"):
-            raise WorkflowError("PR attribution mismatch")
-        return pr["html_url"]
-
-    def handoff_entries(
-        self, task: dict, context: dict, entries: list[dict], summary: str
-    ) -> list[dict]:
-        handoff = task["handoff_path"]
-        if handoff not in context["context_paths"] or not writable(
-            handoff, task["write_paths"]
-        ):
-            raise WorkflowError("handoff path must be authorized and writable")
-        handoff_text = (
-            f"Task ID: {context['task_id']}\nSummary: isolated Codex assignment\n"
-            f"Files: {', '.join(entry['path'] for entry in entries)}\n"
-            f"Tests: {summary}\nRemaining risks: independent review pending\n"
-            f"Branch: {context['branch']}\nBase SHA: {context['base_sha']}\n"
-            "Head SHA: resolve commit containing this handoff on task branch\n"
-            "Limitations: model/effort unverified; no approval or merge\n"
-            "Push status: verified by controller before handoff registration\n"
-            f"Requested review effort: {context['requested_effort']}\n"
-            "Review status: awaiting ChatGPT Tech Lead\n"
-        )
-        entries = [entry for entry in entries if entry["path"] != handoff]
-        entries.append(
-            {
-                "path": handoff,
-                "mode": "100644",
-                "content": handoff_text.encode(),
-            }
-        )
-        return entries
-
     def execute(self, claim: dict, context: dict) -> str:
         task = self.config["tasks"][context["task_id"]]
-        root = Path(task["worktree"]).resolve(strict=True)
-        self.check_worktree(root, context, claim["input_sha"])
-        scratch = Path(self.config["scratch"]).resolve()
-        scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
-        scratch.chmod(0o700)
-        stage = scratch / claim["dispatch_id"]
-        stage.mkdir(mode=0o777)
-        stage.chmod(0o777)
-        baseline = snapshot(root, claim["input_sha"], stage)
-        prompt = (
-            "Implement only this authorized task. Read AGENTS.md and supplied context. "
-            "Do not commit, push, merge, approve, access credentials or alter workflow policy. "
-            "Modify only these paths: "
-            + json.dumps(task["write_paths"])
-            + "\n"
-            + json.dumps(context, sort_keys=True)
+        stage = (
+            Path(task["worktree"])
+            / ".runtime"
+            / "dispatch"
+            / claim["dispatch_id"]
         )
+        root = Path(task["worktree"]).resolve(strict=True)
+        if not stage.resolve().is_relative_to(root):
+            raise WorkflowError("dispatch path escapes allowed worktree")
+        for parent in stage.parents:
+            if parent == root:
+                break
+            if parent.exists() and is_linked(parent):
+                raise WorkflowError("linked dispatch parent")
+        stage.mkdir(parents=True, mode=0o700)
+        stage.chmod(0o777)
+        envelope = {
+            "context": context,
+            "input_sha": claim["input_sha"],
+            "deadline": claim["deadline"],
+            "write_paths": task["write_paths"],
+            "handoff_path": task["handoff_path"],
+            "app_id": self.config["app_id"],
+            "installation_id": self.config["installation_id"],
+        }
         try:
-            self.docker(claim, stage, "code", prompt)
-            # Stop coder before inspecting mutable files or running independent tests.
+            self.docker(claim, stage, "prepare", json.dumps(envelope))
             self.stop(claim["dispatch_id"])
-            entries = changes(stage, baseline, task["write_paths"])
-            test_output = self.docker(claim, stage, "test")
-            self.stop(claim["dispatch_id"])
-            if entries != changes(stage, baseline, task["write_paths"]):
-                raise WorkflowError("tests mutated publishable source")
-            # Keep raw test logs private. Summary is generated from observed exit 0.
-            summary = "python -m pytest -q: exit 0 in isolated credential-free test container"
-            (scratch / (claim["dispatch_id"] + ".tests.txt")).write_bytes(
-                test_output
+            source = stage / "source"
+            if not source.is_dir() or is_linked(source):
+                raise WorkflowError("worker source missing or linked")
+            prompt = (
+                "Implement only this authorized task; do not commit/push/approve.\n"
+                + json.dumps(context)
             )
-            self.check_worktree(root, context, claim["input_sha"])
-            latest = self.service.get_coder_assignment(context["task_id"])
-            if (
-                latest["status"],
-                latest["current_head_sha"],
-                latest["completed_review_rounds"],
-            ) != (
-                context["status"],
-                context["current_head_sha"],
-                context["completed_review_rounds"],
+            self.docker(claim, source, "code", prompt)
+            self.stop(claim["dispatch_id"])
+            tested_digest = source_digest(source)
+            self.docker(claim, source, "test")
+            self.stop(claim["dispatch_id"])
+            if source_digest(source) != tested_digest:
+                raise WorkflowError("test phase mutated source")
+            envelope["test_summary"] = (
+                "python -m pytest -q: exit 0 in credential-free network-disabled test container"
+            )
+            self.docker(claim, stage, "publish", json.dumps(envelope))
+            self.stop(claim["dispatch_id"])
+            result_path = stage / "result.json"
+            if is_linked(result_path) or result_path.stat().st_size > 65536:
+                raise WorkflowError("unsafe worker result")
+            result = json.loads(result_path.read_text())
+            required = {
+                "task_id",
+                "repository",
+                "branch",
+                "base_sha",
+                "head_sha",
+                "input_sha",
+                "pr_url",
+            }
+            if not isinstance(result, dict) or not required.issubset(result):
+                raise WorkflowError("incomplete worker result")
+            if not isinstance(result["pr_url"], str) or not re.fullmatch(
+                r"https://github.com/builacviet/techlead-review-poc/pull/[1-9][0-9]*",
+                result["pr_url"],
             ):
                 raise WorkflowError(
-                    "workflow assignment changed during coding"
+                    "worker PR reference differs from repository"
                 )
-            entries = self.handoff_entries(task, context, entries, summary)
-            check_deadline()
-            sha = self.publish(context, claim["input_sha"], entries)
-            check_deadline()
-            self.draft_pr(context, sha, summary)
+            from my_wfc.github import validate_sha
+
+            validate_sha(result["head_sha"])
+            for field in ("task_id", "repository", "branch", "base_sha"):
+                if result[field] != context[field]:
+                    raise WorkflowError(
+                        "worker result differs from authorized task"
+                    )
+            if result["input_sha"] != claim["input_sha"]:
+                raise WorkflowError("worker result input mismatch")
             check_deadline()
             self.service.register_task_handoff(
                 context["task_id"],
-                REPOSITORY,
+                context["repository"],
                 context["branch"],
                 context["base_sha"],
-                sha,
+                result["head_sha"],
                 task["handoff_path"],
-                summary,
+                envelope["test_summary"] + "; worker PR: " + result["pr_url"],
             )
-            check_deadline()
-            return sha
+            return result["head_sha"]
         finally:
             self.stop(claim["dispatch_id"])

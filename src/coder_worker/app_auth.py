@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from my_wfc.budget import check_deadline, operation_timeout
-from my_wfc.github import GitHubVerifier, WorkflowError
+from coder_worker.github import GitHubVerifier, WorkflowError
 
 BOT = "builacviet-wfc-coder[bot]"
 REPOSITORY = "builacviet/techlead-review-poc"

@@ -45,3 +45,5 @@ Default protected workflow access remains unchanged; never enable public no-auth
 against non-synthetic data.
 
 Phase 3.1 adds an independent GitHub App / Codex Controller. See [operator runbook](docs/phase-3.1.md) and [authorized task / ACs](docs/tasks/PHASE-3.1.md). Activation requires local credentials and a synthetic live test; implementation does not authorize merge or operate Workflow Console v2.
+
+Current Phase 3.1: worker owns all Git/GitHub; WFC uses repository interfaces for local SQLite state only. See docs/phase-3.1.md.

@@ -6,7 +6,8 @@ import pytest
 from starlette.requests import Request
 
 from my_wfc.admin import BASE, ROUND1, ROUND2, REPO, import_history, seed_synthetic, reset_synthetic
-from my_wfc.github import GitHubVerifier, WorkflowError
+from coder_worker.github import GitHubVerifier
+from my_wfc.github import WorkflowError
 from my_wfc.security import authorize_request
 from my_wfc.service import WorkflowService
 
@@ -30,7 +31,7 @@ class Remote:
 def env(tmp_path):
     remote = Remote()
     now = [1000.0]
-    service = WorkflowService(tmp_path / "state.db", remote, clock=lambda: now[0], lease_seconds=10)
+    service = WorkflowService(tmp_path / "state.db", clock=lambda: now[0], lease_seconds=10)
     return service, remote, now
 
 
@@ -71,7 +72,7 @@ def test_restart_persistence_and_queue_filter(env):
     service, remote, now = env
     ready(service)
     ready(service, "HIGH", "high", True)
-    restarted = WorkflowService(service.db_path, remote)
+    restarted = WorkflowService(service.db_path)
     assert [t["task_id"] for t in restarted.list_review_queue("high")] == ["HIGH"]
     assert len(restarted.list_review_queue()) == 2
     assert restarted.list_review_queue("instant") == []
@@ -132,26 +133,6 @@ def test_expired_claim_direct_recovery(env):
     service.claim_review("TEST", HEAD, "lead")
     now[0] += 10
     assert service.claim_review("TEST", HEAD, "lead")["review_round"] == 1
-
-
-@pytest.mark.parametrize("stage", ["claim", "submit", "handoff"])
-def test_stale_remote_and_unavailable_preserve_state(env, stage):
-    service, remote, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead") if stage == "submit" else None
-    before = service.get_review_context("TEST")
-    remote.head = NEXT
-    with pytest.raises(WorkflowError):
-        if stage == "claim":
-            service.claim_review("TEST", HEAD, "lead")
-        elif stage == "submit":
-            service.submit_review(payload(claim), "lead")
-        else:
-            service.register_task_handoff("TEST", REPO, "task/test", BASE, HEAD, "docs/handoff.md", "x")
-    assert service.get_review_context("TEST") == before
-    remote.available = False
-    with pytest.raises(WorkflowError):
-        service.claim_review("TEST", HEAD, "lead")
 
 
 def test_stale_client_sha_and_wrong_owner(env):
@@ -247,13 +228,12 @@ def test_approval_terminal_and_branch_move_invalidates_approval(env):
     claim = service.claim_review("TEST", HEAD, "lead")
     data = payload(claim, "APPROVED")
     service.submit_review(data, "lead")
-    assert service.get_review_result("TEST")["approval_current"] is True
+    assert service.get_review_result("TEST")["approval_current"] is None
     with pytest.raises(WorkflowError):
         service.claim_review("TEST", HEAD, "lead")
     remote.head = NEXT
-    assert service.get_review_result("TEST")["approval_current"] is False
-    with pytest.raises(WorkflowError):
-        service.submit_review(data, "lead")
+    assert service.get_review_result("TEST")["approval_current"] is None
+    assert service.submit_review(data, "lead")["duplicate"]
     with pytest.raises(WorkflowError):
         service.register_task_handoff("TEST", REPO, "task/test", BASE, NEXT, "docs/handoff.md", "x")
 

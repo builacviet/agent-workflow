@@ -40,14 +40,14 @@ def import_history(engine):
         ]
         for number, sha, verdict, resolutions, fid, ac, description, fix in records:
             rid = f"historical-TASK-001-{number}"
-            db.execute("INSERT INTO reviews VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            db.insert_review(
                        (rid, "TASK-001", number, BASE, sha, verdict, description, "high", None,
                         "unverified", None, None, imported, encode(resolutions)))
             engine.insert_findings(db, rid, "TASK-001", [dict(finding_id=fid, severity="medium",
                 acceptance_criterion=ac, file_path="src/order_service/service.py", line=None,
                 description=description, suggested_correction=fix,
                 required_verification="Not provided in historical evidence.")])
-            db.execute("UPDATE tasks SET current_head_sha=?,completed_review_rounds=? WHERE task_id='TASK-001'", (sha, number))
+            db.import_historical_head((sha, number))
             task["current_head_sha"] = sha
             engine.event(db, task, verdict, "HISTORICAL_IMPORT", {"round": number, "original_timestamp": None, "original_reviewer": None})
             task["status"] = verdict
@@ -73,7 +73,7 @@ def reset_synthetic(engine):
         if not json.loads(task["metadata"])["synthetic"]:
             raise WorkflowError("refusing to reset real history")
         for table in ("review_findings", "reviews", "review_attempts", "task_events", "tasks"):
-            db.execute(f"DELETE FROM {table} WHERE task_id=?", ("POC-REVIEW-001",))
+            db.delete_synthetic_history((table, "POC-REVIEW-001"))
 
 
 def main():

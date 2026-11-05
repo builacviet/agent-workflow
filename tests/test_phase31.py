@@ -6,8 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from my_wfc.app_auth import AppVerifier, BOT, GitHubApp, REPOSITORY
-from my_wfc.coder_runtime import changes, safe_path, validate_config
+from coder_worker.app_auth import AppVerifier, BOT, GitHubApp, REPOSITORY
+from my_wfc.coder_runtime import safe_path, validate_config
+from coder_worker.repository import changes
 from my_wfc.controller import DispatchLedger, run_once
 from my_wfc.github import WorkflowError
 from my_wfc.service import WorkflowService
@@ -38,9 +39,7 @@ def provision(service, task_id="P31"):
 
 @pytest.fixture
 def state(tmp_path):
-    service = WorkflowService(
-        tmp_path / "workflow.sqlite3", lambda *args: None
-    )
+    service = WorkflowService(tmp_path / "workflow.sqlite3")
     provision(service)
     return service
 
@@ -49,7 +48,7 @@ def test_atomic_global_slot_across_connections(state):
     provision(state, "OTHER")
 
     def claim(_):
-        service = WorkflowService(state.db_path, lambda *args: None)
+        service = WorkflowService(state.db_path)
         return DispatchLedger(service).claim({"P31", "OTHER"}, 60)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -98,7 +97,7 @@ def test_runtime_exception_blocks_slot_and_sanitizes_ledger(state):
 
     with pytest.raises(RuntimeError):
         run_once(state, DispatchLedger(state), {"P31"}, fail)
-    with state.connection() as db:
+    with state.repository.raw_connection() as db:
         row = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
     assert row["status"] == "BLOCKED" and row["slot"] == 1
     assert "sensitive" not in row["detail"]
@@ -115,7 +114,7 @@ def test_runtime_exception_blocks_slot_and_sanitizes_ledger(state):
     ],
 )
 def test_review_and_terminal_states_never_dispatch(state, status, rounds):
-    with state.transaction() as db:
+    with state.repository.raw_transaction() as db:
         db.execute(
             "UPDATE tasks SET status=?,completed_review_rounds=?",
             (status, rounds),
@@ -128,7 +127,7 @@ def test_allowlist_and_round_key(state):
     assert ledger.claim({"UNKNOWN"}, 60) is None
     first = ledger.claim({"P31"}, 60)
     ledger.finish(first["dispatch_id"], HEAD)
-    with state.transaction() as db:
+    with state.repository.raw_transaction() as db:
         db.execute(
             "UPDATE tasks SET status='CHANGES_REQUESTED',completed_review_rounds=1,current_head_sha=?",
             (HEAD,),
@@ -300,7 +299,7 @@ def test_configuration_requires_explicit_scope():
 
 def test_snapshot_real_baseline_includes_safe_templates(tmp_path):
     import subprocess
-    from my_wfc.coder_runtime import snapshot
+    from coder_worker.repository import snapshot
 
     root = tmp_path / "source"
     root.mkdir()
@@ -353,81 +352,6 @@ def test_controller_process_lock_excludes_reconciliation(tmp_path):
         pass
 
 
-@pytest.mark.parametrize("failure", [None, "test", "publish", "stale"])
-def test_execute_flow_handoff_and_failures(
-    state, tmp_path, monkeypatch, failure
-):
-    import my_wfc.coder_runtime as module
-
-    root = tmp_path / "worktree"
-    root.mkdir()
-    config = {
-        "tasks": {
-            "P31": {
-                "worktree": str(root),
-                "write_paths": ["src", "docs"],
-                "handoff_path": "docs/handoff.md",
-            }
-        },
-        "scratch": str(tmp_path / "jobs"),
-    }
-    runtime = module.CoderRuntime(config, None, state)
-    calls = []
-    monkeypatch.setattr(
-        runtime, "check_worktree", lambda *args: calls.append("check")
-    )
-    monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("stop"))
-
-    def snapshot(root, sha, stage):
-        (stage / "src").mkdir()
-        (stage / "src/app.py").write_bytes(b"old")
-        return {"src/app.py": ("100644", b"old")}
-
-    monkeypatch.setattr(module, "snapshot", snapshot)
-
-    def docker(claim, stage, mode, prompt=""):
-        calls.append(mode)
-        if mode == "code":
-            (stage / "src/app.py").write_bytes(b"new")
-        if mode == "test" and failure == "test":
-            raise WorkflowError("test failed")
-        if mode == "test" and failure == "stale":
-            with state.transaction() as db:
-                db.execute(
-                    "UPDATE tasks SET status='ESCALATED',completed_review_rounds=2"
-                )
-        return b"synthetic output"
-
-    monkeypatch.setattr(runtime, "docker", docker)
-
-    def publish(context, sha, entries):
-        calls.append("publish")
-        assert entries[-1]["path"] == "docs/handoff.md"
-        assert b"awaiting ChatGPT Tech Lead" in entries[-1]["content"]
-        if failure == "publish":
-            raise WorkflowError("publication uncertain")
-        return HEAD
-
-    monkeypatch.setattr(runtime, "publish", publish)
-    monkeypatch.setattr(
-        runtime, "draft_pr", lambda *args: calls.append("draft")
-    )
-    ledger = DispatchLedger(state)
-    if failure:
-        with pytest.raises(WorkflowError):
-            run_once(state, ledger, {"P31"}, runtime.execute)
-        assert ledger.claim({"P31"}, 60) is None
-        assert "draft" not in calls
-    else:
-        assert run_once(state, ledger, {"P31"}, runtime.execute)
-        assert state.get_review_context("P31")["status"] == "READY_IN_REVIEW"
-        assert (
-            calls.index("test") < calls.index("publish") < calls.index("draft")
-        )
-        assert calls[calls.index("code") + 1] == "stop"
-    assert calls[-1] == "stop"
-
-
 def test_malformed_and_expired_installation_tokens(app):
     client, transport, _ = app
     original = transport.__call__
@@ -443,7 +367,7 @@ def test_malformed_and_expired_installation_tokens(app):
 
 
 def test_app_http_error_never_exposes_token(monkeypatch):
-    import my_wfc.app_auth as module
+    import coder_worker.app_auth as module
 
     def fail(data):
         raise OSError("secret synthetic-token")
@@ -452,40 +376,6 @@ def test_app_http_error_never_exposes_token(monkeypatch):
     with pytest.raises(WorkflowError) as error:
         module.request_json("GET", "/app", "synthetic-token")
     assert "synthetic-token" not in str(error.value)
-
-
-def test_publish_bot_attribution_nonforce_and_sha_rechecks(state):
-    from my_wfc.coder_runtime import CoderRuntime
-
-    class App:
-        def identity(self):
-            return BOT, "123+" + BOT + "@users.noreply.github.com"
-
-        def api(self, method, endpoint, payload=None):
-            calls.append((method, endpoint, payload))
-            if method == "GET":
-                return {"tree": {"sha": "c" * 40}}
-            return {"sha": HEAD}
-
-    calls = []
-    runtime = CoderRuntime({}, App(), state)
-    verified = []
-    runtime.verify = lambda *args: verified.append(args[-1])
-    runtime.publish(
-        {"task_id": "P31", "branch": "codex/test", "base_sha": BASE},
-        BASE,
-        [{"path": "src/app.py", "mode": "100644", "content": b"new"}],
-    )
-    commit = next(
-        payload
-        for _, endpoint, payload in calls
-        if endpoint.endswith("/git/commits")
-    )
-    assert commit["author"]["name"] == BOT
-    assert commit["committer"]["email"].startswith("123+")
-    assert commit["parents"] == [BASE]
-    assert calls[-1][2] == {"sha": HEAD, "force": False}
-    assert verified == [BASE, BASE, HEAD]
 
 
 @pytest.fixture
@@ -552,54 +442,6 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
         validate_config(config)
 
 
-@pytest.mark.parametrize(
-    "draft,actor", [(True, BOT), (False, BOT), (True, "operator")]
-)
-def test_draft_lookup_reuse_or_rejection(state, draft, actor):
-    from my_wfc.coder_runtime import CoderRuntime
-
-    calls = []
-
-    class App:
-        def api(self, method, endpoint, payload=None):
-            calls.append((method, endpoint, payload))
-            if method == "GET":
-                return [
-                    {
-                        "number": 7,
-                        "draft": draft,
-                        "user": {"login": actor},
-                        "html_url": "https://github.com/fixture/pull/7",
-                    }
-                ]
-            return {}
-
-    runtime = CoderRuntime({}, App(), state)
-    if draft and actor == BOT:
-        assert runtime.draft_pr(
-            {"branch": "codex/test"}, HEAD, "synthetic"
-        ).endswith("/7")
-        assert calls[-1][0] == "PATCH"
-        assert HEAD in calls[-1][2]["body"]
-    else:
-        with pytest.raises(WorkflowError):
-            runtime.draft_pr({"branch": "codex/test"}, HEAD, "synthetic")
-        assert len(calls) == 1
-
-
-def test_mcp_app_selection_is_explicit_and_partial_fails(
-    app, tmp_path, monkeypatch
-):
-    from my_wfc.tools import default_service
-
-    monkeypatch.setenv("WFC_DB_PATH", str(tmp_path / "app-mcp.sqlite3"))
-    monkeypatch.setenv("WFC_GITHUB_APP_ID", "1")
-    monkeypatch.setenv("WFC_GITHUB_INSTALLATION_ID", "2")
-    monkeypatch.setenv("WFC_GITHUB_APP_PEM", str(app[0].pem))
-    assert isinstance(default_service().verify_remote, AppVerifier)
-    monkeypatch.delenv("WFC_GITHUB_APP_ID")
-    with pytest.raises(WorkflowError, match="configuration"):
-        default_service()
 
 
 @pytest.mark.parametrize(
@@ -664,158 +506,6 @@ def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
 
 
-@pytest.mark.parametrize(
-    "expiry", ["after_test", "upload", "ref", "pr", "handoff"]
-)
-def test_publication_deadline_stops_later_effects_and_blocks(
-    state, app, tmp_path, monkeypatch, expiry
-):
-    import my_wfc.coder_runtime as module
-
-    client, _, now = app
-    now[0] = 1000
-    monkeypatch.setattr(module.time, "time", lambda: now[0])
-    client._token, client._expires = "synthetic-only", 5000
-    root = tmp_path / "worktree"
-    root.mkdir()
-    runtime = module.CoderRuntime(
-        {
-            "scratch": str(tmp_path / "jobs"),
-            "tasks": {
-                "P31": {
-                    "worktree": str(root),
-                    "write_paths": ["src", "docs"],
-                    "handoff_path": "docs/handoff.md",
-                }
-            },
-        },
-        client,
-        state,
-    )
-    calls = []
-    monkeypatch.setattr(runtime, "check_worktree", lambda *args: None)
-    monkeypatch.setattr(runtime, "verify", lambda *args: None)
-    monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("cleanup"))
-
-    def snapshot(root, sha, stage):
-        (stage / "src").mkdir()
-        (stage / "src/a.py").write_bytes(b"old")
-        return {"src/a.py": ("100644", b"old")}
-
-    monkeypatch.setattr(module, "snapshot", snapshot)
-
-    def docker(claim, stage, mode, prompt=""):
-        if mode == "code":
-            (stage / "src/a.py").write_bytes(b"new")
-        elif expiry == "after_test":
-            now[0] = 1061
-        return b"synthetic test evidence"
-
-    monkeypatch.setattr(runtime, "docker", docker)
-
-    def transport(method, endpoint, token, payload=None):
-        calls.append((method, endpoint))
-        if endpoint.startswith("/users/"):
-            return {"id": 123, "type": "Bot", "login": BOT}
-        if method == "GET" and "/git/commits/" in endpoint:
-            return {"tree": {"sha": BASE}}
-        if endpoint.endswith("/git/blobs") and expiry == "upload":
-            now[0] = 1061
-        if "/git/refs/" in endpoint and expiry == "ref":
-            now[0] = 1061
-        if "/pulls?" in endpoint:
-            return []
-        if endpoint.endswith("/pulls"):
-            if expiry == "pr":
-                now[0] = 1061
-            return {
-                "draft": True,
-                "user": {"login": BOT},
-                "html_url": "fixture",
-            }
-        return {"sha": HEAD}
-
-    client.transport = transport
-
-    def verify_handoff(*args):
-        calls.append("handoff_verify")
-        if expiry == "handoff":
-            now[0] = 1061
-
-    state.verify_remote = verify_handoff
-    with pytest.raises(TimeoutError):
-        run_once(
-            state,
-            DispatchLedger(state, clock=lambda: now[0]),
-            {"P31"},
-            runtime.execute,
-            timeout=60,
-        )
-    with state.connection() as db:
-        dispatch = dict(
-            db.execute("SELECT * FROM coder_dispatches").fetchone()
-        )
-    assert dispatch["status"] == "BLOCKED" and dispatch["slot"] == 1
-    task = state.get_review_context("P31")
-    assert task["status"] == "AWAITING_HANDOFF"
-    assert task["completed_review_rounds"] == 0
-    assert task["current_head_sha"] is None
-    effects = [item for item in calls if isinstance(item, tuple)]
-    if expiry == "after_test":
-        assert effects == []
-    if expiry in {"after_test", "upload"}:
-        assert not any("/git/refs/" in endpoint for _, endpoint in effects)
-    if expiry in {"after_test", "upload", "ref"}:
-        assert not any("/pulls" in endpoint for _, endpoint in effects)
-    if expiry != "handoff":
-        assert "handoff_verify" not in calls
-    assert calls[-1] == "cleanup"
-
-
-def test_shared_budget_caps_git_http_signing_and_sqlite_waits(
-    state, app, monkeypatch
-):
-    import my_wfc.budget as budget
-    import my_wfc.app_auth as auth
-    import my_wfc.coder_runtime as runtime
-    from types import SimpleNamespace
-
-    now = [1000]
-    monkeypatch.setattr(budget.time, "time", lambda: now[0])
-    limits = []
-
-    def run(*args, **kwargs):
-        limits.append(kwargs["timeout"])
-        return SimpleNamespace(stdout=b"synthetic")
-
-    monkeypatch.setattr(runtime.subprocess, "run", run)
-
-    class Process:
-        returncode = 0
-
-        def communicate(self, data=None, *, timeout):
-            limits.append(timeout)
-            return b"{}", None
-
-    monkeypatch.setattr(
-        auth.subprocess, "Popen", lambda *args, **kwargs: Process()
-    )
-    connect = __import__("sqlite3").connect
-
-    def limited_connect(*args, **kwargs):
-        limits.append(kwargs["timeout"])
-        return connect(*args, **kwargs)
-
-    monkeypatch.setattr(__import__("sqlite3"), "connect", limited_connect)
-    with budget.dispatch_budget(1003):
-        runtime.command(["fixture"])
-        auth.sign_rs256(b"fixture", app[0].pem)
-        auth.request_json("GET", "/fixture", "synthetic-only")
-        with state.connection():
-            pass
-    assert len(limits) == 4 and all(0 < limit <= 3 for limit in limits)
-
-
 def test_cleanup_remains_available_after_deadline(monkeypatch, state):
     import my_wfc.budget as budget
     import my_wfc.coder_runtime as runtime
@@ -827,10 +517,10 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state):
         assert budget.operation_timeout(30) == 30
         return b""
 
-    monkeypatch.setattr(runtime, "command", command)
+    monkeypatch.setattr(runtime, "docker_command", command)
     with budget.dispatch_budget(1001):
         now[0] = 1002
-        runtime.CoderRuntime({}, None, state).stop("a" * 32)
+        runtime.CoderRuntime({}, state).stop("a" * 32)
         with pytest.raises(TimeoutError):
             budget.check_deadline()
 
@@ -853,7 +543,7 @@ def test_expired_completion_never_marks_dispatch_done(state, monkeypatch):
             execute,
             timeout=60,
         )
-    with state.connection() as db:
+    with state.repository.raw_connection() as db:
         row = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
     assert row["status"] == "BLOCKED" and row["slot"] == 1
     assert row["result_sha"] is None

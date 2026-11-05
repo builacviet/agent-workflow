@@ -1,34 +1,14 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
-import os
 from my_wfc.paths import database_path
 
 from mcp.server.fastmcp import Context
 from my_wfc.contracts import Submission
-from my_wfc.github import GitHubVerifier
 from my_wfc.security import authorize_context
 from my_wfc.service import WorkflowService
 
 
 def default_service():
-    verifier = GitHubVerifier({"builacviet/techlead-review-poc"})
-    if any(os.environ.get(key) for key in (
-            "WFC_GITHUB_APP_ID", "WFC_GITHUB_INSTALLATION_ID", "WFC_GITHUB_APP_PEM")):
-        from pathlib import Path
-        from my_wfc.app_auth import AppVerifier, GitHubApp
-        from my_wfc.github import WorkflowError
-        try:
-            verifier = AppVerifier(GitHubApp(
-                int(os.environ["WFC_GITHUB_APP_ID"]),
-                int(os.environ["WFC_GITHUB_INSTALLATION_ID"]),
-                Path(os.environ["WFC_GITHUB_APP_PEM"]),
-            ))
-        except (KeyError, ValueError, OSError):
-            raise WorkflowError("GitHub App configuration unavailable") from None
-
-    return WorkflowService(
-        database_path(),
-        verifier,
-    )
+    return WorkflowService(database_path())
 
 
 def register_tools(mcp, service_factory=default_service):
@@ -70,7 +50,7 @@ def register_tools(mcp, service_factory=default_service):
     def register_task_handoff(task_id: str, repository: str, branch: str, base_sha: str,
                               new_head_sha: str, handoff_file_path: str, test_summary: str,
                               ctx: Context) -> dict:
-        """Authenticated mutation: verify a pushed handoff for a locally authorized task."""
+        """Authenticated mutation: record reported handoff for a locally authorized task; no remote verification."""
         engine, _ = service(ctx)
         return engine.register_task_handoff(task_id, repository, branch, base_sha, new_head_sha,
                                             handoff_file_path, test_summary)

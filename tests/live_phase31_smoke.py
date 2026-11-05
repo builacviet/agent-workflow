@@ -15,7 +15,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from my_wfc.coder_runtime import CoderRuntime, git, safe_path
+from my_wfc.coder_runtime import CoderRuntime, safe_path
+from coder_worker.repository import git
 from my_wfc.github import WorkflowError
 from my_wfc.service import WorkflowService
 
@@ -43,6 +44,8 @@ def main() -> None:
         if relative != "AGENTS.md" and not template:
             safe_path(relative)
         source = ROOT / relative
+        if not source.exists() and not source.is_symlink():
+            continue  # tracked deletion in an uncommitted refactor
         if not stat.S_ISREG(source.lstat().st_mode):
             raise WorkflowError(
                 "smoke source contains a linked/nonregular file"
@@ -61,8 +64,7 @@ def main() -> None:
             "seccomp_profile": str(profile),
             "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
         },
-        None,
-        WorkflowService(scratch / "smoke.sqlite3", lambda *args: None),
+        WorkflowService(scratch / "smoke.sqlite3"),
     )
     claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 120}
     try:

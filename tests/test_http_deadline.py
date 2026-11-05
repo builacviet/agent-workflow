@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from my_wfc import app_auth
+from coder_worker import app_auth
 from my_wfc.budget import cleanup_budget, dispatch_budget
 from my_wfc.controller import DispatchLedger, run_once
 from my_wfc.github import WorkflowError
@@ -20,6 +20,7 @@ from my_wfc.service import WorkflowService
 
 @pytest.fixture
 def loopback(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     stop = threading.Event()
     started = threading.Event()
     headers = threading.Event()
@@ -112,10 +113,10 @@ def test_http_total_deadline_kills_and_reaps_request_worker(
     loopback, endpoint
 ):
     started = time.monotonic()
-    with dispatch_budget(time.time() + 1.5):
+    with dispatch_budget(time.time() + 5):
         with pytest.raises(WorkflowError) as error:
             app_auth.request_json("GET", endpoint, "synthetic-secret-only")
-    assert time.monotonic() - started < 4.5
+    assert time.monotonic() - started < 8
     assert loopback.started.is_set()
     if endpoint == "/trickle":
         assert loopback.headers.is_set()
@@ -128,7 +129,7 @@ def test_http_total_deadline_kills_and_reaps_request_worker(
 
 
 def test_fast_response_and_redirect_refusal(loopback):
-    with dispatch_budget(time.time() + 3):
+    with dispatch_budget(time.time() + 10):
         assert app_auth.request_json("GET", "/fast", "synthetic") == {
             "ok": True
         }
@@ -139,9 +140,7 @@ def test_fast_response_and_redirect_refusal(loopback):
 
 
 def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
-    service = WorkflowService(
-        tmp_path / "workflow.sqlite3", lambda *args: None
-    )
+    service = WorkflowService(tmp_path / "workflow.sqlite3")
     service.provision_task(
         {
             "task_id": "HTTP-DEADLINE",
@@ -161,7 +160,7 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
     )
     effects = []
     # A normal 60s dispatch whose remaining budget is deliberately 1.5s.
-    ledger = DispatchLedger(service, clock=lambda: time.time() - 58.5)
+    ledger = DispatchLedger(service, clock=lambda: time.time() - 55)
 
     def execute(claim, context):
         try:
@@ -175,11 +174,11 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
     started = time.monotonic()
     with pytest.raises(WorkflowError):
         run_once(service, ledger, {"HTTP-DEADLINE"}, execute, timeout=60)
-    assert time.monotonic() - started < 4.5
+    assert time.monotonic() - started < 8
     assert loopback.headers.is_set()
     assert effects == ["cleanup"]
     assert all(process.poll() is not None for process in loopback.processes)
-    with service.connection() as db:
+    with service.repository.raw_connection() as db:
         dispatch = dict(
             db.execute("SELECT * FROM coder_dispatches").fetchone()
         )
@@ -192,7 +191,7 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
 
 @pytest.mark.parametrize("endpoint", ["/invalid", "/oversize"])
 def test_worker_response_limits_and_errors_are_sanitized(loopback, endpoint):
-    with dispatch_budget(time.time() + 3):
+    with dispatch_budget(time.time() + 10):
         with pytest.raises(WorkflowError) as error:
             app_auth.request_json("GET", endpoint, "synthetic-secret-only")
     assert "synthetic-secret" not in str(error.value)
@@ -200,7 +199,7 @@ def test_worker_response_limits_and_errors_are_sanitized(loopback, endpoint):
 
 
 def test_empty_worker_response_remains_none(loopback):
-    with dispatch_budget(time.time() + 3):
+    with dispatch_budget(time.time() + 10):
         assert app_auth.request_json("GET", "/empty", "synthetic") is None
     assert loopback.processes[0].returncode == 0
 

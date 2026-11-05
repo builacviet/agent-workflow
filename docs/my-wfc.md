@@ -1,3 +1,5 @@
+> Current Phase 3.1 architecture supersedes remote verification/gh setup below: WFC is local-only, worker owns GitHub, Tech Lead verifies via plugin. See [current runbook](phase-3.1.md) and review-policy.md. Earlier sections retain historical POC context.
+
 # my_wfc consolidated operator guide
 
 This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI reviews, start a scheduler, dispatch Codex, manage worktrees or merge code. The existing streamable-http transport, loopback bind, port 8000, /mcp path, DNS-rebinding host list and public ping/get_server_info are preserved. Only server_info version/mode describe the new capabilities.
