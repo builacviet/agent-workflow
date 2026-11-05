@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -18,6 +19,8 @@ from urllib.parse import urlsplit
 import httpx
 import jwt
 from mcp.server.auth.provider import AccessToken
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,23 @@ class Auth0TokenVerifier:
         self._jwks: dict[str, object] = {}
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
+        self._diagnostic_events = 0
+
+    def _diagnose(self, code: str) -> None:
+        """Opt-in fixed reason codes only; never log credentials or JWT claims.
+
+        Hard cap protects log volume for a public POC endpoint. Disabled by default.
+        """
+        if os.environ.get("WFC_AUTH0_DIAGNOSTICS") != "1":
+            return
+        if self._diagnostic_events >= 40:
+            return
+        self._diagnostic_events += 1
+        _LOG.warning("auth0_oauth_validation code=%s", code)
+
+    def _reject(self, code: str) -> None:
+        self._diagnose(code)
+        return None
 
     async def _fetch_jwks(self) -> dict[str, object]:
         url = self.config.issuer + ".well-known/jwks.json"
@@ -125,17 +145,23 @@ class Auth0TokenVerifier:
 
     async def verify_token(self, token: str) -> AccessToken | None:
         if not isinstance(token, str) or len(token) > 8192 or token.count(".") != 2:
-            return None
+            return self._reject("token_format")
         try:
             header = jwt.get_unverified_header(token)
-            if header.get("alg") != "RS256":
-                return None
-            kid = header.get("kid")
-            if not isinstance(kid, str) or not 1 <= len(kid) <= 128:
-                return None
+        except Exception:
+            return self._reject("jwt_header")
+        if header.get("alg") != "RS256":
+            return self._reject("jwt_algorithm")
+        kid = header.get("kid")
+        if not isinstance(kid, str) or not 1 <= len(kid) <= 128:
+            return self._reject("jwt_kid")
+        try:
             key = await self._get_key(kid)
-            if key is None:
-                return None
+        except Exception:
+            return self._reject("jwks_unavailable")
+        if key is None:
+            return self._reject("jwt_unknown_kid")
+        try:
             claims = jwt.decode(
                 token,
                 key,
@@ -145,19 +171,37 @@ class Auth0TokenVerifier:
                 leeway=30,
                 options={"require": ["iss", "sub", "aud", "exp", "iat"]},
             )
-            subject = claims.get("sub")
-            if subject != self.config.allowed_sub:
-                return None
-            raw_scope = claims.get("scope", "")
-            if not isinstance(raw_scope, str):
-                return None
-            scopes = raw_scope.split()
-            if self.config.scope not in scopes:
-                return None
-            client_id = claims.get("azp") or claims.get("client_id")
-            if not isinstance(client_id, str) or client_id != self.config.client_id:
-                return None
-            return AccessToken(
+        except jwt.ExpiredSignatureError:
+            return self._reject("jwt_expired")
+        except jwt.InvalidIssuerError:
+            return self._reject("jwt_issuer_mismatch")
+        except jwt.InvalidAudienceError:
+            return self._reject("jwt_audience_mismatch")
+        except jwt.MissingRequiredClaimError:
+            return self._reject("jwt_missing_required_claim")
+        except jwt.ImmatureSignatureError:
+            return self._reject("jwt_not_yet_valid")
+        except jwt.InvalidSignatureError:
+            return self._reject("jwt_bad_signature")
+        except jwt.PyJWTError:
+            return self._reject("jwt_invalid_claims")
+        except Exception:
+            return self._reject("jwt_decode_error")
+
+        subject = claims.get("sub")
+        if subject != self.config.allowed_sub:
+            return self._reject("subject_mismatch")
+        raw_scope = claims.get("scope", "")
+        if not isinstance(raw_scope, str):
+            return self._reject("scope_format")
+        scopes = raw_scope.split()
+        if self.config.scope not in scopes:
+            return self._reject("scope_missing")
+        client_id = claims.get("azp") or claims.get("client_id")
+        if not isinstance(client_id, str) or client_id != self.config.client_id:
+            return self._reject("client_mismatch")
+        try:
+            verified = AccessToken(
                 token=token,
                 client_id=client_id,
                 scopes=scopes,
@@ -166,6 +210,6 @@ class Auth0TokenVerifier:
                 subject=subject,
             )
         except Exception:
-            # Fail closed for JWT, network, JWKS, decoding or provider failures.
-            # Never return or log tokens, claims or provider response bodies.
-            return None
+            return self._reject("access_token_error")
+        self._diagnose("verified")
+        return verified
