@@ -15,7 +15,7 @@ def auth_config(monkeypatch):
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
-    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "chatgpt-client")
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "https://chatgpt.com/oauth/client.json")
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
     return load_auth0_config("test.example.org")
 
@@ -31,7 +31,7 @@ def jwt_case(auth_config):
         exp=now + 300,
         iat=now - 1,
         scope=auth_config.scope,
-        azp="chatgpt-client",
+        azp="https://chatgpt.com/oauth/client.json",
     )
     verifier = Auth0TokenVerifier(auth_config)
     calls = []
@@ -81,7 +81,7 @@ def test_valid_token_binds_subject_resource_scopes_and_caches_jwks(jwt_case):
     verified = asyncio.run(verifier.verify_token(sign()))
     assert verified.subject == "auth0|owner"
     assert verified.resource == "https://test.example.org/mcp"
-    assert verified.client_id == "chatgpt-client"
+    assert verified.client_id == "https://chatgpt.com/oauth/client.json"
     assert verified.scopes == ["wfc:workflow"]
     assert asyncio.run(verifier.verify_token(sign())) is not None
     assert len(fetches) == 1
@@ -152,7 +152,7 @@ def test_auth0_transport_advertises_protected_resource(monkeypatch):
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
-    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "chatgpt-client")
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "https://chatgpt.com/oauth/client.json")
     monkeypatch.setenv("WFC_PUBLIC_HOST", "test.example.org")
     oauth_server = create_mcp_server()
     app = oauth_server.streamable_http_app()
@@ -201,3 +201,57 @@ def test_oauth_diagnostics_bounded(jwt_case, monkeypatch, caplog):
         assert asyncio.run(verifier.verify_token(invalid)) is None
     assert len([r for r in caplog.records
                 if "auth0_oauth_validation" in r.message]) == 40
+
+
+@pytest.mark.parametrize(
+    "client_id",
+    [
+        "https://chatgpt.com/oauth/client.json",
+        "https://chatgpt.com/oauth/BpZIpxL-aggt/client.json",
+        "tpc_2cEspQ3q4E2X6saM9oKUE4",
+    ],
+)
+def test_exact_cimd_identity_configuration_allowed(monkeypatch, auth_config, client_id):
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", client_id)
+    assert load_auth0_config("test.example.org").client_id == client_id
+
+
+@pytest.mark.parametrize(
+    "client_id",
+    [
+        "https://evil.example/oauth/client.json",
+        "http://chatgpt.com/oauth/client.json",
+        "https://chatgpt.com/oauth/client.json?extra=1",
+        "https://chatgpt.com/oauth/not-client.json",
+        "https://chatgpt.com/oauth/client.json/extra",
+        "chatgpt-client",
+        "",
+    ],
+)
+def test_oauth_client_identity_rejects_non_chatgpt_urls(
+    monkeypatch, auth_config, client_id
+):
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", client_id)
+    with pytest.raises(ValueError, match="CLIENT_ID"):
+        load_auth0_config("test.example.org")
+
+
+def test_client_mismatch_distinguishes_expected_cimd_url_safely(
+    jwt_case, monkeypatch, caplog
+):
+    verifier, sign, _ = jwt_case
+    # Simulate operator configuring Auth0's internal tpc_ record instead of
+    # the exact external CIMD URL used by ChatGPT in the OAuth flow.
+    verifier.config = type(verifier.config)(
+        issuer=verifier.config.issuer,
+        resource=verifier.config.resource,
+        allowed_sub=verifier.config.allowed_sub,
+        client_id="tpc_2cEspQ3q4E2X6saM9oKUE4",
+        scope=verifier.config.scope,
+    )
+    monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
+    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    assert asyncio.run(verifier.verify_token(sign())) is None
+    messages = [r.message for r in caplog.records]
+    assert any("code=client_mismatch_cimd_url" in msg for msg in messages)
+    assert all("https://chatgpt.com/oauth/client.json" not in msg for msg in messages)
