@@ -56,8 +56,18 @@ def load_auth0_config(public_host: str) -> Auth0Config:
         raise ValueError("WFC_AUTH0_ISSUER must be an HTTPS domain issuer")
     if not (1 <= len(allowed_sub) <= 256) or any(x.isspace() for x in allowed_sub):
         raise ValueError("WFC_AUTH0_ALLOWED_SUB must be the exact Auth0 user ID")
-    if not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", client_id):
-        raise ValueError("WFC_AUTH0_CLIENT_ID must be the registered ChatGPT CIMD client ID")
+    # Auth0 may display an internal tpc_ ID, while CIMD uses a metadata URL.
+    # The operator pins ONE exact expected ID: no wildcard client trust.
+    cimd_url = re.fullmatch(
+        r"https://chatgpt[.]com/oauth/(?:[A-Za-z0-9_-]{1,128}/)?client[.]json",
+        client_id,
+    )
+    auth0_record_id = re.fullmatch(r"tpc_[A-Za-z0-9_-]{6,256}", client_id)
+    if not (cimd_url or auth0_record_id):
+        raise ValueError(
+            "WFC_AUTH0_CLIENT_ID must be the exact ChatGPT CIMD metadata URL "
+            "or Auth0 third-party application ID"
+        )
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", scope):
         raise ValueError("WFC_AUTH0_SCOPE must be a single OAuth permission")
     if not public_host:
@@ -198,7 +208,15 @@ class Auth0TokenVerifier:
         if self.config.scope not in scopes:
             return self._reject("scope_missing")
         client_id = claims.get("azp") or claims.get("client_id")
-        if not isinstance(client_id, str) or client_id != self.config.client_id:
+        if not isinstance(client_id, str) or not client_id:
+            return self._reject("client_claim_missing")
+        if client_id != self.config.client_id:
+            # Only a fixed diagnostic code. Never log the JWT, azp or client_id.
+            if re.fullmatch(
+                r"https://chatgpt[.]com/oauth/(?:[A-Za-z0-9_-]{1,128}/)?client[.]json",
+                client_id,
+            ):
+                return self._reject("client_mismatch_cimd_url")
             return self._reject("client_mismatch")
         try:
             verified = AccessToken(
