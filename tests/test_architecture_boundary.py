@@ -194,6 +194,8 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
 
     def git(repo, *args):
         calls.append(args)
+        if args[0] == "show":
+            return (root / "repo" / args[1][1:]).read_bytes()
         return b"b" * 40 if args[0] == "rev-parse" else b""
 
     monkeypatch.setattr(worker, "git", git)
@@ -237,7 +239,10 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
     )
 
 
-def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ignored", [False, True])
+def test_worker_real_git_push_to_disposable_bare_remote(
+    tmp_path, monkeypatch, ignored
+):
     import coder_worker.main as worker
     from coder_worker.repository import git, snapshot
     from coder_worker.app_auth import BOT
@@ -252,6 +257,8 @@ def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch):
     git(repo, "config", "user.email", "fixture@example.invalid")
     (repo / "src").mkdir()
     (repo / "src/a.py").write_text("before")
+    if ignored:
+        (repo / ".gitignore").write_text("src/ignored.py\ndocs/\n")
     git(repo, "add", ".")
     git(repo, "-c", "commit.gpgsign=false", "commit", "-m", "fixture")
     git(repo, "checkout", "-b", "task/test")
@@ -262,6 +269,8 @@ def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch):
     source.mkdir()
     snapshot(repo, base, source)
     (source / "src/a.py").write_text("after")
+    if ignored:
+        (source / "src/ignored.py").write_text("tested ignored addition")
     monkeypatch.setattr(worker, "ROOT", tmp_path)
     monkeypatch.setattr(
         worker, "git_auth", lambda app, root, *args: git(root, *args)
@@ -303,3 +312,51 @@ def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch):
         == BOT + "|123+" + BOT + "@users.noreply.github.com"
     )
     assert (repo / "docs/handoff.md").exists()
+    assert (
+        git(repo, "show", "HEAD:docs/handoff.md")
+        == (repo / "docs/handoff.md").read_bytes()
+    )
+    if ignored:
+        assert (
+            git(repo, "show", "HEAD:src/ignored.py")
+            == b"tested ignored addition"
+        )
+
+
+def test_source_digest_frames_paths_and_contents(tmp_path):
+    from my_wfc.coder_runtime import source_digest
+
+    left, right = tmp_path / "left", tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "a").write_bytes(b"bc")
+    (right / "ab").write_bytes(b"c")
+    assert b"a" + b"bc" == b"ab" + b"c"  # old unframed input collision
+    assert source_digest(left) != source_digest(right)
+    (right / "ab").unlink()
+    (right / "a").write_bytes(b"bc")
+    assert source_digest(left) == source_digest(right)
+
+
+def test_controller_compose_parses_without_starting_services():
+    from pathlib import Path
+    import shutil
+
+    if shutil.which("docker") is None:
+        pytest.skip("Docker CLI needed for compose syntax validation")
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(root / "compose.controller.yaml"),
+            "config",
+            "--no-env-resolution",
+            "--quiet",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        timeout=20,
+    )

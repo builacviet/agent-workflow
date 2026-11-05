@@ -141,8 +141,12 @@ def source_digest(root: Path) -> str:
             path = Path(directory) / name
             if is_linked(path) or not path.is_file():
                 raise WorkflowError("unsafe source file")
-            digest.update(path.relative_to(root).as_posix().encode())
-            digest.update(path.read_bytes())
+            name_bytes = path.relative_to(root).as_posix().encode("utf-8")
+            content = path.read_bytes()
+            digest.update(len(name_bytes).to_bytes(8, "big"))
+            digest.update(name_bytes)
+            digest.update(len(content).to_bytes(8, "big"))
+            digest.update(content)
     return digest.hexdigest()
 
 

@@ -20,9 +20,6 @@ services:
         bind:
           create_host_path: false
     read_only: true
-        bind:
-          create_host_path: false
-    read_only: true
     tmpfs:
       - /tmp
     cap_drop:

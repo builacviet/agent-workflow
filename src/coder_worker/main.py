@@ -120,7 +120,23 @@ def publish(data: dict, app: GitHubApp) -> None:
     name, email = app.identity()
     git(repo, "config", "user.name", name)
     git(repo, "config", "user.email", email)
-    git(repo, "add", "--all")
+    # Explicit allowlisted paths include ignored additions and handoff files.
+    git(
+        repo,
+        "add",
+        "--force",
+        "--all",
+        "--",
+        *[entry["path"] for entry in entries],
+    )
+    for entry in entries:
+        if entry["content"] is None:
+            if git(repo, "ls-files", "--", entry["path"]).strip():
+                raise WorkflowError("deleted path remains staged")
+        elif git(repo, "show", ":" + entry["path"]) != entry["content"]:
+            raise WorkflowError(
+                "staged content differs from tested source/handoff"
+            )
     git(
         repo,
         "-c",
