@@ -36,35 +36,60 @@ def server_allowed_hosts() -> list[str]:
         hosts.extend([public_host, public_host + ":*"])
     return hosts
 
-mcp = FastMCP(
-    "Workflow MCP Lab",
-    host=server_bind_host(),
-    port=8000,
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=server_allowed_hosts(),
-    ),
-)
+def create_mcp_server():
+    """Legacy bearer by default; Auth0 OAuth is opt-in and fail-closed."""
+    mode = os.environ.get("WFC_AUTH_MODE", "bearer").strip()
+    if mode not in {"bearer", "auth0"}:
+        raise ValueError("WFC_AUTH_MODE must be bearer or auth0")
+    kwargs = {}
+    if mode == "auth0":
+        from pydantic import AnyHttpUrl
+        from mcp.server.auth.settings import AuthSettings
+        from my_wfc.auth0_oauth import Auth0TokenVerifier, load_auth0_config
 
-@mcp.tool()
+        config = load_auth0_config(
+            os.environ.get("WFC_PUBLIC_HOST", "").strip().lower()
+        )
+        kwargs["token_verifier"] = Auth0TokenVerifier(config)
+        kwargs["auth"] = AuthSettings(
+            issuer_url=AnyHttpUrl(config.issuer),
+            resource_server_url=AnyHttpUrl(config.resource),
+            required_scopes=[config.scope],
+            validate_token_resource=True,
+        )
+    return FastMCP(
+        "Workflow MCP Lab",
+        host=server_bind_host(),
+        port=8000,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=server_allowed_hosts(),
+        ),
+        **kwargs,
+    )
+
+
 def ping() -> str:
     """Check whether ChatGPT can call this MCP server."""
     return "pong"
 
-@mcp.tool()
 def get_server_info() -> dict:
     """Return basic, non-sensitive information about this server."""
     return {
         "name": "Workflow MCP Lab",
         "version": "0.2.0",
         "status": "running",
-        "mode": ("POC-UNAUTHENTICATED-UNSAFE" if poc_unauthenticated_enabled()
+        "mode": ("oauth-auth0-resource-server" if os.environ.get("WFC_AUTH_MODE") == "auth0"
+                 else "POC-UNAUTHENTICATED-UNSAFE" if poc_unauthenticated_enabled()
                  else "workflow-writes-denied-unless-authenticated"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 from my_wfc.tools import register_tools
 
+mcp = create_mcp_server()
+mcp.tool()(ping)
+mcp.tool()(get_server_info)
 register_tools(mcp)
 
 if __name__ == "__main__":
