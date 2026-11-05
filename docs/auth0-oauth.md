@@ -28,8 +28,8 @@ or live ChatGPT login is claimed by this code commit.
 ## Runtime settings
 
 Use a local ignored env file, e.g. copy
-`.runtime/mcp-auth0.env.example` to `.runtime/mcp-auth0.env`.
-This file is for an **isolated test deployment**, not a direction to
+`.runtime/controller-mcp.env.example` to `.runtime/controller-mcp.env`.
+The standalone `compose.controller.yaml` uses this ignored file. This is for an **isolated test deployment**, not a direction to
 overwrite an already-running Compose service.
 
 - `WFC_AUTH_MODE=auth0`: enable OAuth mode. Omitted or `bearer` keeps
