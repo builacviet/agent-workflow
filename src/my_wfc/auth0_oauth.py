@@ -38,7 +38,13 @@ def load_auth0_config(public_host: str) -> Auth0Config:
         raise ValueError("OAuth and public no-auth mode are mutually exclusive")
     issuer = os.environ.get("WFC_AUTH0_ISSUER", "").strip()
     allowed_sub = os.environ.get("WFC_AUTH0_ALLOWED_SUB", "").strip()
-    client_id = os.environ.get("WFC_AUTH0_CLIENT_ID", "").strip()
+    # The expected OAuth client identity may be a CIMD HTTPS URL, not an
+    # Auth0-internal tpc_ application record. Migrate without a forced restart.
+    expected_client_id = os.environ.get("WFC_OAUTH_EXPECTED_CLIENT_ID", "").strip()
+    legacy_client_id = os.environ.get("WFC_AUTH0_CLIENT_ID", "").strip()
+    if expected_client_id and legacy_client_id and expected_client_id != legacy_client_id:
+        raise ValueError("conflicting WFC_OAUTH_EXPECTED_CLIENT_ID and WFC_AUTH0_CLIENT_ID")
+    client_id = expected_client_id or legacy_client_id
     scope = os.environ.get("WFC_AUTH0_SCOPE", "wfc:workflow").strip()
     parsed = urlsplit(issuer)
     if (
@@ -65,7 +71,7 @@ def load_auth0_config(public_host: str) -> Auth0Config:
     auth0_record_id = re.fullmatch(r"tpc_[A-Za-z0-9_-]{6,256}", client_id)
     if not (cimd_url or auth0_record_id):
         raise ValueError(
-            "WFC_AUTH0_CLIENT_ID must be the exact ChatGPT CIMD metadata URL "
+            "WFC_OAUTH_EXPECTED_CLIENT_ID must be the exact ChatGPT CIMD metadata URL "
             "or Auth0 third-party application ID"
         )
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", scope):
