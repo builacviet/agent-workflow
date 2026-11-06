@@ -36,7 +36,7 @@ overwrite an already-running Compose service.
 - `WFC_AUTH0_ISSUER=https://YOUR-TENANT.us.auth0.com/`: HTTPS Auth0
   issuer with trailing slash; do not substitute the ngrok domain.
 - `WFC_AUTH0_ALLOWED_SUB=auth0|...`: exact single allowed user subject.
-- `WFC_AUTH0_CLIENT_ID=https://chatgpt.com/oauth/client.json`: pin the exact ChatGPT CIMD metadata URL used during Auth0 registration (or the exact callback-specific `https://chatgpt.com/oauth/{callback_id}/client.json` if that was registered). **Do not assume the Auth0 `tpc_...` internal client record equals the OAuth token's authorized party claim.** The verifier uses strict equality; neither URL wildcarding nor missing-client acceptance is enabled.
+- `WFC_OAUTH_EXPECTED_CLIENT_ID=https://chatgpt.com/oauth/client.json`: pin the exact ChatGPT CIMD metadata URL used during Auth0 registration (or the exact callback-specific `https://chatgpt.com/oauth/{callback_id}/client.json` if that was registered). **Do not assume the Auth0 `tpc_...` internal client record equals the OAuth token's authorized party claim.** The verifier uses strict equality; neither URL wildcarding nor missing-client acceptance is enabled.
 - `WFC_AUTH0_SCOPE=wfc:workflow`: one required permission.
 - `WFC_PUBLIC_HOST=caddy-reopen-scotch.ngrok-free.dev`: DNS host only.
   The externally accessible resource URL is `https://HOST/mcp`.
@@ -129,7 +129,22 @@ also assigns a separate `tpc_` identifier to imported third-party clients.
 When troubleshooting `client_mismatch`, do not weaken client verification.
 With diagnostics enabled and the old `tpc_` value configured, a response
 `client_mismatch_cimd_url` is evidence that the signed token contains a
-ChatGPT CIMD URL. Update `WFC_AUTH0_CLIENT_ID` to the **exact** URL originally
+ChatGPT CIMD URL. Update `WFC_OAUTH_EXPECTED_CLIENT_ID` to the **exact** URL originally
 imported into Auth0. The client identity is still verified by exact match.
 This distinction depends on actual Auth0 claims; do not claim success until a
 new ChatGPT request logs `verified` and the MCP tools can be discovered.
+
+## Environment naming and migration
+
+Preferred variable: `WFC_OAUTH_EXPECTED_CLIENT_ID`. It means the exact
+OAuth client identity expected in Auth0's verified access-token claim; the
+CIMD standard permits this value to be the HTTPS client metadata URL, rather
+than the internal `tpc_` record visible in the Auth0 Dashboard.
+
+The previous `WFC_AUTH0_CLIENT_ID` variable is accepted only as a
+**temporary backwards-compatible alias**. If both variables are present and
+nonempty, they **must match exactly** or startup fails closed. To migrate the
+running Phase 3.1 deployment: replace the legacy variable in the ignored
+`.runtime/controller-mcp.env` file with the new variable (keep the same
+verified URL), then recreate **only** the MCP container to reread the env.
+The ngrok tunnel does not require changing the public hostname.
