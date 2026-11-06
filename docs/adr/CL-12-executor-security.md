@@ -1,14 +1,14 @@
 # CL-12.5 — Trusted Executor security ADR and platform decision gate
 
-Status: **Tech Lead-authored proposal / unvalidated / pending independent Owner review**. Date: 2026-11-06. Task: https://app.notion.com/p/410f92014abd816996ace95343795c15
+Status: **Owner-selected development engine: Rootless Podman CLI with a dedicated unprivileged Linux-host Trusted Executor (B3).** Security and production readiness remain **unvalidated**; this document still requires exact-SHA review and Owner merge approval. Date: 2026-11-06. Task: https://app.notion.com/p/410f92014abd816996ace95343795c15
 
 Base: 937d0ba2203bb4cff0a63ea5a6ac3bc094b5137e. Scope: **this document only**. No code, Docker, credentials, live DB, Controller or host operations. CL-12 final design sign-off and implementation authorization are separate. This replaces neither the CL-02 permissions work nor the CL-11 schema plan.
 
 ## 1. Decision and evidence boundary
 
-**Original conditional baseline B2 (now reopened for Podman comparison in §8):** Controller container -> authenticated, narrowly typed Trusted Executor interface -> executor container -> **dedicated rootless worker Docker daemon**, isolated from the host-wide daemon. The daemon must be provisioned without privileged Docker-in-Docker (DinD), must not expose a generic container-create API to Controller/MCP/Codex, and must pass all platform/security gates below. The executor is trusted and still requires strong internal authentication, allowlists, ownership and audit. Rootless reduces daemon privileges; it does not prove sandbox isolation.
+**Historical B2 Docker candidate (superseded for this development phase by Owner-selected B3 in §9):** Controller container -> authenticated, narrowly typed Trusted Executor interface -> executor container -> **dedicated rootless worker Docker daemon**, isolated from the host-wide daemon. The daemon must be provisioned without privileged Docker-in-Docker (DinD), must not expose a generic container-create API to Controller/MCP/Codex, and must pass all platform/security gates below. The executor is trusted and still requires strong internal authentication, allowlists, ownership and audit. Rootless reduces daemon privileges; it does not prove sandbox isolation.
 
-**Fail-closed fallback B1:** a minimal trusted host executor with authenticated local-only IPC and strictly limited Docker actions **only after Owner explicitly chooses it**, following a failed or impractical B2 feasibility evaluation. No automatic fallback to rootful daemon access or privileged DinD. A rootful generic Docker socket proxy is not an adequate boundary.
+**Historical B1 alternative (not automatically permitted):** a minimal trusted host executor with authenticated local-only IPC and strictly limited Docker actions **only after Owner explicitly chooses it**, following a failed or impractical B2 feasibility evaluation. No automatic fallback to rootful daemon access or privileged DinD. A rootful generic Docker socket proxy is not an adequate boundary.
 
 Docker documentation says rootless Docker daemon/containers can run under an unprivileged user, but the common docker:dind-rootless image is launched with --privileged to disable security restrictions. The latter is **not an acceptable B2 implementation** here:
 - https://docs.docker.com/engine/security/rootless/
@@ -25,13 +25,13 @@ Current observed repository (not deployment proof):
 
 | Actor/zone | Trusted capabilities required | Denied capabilities |
 | --- | --- | --- |
-| ChatGPT client / MCP ingress | OAuth-scoped review requests; public ping/info | Docker daemon, host paths, GitHub App PEM, Codex auth material, direct DB/admin |
+| ChatGPT client / MCP ingress | OAuth-scoped review requests; public ping/info | Any container engine/socket, host paths, GitHub App PEM, Codex auth material, direct DB/admin |
 | MCP service | Auth verification + workflow repository on approved DB | Worker images, daemon/socket, arbitrary job execution, app PEM |
-| Controller | Durable dispatch ownership, checks on task/round/SHA, bounded typed job submission | Docker command creation, arbitrary host mounts, GitHub App credentials, direct host daemon |
+| Controller | Durable dispatch ownership, checks on task/round/SHA, bounded typed job submission | Podman/Docker command creation, arbitrary host mounts, GitHub App credentials, direct engine API/socket |
 | Executor (trusted) | Strictly authenticated request parser, local job policy, provisioning/stop/reap and host-real workspace mapping | Dynamic policy from prompt, arbitrary image/mount/flags, unrestricted TCP API, database schema mutation |
-| Dedicated worker daemon | Only approved ephemeral worker lifecycle in dedicated rootless context | Host-wide Docker socket, privileged containers, host-wide mounts/devices |
+| Rootless worker engine context | Only approved ephemeral worker lifecycle under the dedicated unprivileged Executor identity, via local Podman CLI | Any host-wide Docker/Podman socket, privileged containers, host-wide mounts/devices |
 | Trusted prepare/publish | Scoped short-lived App key/token, network access to GitHub, Git metadata and validated snapshot/publish | Workflow DB, generic Docker controls or persistent unscoped credentials |
-| Untrusted Codex code stage | Task snapshot/write allowlist, model authentication and bounded model network egress if validated | .git, App PEM/token, workflow DB, Docker socket, host paths, executor secrets |
+| Untrusted Codex code stage | Task snapshot/write allowlist, model authentication and bounded model network egress if validated | .git, App PEM/token, workflow DB, any engine socket, host paths, executor secrets |
 | Untrusted pytest/test stage | Test snapshot and ephemeral nonsecret scratch | Network, Codex auth, App PEM, .git, DB, daemon |
 | order_service | Independent stdlib example | Any workflow, executor or worker dependency |
 
@@ -41,7 +41,7 @@ Explicit boundary transitions: authenticated MCP -> domain workflow (not job exe
 
 ## 3. Minimal executor API contract (proposal, not implementation)
 
-The caller is a **specific authenticated Controller identity**, not a ChatGPT task/tool or Codex process. Private Unix socket or mutually authenticated local transport; reject unauthenticated/duplicate/expired credentials and restrict network reachability. No endpoint that accepts raw Docker CLI args.
+The caller is a **specific authenticated Controller identity**, not a ChatGPT task/tool or Codex process. Private Unix socket or mutually authenticated local transport between the Controller container and host Executor; reject unauthenticated/duplicate/expired credentials and restrict network reachability. No endpoint that accepts raw Podman/Docker CLI args or generic engine operations. Socket ownership, identity verification, namespace and address mapping remain implementation test gates.
 
 Requests are schema-versioned and strictly validated:
 - submit(job_id, dispatch_id, task_id, input_sha, approved_image_digest, workspace_id, stage, deadline, resource_profile_id, policy_version, request_nonce)
@@ -51,20 +51,22 @@ Requests are schema-versioned and strictly validated:
 
 Job ID and dispatch ID must bind to the durable DB assignment and exact full SHA; executor separately checks an authenticated authorization claim and persisted idempotency record, not just syntactic validity. stage is an enum: prepare, code, test, publish (probe only under explicitly authorized security validation). Client cannot select mounts, hostname, device, network_mode, seccomp path, UID or arbitrary flags; executor resolves a versioned policy from **operator-owned config**, enforces approved image by immutable digest, fixed stage transitions and bounded CPU/memory/pids/timeouts/output.
 
-Return a bounded typed result: job_id, request digest, state, monotonic lifecycle timestamps, phase artifact digest, reason code and externally verifiable immutable publish reference where applicable. Reject oversized/unknown fields, paths, unapproved image tags, path traversal, extra Docker options, invalid SHA, stale claim or deadline and conflicting duplicate job IDs. Log correlation IDs without secret values. Remote Git truth is verified by the worker and independently by Tech Lead; executor does not invent remote freshness.
+Return a bounded typed result: job_id, request digest, state, monotonic lifecycle timestamps, phase artifact digest, reason code and externally verifiable immutable publish reference where applicable. Reject oversized/unknown fields, paths, unapproved image tags, path traversal, extra engine options, invalid SHA, stale claim or deadline and conflicting duplicate job IDs. Log correlation IDs without secret values. Remote Git truth is verified by the worker and independently by Tech Lead; executor does not invent remote freshness.
 
 State machine: NEW -> PREPARING -> CODING -> TESTING -> PUBLISHING -> DONE; failures/timeout/host restart/unknown remote effect -> BLOCKED until operator reconciliation. Repeated identical submit must return existing status, never launch a second job. Changed payload with same id must fail. Publish must not run unless code/test succeeded, source digest unchanged and the deadline/authorization still hold. Retain existing two-round review policy independently; executor cannot approve a PR or increment review rounds.
 
 ## 4. Capability and filesystem policy
 
-- Validate workspace_id against Controller-provisioned registry, then resolve daemon-host-real directories under one approved workspace root. Forbid arbitrary caller host paths, bind-source overrides, relative escapes, symlink/junction/reparse traversal, hard-link surprises and mounts into other task or v2 project roots. Recheck target identity before each stage/mount.
+- Validate workspace_id against Controller-provisioned registry, then resolve engine-host-real directories under one approved workspace root. Forbid arbitrary caller host paths, bind-source overrides, relative escapes, symlink/junction/reparse traversal, hard-link surprises and mounts into other task or v2 project roots. Recheck target identity before each stage/mount.
 - Use least-privilege ownership and an explicit cross-UID mapping; no world-writable stage by default. Investigate stage.chmod(0o777) and current worker source chmod before any permission refactor. On Windows Docker Desktop and Linux separately verify effective ACL/mode, not just displayed bits.
 - Code/test get a **sealed source snapshot without .git** or secrets; prepare/publish separately mount only the privileged material they need, for bounded lifespan. Model auth belongs to code only; test gets neither model nor App credentials. Never log keys, tokens or worker stdout containing secrets.
 - Use read-only container root, no-new-privileges, all caps dropped, nonroot UID, read-only mounts except explicitly required scratch, independently validated seccomp/AppArmor, pids/CPU/memory/tmpfs and a hard time budget. An operator-maintained profile checksum and image digest are required; fail closed when unavailable. No --privileged, host PID/network, extra devices or discretionary security-opt flags.
 - Network: test/probe **none**; code may require model endpoint egress and must be constrained to verified destination/port/DNS policy, not assumed offline; trusted prepare/publish need approved GitHub endpoints only. Reject any request for unrestricted host networking or arbitrary endpoint.
 - Worker process, signal and orphan cleanup must be checked after timeout, cancellation, Controller or executor crash. An unverified cleanup leaves dispatch BLOCKED; do not retry a possibly published task.
 
-## 5. B2 versus B1
+## 5. Historical comparison: B2 versus B1 (superseded by B3 for development)
+
+These alternatives are retained for decision audit. **B3 — trusted unprivileged Linux-host Executor invoking local Rootless Podman CLI — is the Owner's selected development target (§9).** Neither B2 nor B1 is a silent fallback; native Linux deployment still requires security validation.
 
 | Criterion | B2: executor + dedicated rootless worker daemon | B1: trusted host executor + narrow IPC |
 | --- | --- | --- |
@@ -77,13 +79,15 @@ State machine: NEW -> PREPARING -> CODING -> TESTING -> PUBLISHING -> DONE; fail
 
 A Docker socket is effectively authority over the corresponding daemon even if exposed via a "proxy". Authenticated transport is not a substitute for server-side allowlists.
 
-## 6. Mandatory evidence and negative-test gate (not yet performed)
+## 6. Mandatory Executor and production Linux evidence gates (not yet performed end-to-end)
+
+Standalone rootless Podman **P2 metadata** and **P3 synthetic behavior** were reported on Ubuntu WSL2; they are not tests of the actual Controller→Executor boundary, full job lifecycle, or production native Linux. See §9 for the measured-versus-pending distinction.
 
 | Gate | Required future proof | Failure disposition |
 | --- | --- | --- |
-| Linux rootless feasibility | Dedicated rootless daemon with no privileged DinD, correct cgroup/resource accounting, seccomp/AppArmor, namespaces and nonroot UIDs; capture exact versions | Block B2; Owner selects reviewed B1 or redesign |
-| Docker Desktop parity | Same typed job, UID mapping, mount semantics, worker networking, seccomp and cleanup results on supported Windows Docker Desktop host | Document gap; do not claim portable |
-| Request abuse | Unauthorized caller, replay, changed duplicate id, bad SHA, wrong task/head/round, stale deadline, oversized payload, arbitrary image/mount/flags | Reject before Docker operation |
+| Native Linux rootless feasibility | Dedicated unprivileged service account, local rootless Podman CLI, systemd/cgroup v2 delegation, effective resource/seccomp controls, namespaces and nonroot UIDs; record exact versions | Block production approval; redesign or reopen engine comparison |
+| WSL2 dev versus native Linux | Re-run real Executor path on a native Linux host/VM; test UID mapping, mount semantics, networking, seccomp, lifecycle and cleanup | Document gap; do not claim production parity from WSL2 |
+| Request abuse | Unauthorized caller, replay, changed duplicate id, bad SHA, wrong task/head/round, stale deadline, oversized payload, arbitrary image/mount/flags | Reject before any Podman operation |
 | Workspace escape | ../, symlink/junction/reparse, race and hardlink cases; other-project roots, .git/PEM/DB exclusion; world-writable parent threat | Zero unauthorized reads/writes |
 | Stage credentials/network | PEM only prepare/publish, model auth only code, none for test; code egress constrained; test/probe no-net; no host socket | Fail-closed, no stage launch |
 | Lifecycle | Stop/reap under failure/cancellation/daemon restart, orphan inventory, no double-dispatch, blocked unknown publish and operator-only reconciliation | Never auto-retry external effects |
@@ -94,7 +98,7 @@ Evidence should include exact command, OS/engine versions, config digest, behavi
 
 ## 7. Decisions held for Owner and subsequent tasks
 
-B2 is a **preference with conditional gate**, not an approved operational design. If rootless feasibility or Docker Desktop parity fails, stop; submit B1 with specific rootful privilege risk/compensating controls for Owner approval. No unsafe fallback by automation.
+The Owner has **selected B3 Rootless Podman as the initial development architecture** (§9), superseding the historical B2 preference. If essential behavior cannot be enforced, stop and reopen design/engine evaluation; do not fall back automatically to rootful execution, generic engine sockets, privileged DinD, or the historical B1/B2 variants.
 
 CL-02 owns permissions fixes after threat modeling; CL-12.6 owns topology/workspace/ops plan; CL-07/09 and later separately approved extraction tasks own code/integration; CL-10/11 own DB/data migration. Current source follows Phase 3.1 historical architecture until Owner approves and tests a replacement.
 
@@ -102,7 +106,7 @@ CL-02 owns permissions fixes after threat modeling; CL-12.6 owns topology/worksp
 
 ## 8. Owner-requested comparison: Rootless Podman versus Rootless Docker (2026-11-06)
 
-**Decision status: REOPENED / PENDING EVIDENCE.** The original B2 preference above described a dedicated *rootless Docker* worker daemon. The Owner requested a head-to-head evaluation with **Rootless Podman**, with a separate authorized Codex probe. This appendix supersedes any reading that Docker itself has already been chosen; the trusted *typed Executor* boundary and fail-closed permissions remain mandatory for either runtime. [Authorized isolated probe CL-12.5-P1](https://app.notion.com/p/410f92014abd8149ba53f218478f35cf).
+**Decision history:** originally REOPENED for comparison; **Owner selected B3 Rootless Podman for development on 2026-11-06** (see §9). The original B2 preference above described a dedicated *rootless Docker* worker daemon. The Owner requested a head-to-head evaluation with **Rootless Podman**, with a separate authorized Codex probe. This appendix supersedes any reading that Docker itself has already been chosen; the trusted *typed Executor* boundary and fail-closed permissions remain mandatory for either runtime. [Authorized isolated probe CL-12.5-P1](https://app.notion.com/p/410f92014abd8149ba53f218478f35cf).
 
 | Decision dimension | Rootless Podman candidate | Dedicated Rootless Docker candidate |
 | --- | --- | --- |
@@ -116,11 +120,11 @@ CL-02 owns permissions fixes after threat modeling; CL-12.6 owns topology/worksp
 
 **Important security correction:** "Daemonless" does **not** imply a stronger security boundary if an authenticated container can call `podman system service`. Podman's API gives full control as the Podman API user; Docker's rootless socket similarly gives powerful authority in that engine's scope. Neither API is exposed to ChatGPT, MCP, Controller, model code/test or arbitrary job payloads. The executor must translate narrowly typed authenticated jobs into fixed, independently reviewed engine operations.
 
-**Additional candidate, not silently approved — B3:** a dedicated **trusted Linux-host Executor process running Rootless Podman CLI as a restricted service account**, called from the containerized Controller over authenticated narrow local IPC. This avoids needing to mount a broad Podman API socket *into another container*, but trades some Compose-only packaging simplicity for a smaller engine API surface. Treat B3 as an architecture deviation that requires explicit Owner acceptance after probe; it is not an automatic fallback or a claim that rootless execution has been validated.
+**Owner-selected B3 for development (not production-approved):** a dedicated **trusted Linux-host Executor process running Rootless Podman CLI as a restricted service account**, called from the containerized Controller over authenticated narrow local IPC. This avoids needing to mount a broad Podman API socket *into another container*, but trades some Compose-only packaging simplicity for a smaller engine API surface. The Owner expressly accepted B3 as the **development target**, supported by Codex-reported P2/P3 feasibility; rootless runtime behavior on production Linux and Executor-specific IPC/lifecycle are not yet validated. This choice is not an automatic fallback or approval to deploy.
 
-### Required Codex evidence before selection
+### Probe history and outstanding evidence before production
 
-The separate task `CL-12.5-P1` runs *only on a disposable isolated environment* with read-only host preflight, no live DB/Container/Compose/credentials and no changes to the user's default Docker context. It must report PASS/FAIL/BLOCKED/NOT RUN for real rootless execution, userns/subids, cgroup resource enforcement, seccomp, read-only/cap-drop/no-new-privileges, tmpfs, stage mounts/host path ownership, denied network/secret access, malicious job arguments, source path escapes, kill/reap/crash and replay/idempotency. Both Windows dev and Linux target matter, but **Linux evidence is mandatory before deployment selection**. No privileged DinD, generic engine socket mounts, rootful fallback or unapproved installation is permitted.
+The separate task `CL-12.5-P1` **completed a BLOCKED read-only preflight report** in PR #14, because the required isolated Linux sandbox was not then available. Owner subsequently provisioned Ubuntu-24.04 on WSL2 and authorized isolated P2/P3 probes. Historical P1 expectations below remain as a requirements baseline; P2/P3 results and residual gaps are summarized in §9. Neither stage touched live DB/Compose/credentials or changed the default Docker context. It must report PASS/FAIL/BLOCKED/NOT RUN for real rootless execution, userns/subids, cgroup resource enforcement, seccomp, read-only/cap-drop/no-new-privileges, tmpfs, stage mounts/host path ownership, denied network/secret access, malicious job arguments, source path escapes, kill/reap/crash and replay/idempotency. Both Windows dev and Linux target matter, but **Linux evidence is mandatory before deployment selection**. No privileged DinD, generic engine socket mounts, rootful fallback or unapproved installation is permitted.
 
 The report must identify which existing Docker runtime flags and security policies translate correctly to Podman, what requires code refactoring, and whether B2 or B3 can be safely called by the typed Executor. If rootless implementations cannot be tested without installing tooling or creating a VM, Codex reports the blocker and requests specific Owner approval; it must not fabricate PASS or touch existing live containers.
 
@@ -131,4 +135,31 @@ The report must identify which existing Docker runtime flags and security polici
 - Docker rootless mode: https://docs.docker.com/engine/security/rootless/
 - Docker rootless cgroups/privileged DinD notes: https://docs.docker.com/engine/security/rootless/tips/
 
-**Updated gate:** Do not approve/merge PR #11 as a *final runtime selection* until probe outcome and the Owner's explicit engine/Executor boundary decision are incorporated. PR #12 (deployment) and #13 (consolidated ADR) must be reconciled to that decision before final acceptance; both currently remain Draft. No implementation or production migration has been authorized.
+**Current gate:** The Owner-selected **development-only B3 Podman architecture** is recorded in §9. PR #11 requires exact-head review and explicit Owner acceptance of this revised document before merge; do not mistake that for a production security approval. PR #12 (deployment) and #13 (consolidated ADR) must be reconciled to B3 before their later approval; both remain Draft. No Executor implementation, existing Docker runtime change, or production migration is authorized by this ADR.
+
+## 9. Owner decision: Rootless Podman as the Executor development engine (2026-11-06)
+
+**Decision authority and scope.** The Owner selects **B3: dedicated Linux-host Trusted Executor service running Rootless Podman CLI as a restricted non-root service account** as the initial implementation target for this POC's next development phase. This choice supersedes the B2 rootless-Docker-first preference for development, but does **not** authorize production deployment, code/host/Compose changes, or a generic engine API. Dedicated Rootless Docker remains an alternative if Podman fails mandatory design criteria; a parallel comparator is deferred rather than declared inferior.
+
+**Selected topology:** Controller (container; workflow DB authority remains separate) → authenticated, narrowly typed, bounded IPC → Trusted Executor (unprivileged Linux host systemd service) → **local** Rootless Podman CLI (no remote API) → ephemeral, stage-scoped Worker containers. Controller, MCP, ChatGPT, model code and test cannot reach an engine socket or pass arbitrary Podman CLI arguments. The Executor maps approved workspace IDs to host-real paths and owns engine naming, policy, image digests, mount allowlists and cleanup. The trust boundary must be tested; a host service still has all privileges of its Unix account.
+
+### 9.1 Observed feasibility and provenance (not independently re-executed by the author)
+
+| Stage | Codex-reported evidence | Interpretation / outstanding limits |
+| --- | --- | --- |
+| P1 ([PR #14](https://github.com/builacviet/techlead-review-poc/pull/14)) | Read-only preflight on Windows initially BLOCKED due to missing approved sandbox. | Correctly reports no engine behavior run; its report remains a historical snapshot, not a failed Podman test. |
+| P2 ([Notion](https://app.notion.com/p/410f92014abd816bbb90e114c4ed2dbf)) | On Ubuntu 24.04.5 LTS under WSL2, Podman 4.9.3 `security.rootless=true`, non-remote; non-root UID 1000; subuid/subgid `100000:65536`, cgroup v2/systemd user delegation, overlay on Linux ext4. | Rootless/userns/delegation and backend feasibility metadata. No container behavior tested in P2. |
+| P3 ([Notion](https://app.notion.com/p/410f92014abd811cb7c0f851a8969d94)) | Synthetic WSL2 container tests reported actual `cpu.max=25000 100000` and throttle 30/31 periods, `memory.max=64MiB` and `oom_kill=1`, `pids.max=32` and `pids.events max=1`; denied root writes, dropped caps, seccomp filter deny, bounded tmpfs, stage-specific fake secrets, test no-network, timeout ~12.18 s and scoped cleanup. Image `docker.io/library/alpine:3.20` digest was reported and removed. | Supports feasibility **for the cases tested on WSL2 only**. Tech Lead has not directly inspected the retained `REPORT.md`/JSON evidence; P3 remains **In Review**. No generalized guarantee from a single sandbox test. |
+
+**Explicit gaps:** AppArmor and SELinux absent in the WSL2 test environment; `NoNewPrivs=1` was observed but no separate setuid-escalation negative test; private mount propagation was observed but not dynamically tested; sibling/symlink path tests covered only synthetic fixtures. Container-name uniqueness is **not** Executor job idempotency. This is not native Linux production proof, not Docker comparator proof, not authorization for real credentials or existing POC workloads.
+
+### 9.2 Required acceptance tests during separately approved Executor implementation
+
+1. **Authenticated typed IPC:** Controller identity/authorization, schema/nonce/replay rejection, bounded payload, invalid stage/image/mount/flag/UID/SHA/path rejection; no engine API or socket delegated to untrusted callers. Verify each denied request causes **no** container side effect.
+2. **End-to-end job idempotency and failure recovery:** same job+payload returns existing status; conflicts rejected; crash before/after container create, timeouts, disconnects, replay, orphan reconciliation, stop and unknown remote publish/commit outcome. Unknown effects remain BLOCKED pending operator review; never duplicate publish.
+3. **Workspace containment and stage credentials:** secure host-real mapping, UID/modes and actual bind permissions; traversal/symlink/junction/TOCTOU/hardlink negatives; no mount outside explicit synthetic roots. Test prepare/publish App credentials separately from code model credentials and no-credential/no-network test stage, with fake data. No world-writable stage by default; CL-02 owns the existing chmod concern.
+4. **Runtime policy as launched by Executor:** measure effective CPU/memory/pids in the actual worker cgroup/scope, seccomp, read-only root, dropped caps, no-new-privileges (including behavioral negative case), tmpfs, timeout, cleanup and concurrency. No rootful or privileged escape hatch. Confirm mount propagation semantics needed by the actual workspace design, without broad host configuration change.
+5. **Operational safety:** pinned image/policy/profile digests, log redaction, isolated worker ownership labels, scoped cleanup/reaper, systemd service lifecycle and restart, auditable error states and safe rollback, version pinning, no direct engine endpoints in Controller/MCP/Codex.
+6. **Linux production parity:** before production, repeat the mandatory checks with a dedicated non-root service identity on a supported native Linux host/VM, including actual systemd delegation, rootless storage/network, denied paths and stage policy. WSL2 cannot substitute for this security and deployment gate; characterize AppArmor/SELinux or a reviewed compensating host policy.
+
+**Review and release gates:** This ADR is a development platform choice with mandatory follow-up AC, **not** P3 proof acceptance. Independent exact-SHA doc review is required because the ADR was Tech Lead-authored; Owner controls merge. PR #12 must reflect the Linux-host Podman service rather than a Docker-rootless daemon; PR #13 must incorporate the same decision after #12. Separate atomic Codex tasks/Owner approval are required before implementing Executor, changing current Phase 3.1 runtime, or deploying any component.
