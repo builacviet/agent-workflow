@@ -6,7 +6,7 @@ Base: 937d0ba2203bb4cff0a63ea5a6ac3bc094b5137e. Scope: **this document only**. N
 
 ## 1. Decision and evidence boundary
 
-**Preferred conditional architecture B2:** Controller container -> authenticated, narrowly typed Trusted Executor interface -> executor container -> **dedicated rootless worker Docker daemon**, isolated from the host-wide daemon. The daemon must be provisioned without privileged Docker-in-Docker (DinD), must not expose a generic container-create API to Controller/MCP/Codex, and must pass all platform/security gates below. The executor is trusted and still requires strong internal authentication, allowlists, ownership and audit. Rootless reduces daemon privileges; it does not prove sandbox isolation.
+**Original conditional baseline B2 (now reopened for Podman comparison in §8):** Controller container -> authenticated, narrowly typed Trusted Executor interface -> executor container -> **dedicated rootless worker Docker daemon**, isolated from the host-wide daemon. The daemon must be provisioned without privileged Docker-in-Docker (DinD), must not expose a generic container-create API to Controller/MCP/Codex, and must pass all platform/security gates below. The executor is trusted and still requires strong internal authentication, allowlists, ownership and audit. Rootless reduces daemon privileges; it does not prove sandbox isolation.
 
 **Fail-closed fallback B1:** a minimal trusted host executor with authenticated local-only IPC and strictly limited Docker actions **only after Owner explicitly chooses it**, following a failed or impractical B2 feasibility evaluation. No automatic fallback to rootful daemon access or privileged DinD. A rootful generic Docker socket proxy is not an adequate boundary.
 
@@ -99,3 +99,36 @@ B2 is a **preference with conditional gate**, not an approved operational design
 CL-02 owns permissions fixes after threat modeling; CL-12.6 owns topology/workspace/ops plan; CL-07/09 and later separately approved extraction tasks own code/integration; CL-10/11 own DB/data migration. Current source follows Phase 3.1 historical architecture until Owner approves and tests a replacement.
 
 **Tech Lead handoff status:** Proposal authored from repository source and governing Notion decisions; no pytest, Docker, threat penetration, runtime or integration tests were executed for this documentation change. Review and merge authorization remain independent.
+
+## 8. Owner-requested comparison: Rootless Podman versus Rootless Docker (2026-11-06)
+
+**Decision status: REOPENED / PENDING EVIDENCE.** The original B2 preference above described a dedicated *rootless Docker* worker daemon. The Owner requested a head-to-head evaluation with **Rootless Podman**, with a separate authorized Codex probe. This appendix supersedes any reading that Docker itself has already been chosen; the trusted *typed Executor* boundary and fail-closed permissions remain mandatory for either runtime. [Authorized isolated probe CL-12.5-P1](https://app.notion.com/p/410f92014abd8149ba53f218478f35cf).
+
+| Decision dimension | Rootless Podman candidate | Dedicated Rootless Docker candidate |
+| --- | --- | --- |
+| Execution model | Native Podman CLI is daemonless for local run/stop; Podman API service is **optional** but has broad user authority | Long-lived rootless dockerd provides Docker API; the socket has broad daemon authority |
+| Privilege | Rootless user namespace and dedicated unprivileged executor user; still dangerous if given arbitrary user-owned mounts | Rootless daemon/container user namespaces and dedicated subordinate ID ranges; still dangerous if given arbitrary daemon control |
+| Containerized Executor integration | **Unresolved:** mounting Podman user socket into Executor grants full user-level API, not a narrow job interface. A dedicated host-level rootless CLI Executor with authenticated typed IPC is an alternative that changes the original containerized-executor assumption | Dedicated rootless daemon can be hosted outside Executor container with narrowly restricted access **only from trusted Executor**; Docker-in-Docker rootless recipe using --privileged is rejected |
+| Windows dev | Podman Machine backed by WSL2/VM; machine-to-host bind paths, sockets, UID/ACL and default Docker pipe may differ from Docker Desktop. Keep existing Docker context untouched | Existing Docker Desktop Docker API is **not proof of dedicated rootless Engine**; separate rootless Linux/VM engine must be evidenced |
+| Linux deployment | Strong candidate with dedicated unprivileged user and rootless Podman, but validate cgroups, seccomp, bind paths and networking | Supported Linux rootless engine, but cgroup enforcement requires compatible cgroup v2/systemd/delegation; validate actual CPU/memory/pid enforcement |
+| Current code compatibility | Docker CLI syntax is similar but not guaranteed equivalent: run/rm/ls, --read-only, --user, --mount, --network=none, --security-opt, resource limits, names/filters, cleanup and JSON output require concrete comparison | Less source change to existing CLI, yet changing daemon context/rootless permission and host-real mounts still requires new implementation/tests |
+| Supply chain/ops | Separate Podman Machine, image cache, Podman version/flags and rootless service management; rootless API must not be exported to untrusted caller | Dedicated rootless daemon lifecycle, socket/contexts, systemd user services, image storage and cgroup delegation |
+
+**Important security correction:** "Daemonless" does **not** imply a stronger security boundary if an authenticated container can call `podman system service`. Podman's API gives full control as the Podman API user; Docker's rootless socket similarly gives powerful authority in that engine's scope. Neither API is exposed to ChatGPT, MCP, Controller, model code/test or arbitrary job payloads. The executor must translate narrowly typed authenticated jobs into fixed, independently reviewed engine operations.
+
+**Additional candidate, not silently approved — B3:** a dedicated **trusted Linux-host Executor process running Rootless Podman CLI as a restricted service account**, called from the containerized Controller over authenticated narrow local IPC. This avoids needing to mount a broad Podman API socket *into another container*, but trades some Compose-only packaging simplicity for a smaller engine API surface. Treat B3 as an architecture deviation that requires explicit Owner acceptance after probe; it is not an automatic fallback or a claim that rootless execution has been validated.
+
+### Required Codex evidence before selection
+
+The separate task `CL-12.5-P1` runs *only on a disposable isolated environment* with read-only host preflight, no live DB/Container/Compose/credentials and no changes to the user's default Docker context. It must report PASS/FAIL/BLOCKED/NOT RUN for real rootless execution, userns/subids, cgroup resource enforcement, seccomp, read-only/cap-drop/no-new-privileges, tmpfs, stage mounts/host path ownership, denied network/secret access, malicious job arguments, source path escapes, kill/reap/crash and replay/idempotency. Both Windows dev and Linux target matter, but **Linux evidence is mandatory before deployment selection**. No privileged DinD, generic engine socket mounts, rootful fallback or unapproved installation is permitted.
+
+The report must identify which existing Docker runtime flags and security policies translate correctly to Podman, what requires code refactoring, and whether B2 or B3 can be safely called by the typed Executor. If rootless implementations cannot be tested without installing tooling or creating a VM, Codex reports the blocker and requests specific Owner approval; it must not fabricate PASS or touch existing live containers.
+
+**Documentation-backed observations, not test results:**
+- Podman service authority/security: https://docs.podman.io/en/latest/markdown/podman-system-service.1.html
+- Podman rootless and container flags: https://docs.podman.io/en/latest/markdown/podman-run.1.html
+- Podman Windows machine: https://podman.io/docs/installation
+- Docker rootless mode: https://docs.docker.com/engine/security/rootless/
+- Docker rootless cgroups/privileged DinD notes: https://docs.docker.com/engine/security/rootless/tips/
+
+**Updated gate:** Do not approve/merge PR #11 as a *final runtime selection* until probe outcome and the Owner's explicit engine/Executor boundary decision are incorporated. PR #12 (deployment) and #13 (consolidated ADR) must be reconciled to that decision before final acceptance; both currently remain Draft. No implementation or production migration has been authorized.
