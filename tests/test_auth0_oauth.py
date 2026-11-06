@@ -15,6 +15,7 @@ def auth_config(monkeypatch):
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
+    monkeypatch.delenv("WFC_OAUTH_EXPECTED_CLIENT_ID", raising=False)
     monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "https://chatgpt.com/oauth/client.json")
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
     return load_auth0_config("test.example.org")
@@ -255,3 +256,35 @@ def test_client_mismatch_distinguishes_expected_cimd_url_safely(
     messages = [r.message for r in caplog.records]
     assert any("code=client_mismatch_cimd_url" in msg for msg in messages)
     assert all("https://chatgpt.com/oauth/client.json" not in msg for msg in messages)
+
+
+def test_expected_client_id_new_key_takes_effect(monkeypatch, auth_config):
+    # The preferred key has the same strict validated identity semantics.
+    monkeypatch.delenv("WFC_AUTH0_CLIENT_ID", raising=False)
+    monkeypatch.setenv(
+        "WFC_OAUTH_EXPECTED_CLIENT_ID", "https://chatgpt.com/oauth/client.json"
+    )
+    assert load_auth0_config("test.example.org").client_id == auth_config.client_id
+
+
+def test_legacy_client_id_env_remains_compatible(monkeypatch, auth_config):
+    monkeypatch.delenv("WFC_OAUTH_EXPECTED_CLIENT_ID", raising=False)
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", auth_config.client_id)
+    assert load_auth0_config("test.example.org").client_id == auth_config.client_id
+
+
+def test_client_id_env_conflicts_fail_closed(monkeypatch, auth_config):
+    monkeypatch.setenv(
+        "WFC_OAUTH_EXPECTED_CLIENT_ID", "https://chatgpt.com/oauth/client.json"
+    )
+    monkeypatch.setenv(
+        "WFC_AUTH0_CLIENT_ID", "tpc_2cEspQ3q4E2X6saM9oKUE4"
+    )
+    with pytest.raises(ValueError, match="conflicting"):
+        load_auth0_config("test.example.org")
+
+
+def test_both_client_id_keys_equal_allowed(monkeypatch, auth_config):
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", auth_config.client_id)
+    monkeypatch.setenv("WFC_OAUTH_EXPECTED_CLIENT_ID", auth_config.client_id)
+    assert load_auth0_config("test.example.org").client_id == auth_config.client_id
