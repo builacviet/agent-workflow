@@ -1,3 +1,5 @@
+> Current Phase 3.1 architecture supersedes remote verification/gh setup below: WFC is local-only, worker owns GitHub, Tech Lead verifies via plugin. See [current runbook](phase-3.1.md) and review-policy.md. Earlier sections retain historical POC context.
+
 # Containerize MCP + ngrok — isolated Tech Lead POC
 
 Scope: **MCP Server + SQLite Docker volume + optional ngrok tunnel** in `techlead-review-poc`.

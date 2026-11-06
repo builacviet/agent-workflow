@@ -1,0 +1,44 @@
+# PHASE-3.1 — isolated GitHub App coder controller
+
+Owner authorization: current user request on 2026-11-04 authorizes this exception to the prior no-dispatch boundary. TASK-001 remains unauthorized and ESCALATED. Repository: builacviet/techlead-review-poc. Branch: codex/phase-3.1. Base: c5e0574ab793e5322f943a57206daf4d4efbea04. Requested review effort: high; actual model/effort unverified. Independent Tech Lead review pending, maximum two rounds; no merge.
+
+## Acceptance criteria
+
+- AC1: configured positive App/installation IDs, ignored .secret PEM, RS256 JWT, repository-scoped short-lived installation token, renewal and sanitized failures. Verify expected App slug and installation repository. Resolve the bot numeric ID from GitHub for commit email; App token creates draft PRs. Never claim operator-created work was bot-created.
+- AC2: independent pinned Codex CLI image; non-root, read-only root, dropped capabilities, no Docker socket, no v2 images/data/auth volumes. Runtime receives a tracked-file snapshot, task context and its own OpenAI credential, never GitHub credentials, SQLite or PEM. Tests execute in a separate credential-free network-disabled container.
+- AC3: poll authorized SQLite every 60 seconds, concurrency one across processes using BEGIN IMMEDIATE and a unique active slot. Dispatch only explicitly configured tasks/worktrees with AWAITING_HANDOFF or CHANGES_REQUESTED and fewer than two completed rounds. Durable idempotency key covers task, completed round and input SHA.
+- AC4: persist container name before launch. Timeout/error/crash keeps the global slot blocked until an operator confirms containers have stopped and reconciles Git/PR/handoff. Never automatically retry an uncertain execution or expire a lease into a second coder. No review round consumed by operational failures.
+- AC5: exact repo, branch, canonical worktree, clean tree, local input SHA, remote branch head and base ancestry checks before dispatch and publication. Reject symlinks, secret paths and writes outside operator-configured paths. Ordinary push only; no force/merge. Recheck remote new head before workflow handoff.
+- AC6: successful execution runs python -m pytest -q, records actual evidence, bot commit/push, idempotent draft PR lookup and authenticated-service-equivalent local handoff. Review state/policies remain owned by WorkflowService, no coder verdicts. Preserve existing MCP authentication.
+- AC7: deterministic negative/concurrency/crash/idempotency tests, complete-suite evidence, operator runbook and draft PR with exact SHA; disclose live checks not performed. No v2 operation, OAuth, dashboard, Notion or third review.
+
+## Design / test plan
+
+Trusted host-side Controller owns SQLite, Docker CLI, Git metadata and GitHub App. Codex receives only a disposable tracked-source snapshot. Controller never runs task code on host; tests run separately without credentials. A durable dispatch row acts as a non-expiring safety lease with a runtime deadline; heartbeat expiry is diagnostic, never permission to launch again. Crashes require explicit operator reconciliation (safety over automatic liveness). Existing schema version and review tables remain compatible; controller adds one independent table. Configuration is local, operator-controlled JSON, never supplied by the model. It explicitly selects task IDs, canonical dedicated worktrees, write prefixes and credential paths. Existing task authorization is still mandatory. Runtime model is operator-configured, not silently selected.
+
+Unit tests inject clocks, GitHub transport/signing and runtime callbacks. Real Docker build/version/synthetic filesystem smoke are attempted when available; real App and model calls require separately provisioned secrets. Definition of done: tests, focused source/docs, commit/push, draft PR and exact-SHA handoff; approval is not part of coder completion.
+
+
+## Review follow-up F1/F2
+
+Input SHA: 1123267f7988e6f34202fc0a65fe2bb1548ba216. The review at https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5772173953 is a COMMENT with recommended CHANGES_REQUESTED, not a persisted formal Tech Lead verdict. Owner authorized correcting F1 (AC3/AC7) and F2 (AC4). Fix scope: allow the documented independent shared-DB filename while retaining canonical v2-directory rejection; extend the existing deadline through trusted Git/GitHub/SQLite publication and completion, retaining blocked reconciliation and post-expiry cleanup. Add deterministic config/clock/transport regressions and rerun complete suite/Docker. Acceptance criteria and the maximum-two-formal-round policy are unchanged; Codex records no verdict or approval. Awaiting independent review of the new exact SHA.
+
+
+## Owner-authorized residual F2 correction (2026-11-05)
+
+Input SHA: 4445f642e17289a9b6e428230c9930a7935b495a. Follow-up review COMMENT: https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5772386749. F1 is reported addressed; residual F2 is AC4's total HTTP deadline: a per-blocking-operation socket timeout does not bound delayed headers/trickling response bodies. Owner explicitly requested this further fix. Scope: isolate each trusted HTTP operation in a killable, bounded request process, preserve private credential handling/fixed origin/no redirects and uncertain-effect reconciliation, add real loopback slow-response regressions and rerun suite/Docker. No formal round counter is reset/incremented or third review authorized by Codex; any formal verdict/escalation remains the Tech Lead's decision under the unchanged two-round policy.
+
+
+## Owner-authorized architecture revision (2026-11-05, requested effort high)
+
+Supersedes conflicting original AC1/2/5/6 and prior remote-verification policy. WFC and Controller must perform no Git/GitHub operations or hold App authentication code. WFC trusts authenticated submissions, validates task/branch/base/head/claim/round against SQLite, records reporter-supplied evidence, and explicitly reports remote approval freshness as unknown. Tech Lead owns remote SHA/ancestry checks through GitHub plugin before verdict/merge. Independent coder_worker package owns App credentials, clone/fetch, commit, ordinary push and draft PR. Controller only leases, runs bounded Docker phases, tests without credentials and imports the worker result into SQLite. Prepare/publish worker phases get App PEM; code phase gets only model credential; test phase gets neither. Worker source snapshot is isolated from Git metadata and result files. Tests must prove WFC works without network/subprocess, worker bot Git push/PR behavior, allowlist/timeout/reconciliation and two-round invariants. No v2, OAuth, Notion, merge or self-approval. Live App/model test remains operator-gated. No formal review counters are reset. Revision base: 8e25e3eb4858a4cf9519192dc51477f76d61fabf.
+
+
+## Owner-authorized three-P2 correction
+
+Revision base: 79e7bec2217dad106b2e4ba74f0117a028d95cea. Review COMMENT: https://github.com/builacviet/techlead-review-poc/pull/5#pullrequestreview-5778369862. Owner requested narrow fixes only: valid standalone compose YAML; explicit staging and index-content verification including ignored additions/handoff; unambiguous length-framed source digest. Add regressions for compose parsing without starting services, real local bare-Git publication of ignored files, and the prior filename/content concatenation collision. Architecture, DB schema/repository boundary, two-round policy, no-merge/no-v2 restrictions remain unchanged. Requested effort high; execution model/effort unverified; no formal verdict/round assigned by Coder.
+
+
+## Owner-authorized device-login integration
+
+Base: 889c89dad4098c1789c42737f9dfac6e56fea4fd. Owner requested replacing API-key model authentication with the completed ChatGPT device login. Code phase alone mounts RW named volume techlead-review-poc_codex_auth at CODEX_HOME=/home/coder/.codex; validate the explicit volume name/existence, remove API-key env/file dependence, fail closed without auth.json, preserve CLI token refresh. Never mount this volume into test/prepare/publish/MCP or read/copy v2 auth. Keep credentials outside Git/logs. Add mount/config/entrypoint regressions, run full suite/Docker, update worker image/PR; no model job, GitHub live operation, merge or verdict authorized by this step. Requested effort high; actual model/effort unverified.

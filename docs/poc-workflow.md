@@ -1,3 +1,5 @@
+> Current Phase 3.1 architecture supersedes remote verification/gh setup below: WFC is local-only, worker owns GitHub, Tech Lead verifies via plugin. See [current runbook](phase-3.1.md) and review-policy.md. Earlier sections retain historical POC context.
+
 # AI-Assisted Development Workflow — POC Operating Contract
 
 > Status: **Proposed for owner review**. This document describes how ChatGPT Tech Lead, Codex CLI, GitHub, and `my_wfc` should cooperate. It does **not** enable an automated scheduler, Codex dispatch, OAuth, or a Workflow Console integration.
