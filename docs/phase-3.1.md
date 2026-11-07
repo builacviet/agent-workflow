@@ -1,6 +1,6 @@
 # Phase 3.1: worker owns GitHub, WFC owns workflow state
 
-Current owner-authorized architecture: 2026-11-05. Requested effort high; actual model/effort unverified. This replaces prior Controller-push/MCP-remote-verifier instructions. PR remains draft; no activation/merge implied.
+CURRENT source/runbook architecture: approved 2026-11-05 and merged as [Phase 3.1 PR #5](https://github.com/builacviet/techlead-review-poc/pull/5), squash `e09a054e96d56cec1e24590e959bff3ec1a990e3`. Requested effort high; actual model/effort unverified. This replaces older Controller-push/MCP-remote-verifier instructions. **Merge is not evidence a deployment is live or production-approved**; operator activation and actual environment remain separate checks.
 
 ## Responsibilities
 
