@@ -1,4 +1,4 @@
-# PHASE-3.1 — isolated GitHub App coder controller
+# PHASE-3.1 — isolated GitHub App coder controller\n\n> **HISTORICAL task/AC ledger.** Original 2026-11-04 ACs/design and the original `Controller owns GitHub App` paragraph below were **superseded by the 2026-11-05 Owner-authorized architecture revision** in this same file. Phase 3.1 [PR #5](https://github.com/builacviet/techlead-review-poc/pull/5) was subsequently merged as `e09a054e96d56cec1e24590e959bff3ec1a990e3`. For **CURRENT** responsibilities and run commands use [the Phase 3.1 runbook](../phase-3.1.md); for timeout/unknown-publish investigation use [the source/test recovery guide](../guides/dispatch-recovery.md). This dated task remains acceptance history, not a new activation/merge instruction.
 
 Owner authorization: current user request on 2026-11-04 authorizes this exception to the prior no-dispatch boundary. TASK-001 remains unauthorized and ESCALATED. Repository: builacviet/techlead-review-poc. Branch: codex/phase-3.1. Base: c5e0574ab793e5322f943a57206daf4d4efbea04. Requested review effort: high; actual model/effort unverified. Independent Tech Lead review pending, maximum two rounds; no merge.
 
@@ -12,7 +12,7 @@ Owner authorization: current user request on 2026-11-04 authorizes this exceptio
 - AC6: successful execution runs python -m pytest -q, records actual evidence, bot commit/push, idempotent draft PR lookup and authenticated-service-equivalent local handoff. Review state/policies remain owned by WorkflowService, no coder verdicts. Preserve existing MCP authentication.
 - AC7: deterministic negative/concurrency/crash/idempotency tests, complete-suite evidence, operator runbook and draft PR with exact SHA; disclose live checks not performed. No v2 operation, OAuth, dashboard, Notion or third review.
 
-## Design / test plan
+## Design / test plan (original proposal — superseded where conflicting with later Owner revision)
 
 Trusted host-side Controller owns SQLite, Docker CLI, Git metadata and GitHub App. Codex receives only a disposable tracked-source snapshot. Controller never runs task code on host; tests run separately without credentials. A durable dispatch row acts as a non-expiring safety lease with a runtime deadline; heartbeat expiry is diagnostic, never permission to launch again. Crashes require explicit operator reconciliation (safety over automatic liveness). Existing schema version and review tables remain compatible; controller adds one independent table. Configuration is local, operator-controlled JSON, never supplied by the model. It explicitly selects task IDs, canonical dedicated worktrees, write prefixes and credential paths. Existing task authorization is still mandatory. Runtime model is operator-configured, not silently selected.
 
