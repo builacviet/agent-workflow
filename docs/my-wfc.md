@@ -1,4 +1,4 @@
-> Current Phase 3.1 architecture supersedes remote verification/gh setup below: WFC is local-only, worker owns GitHub, Tech Lead verifies via plugin. See [current runbook](phase-3.1.md) and review-policy.md. Earlier sections retain historical POC context.
+> **HISTORICAL / PARTIALLY SUPERSEDED (Phase 2.2-era WFC guide).** For **CURRENT Phase 3.1** roles, dispatch, GitHub verification and recovery, use [Phase 3.1 runbook](phase-3.1.md) and the [source/test-oriented recovery map](guides/dispatch-recovery.md) first. This file preserves older WFC API/schema and migration notes; its `gh` remote verification, future-safe-controller, Bearer-vs-OAuth and deployment claims are *dated historical descriptions*, **not** instructions to enable/modify today's services. Verify each claim against current source and active operator configuration. The original historical sections below are retained as evidence.
 
 # my_wfc consolidated operator guide
 
@@ -10,7 +10,7 @@ This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI 
 - src/my_wfc/contracts.py: strict task, finding and submission schemas.
 - src/my_wfc/service.py: SQLite transactions, leases, authorization metadata checks, two-round transitions, context/history and results.
 - src/my_wfc/schema.sql: schema version 1; standard-library sqlite3; foreign keys and uniqueness constraints.
-- src/my_wfc/github.py: trusted read-only gh API branch-head and base-ancestor verification; timeouts and sanitized errors.
+- src/my_wfc/github.py: **historical pre-Phase-3.1 responsibility** for remote verification; the current WorkflowService is local-only, and Tech Lead verifies GitHub via plugin. Existing file presence does not authorize WFC network calls.
 - src/my_wfc/security.py: constant-time Bearer-header validation and configured operator identity.
 - src/my_wfc/tools.py: authenticated MCP adapter, injected SDK request context, lazy service initialization.
 - src/my_wfc/admin.py: local-only task authorization, historical import, disposable seed/reset. No remote provision/reset tools.
@@ -59,7 +59,7 @@ Local operator authorization creates AWAITING_HANDOFF. Verified handoff makes RE
 
 Expired claims recover to READY_IN_REVIEW without spending a round; queue polling and claiming recover them. Active duplicate claims fail. An expired/stale/invalid claim cannot submit. A valid review, findings, completed-round count, attempt status and event are committed together under BEGIN IMMEDIATE. Failures roll back. Operational GitHub/effort/storage failures do not create failed reviews or consume rounds. Failures due solely to missing effort evidence cannot be disguised as code findings.
 
-GitHub verifies the authorized branch equals the exact full SHA and base is its ancestor at handoff, claim and immediately before review writes. Fail closed on missing gh auth, timeout or mismatched head. An APPROVED historical status is not a perpetual merge permission: get_review_result rechecks remote and returns approval_current=false if moved/unverifiable. There is no atomic lock spanning GitHub and SQLite; a branch can move just after verification. Always revalidate before any future authorized merge. Never merge based solely on status. Pending handoffs cannot silently switch SHA; movement outside the prescribed correction cycle needs operator intervention.
+**Historical pre-Phase-3.1 semantics (not CURRENT):** GitHub verifies the authorized branch equals the exact full SHA and base is its ancestor at handoff, claim and immediately before review writes. Fail closed on missing gh auth, timeout or mismatched head. An APPROVED historical status is not a perpetual merge permission: get_review_result rechecks remote and returns approval_current=false if moved/unverifiable. There is no atomic lock spanning GitHub and SQLite; a branch can move just after verification. Always revalidate before any future authorized merge. Never merge based solely on status. Pending handoffs cannot silently switch SHA; movement outside the prescribed correction cycle needs operator intervention.
 
 ## Security and effort
 
@@ -162,7 +162,7 @@ Local authorization of a future task is `python -m my_wfc.admin provision --file
 
 ## Remaining limits / Phase 3 points
 
-Single-host SQLite and bounded synchronous gh reads serialize writes; no high-throughput claim. Token rotation/role-based authorization/OAuth, independently trusted effort attestation, safe controller dispatch, scheduler routing, notifications and UI are future integration points. No automatic merge, restart of external tunnel, production deployment or TASK-001 application changes were performed. Default workflow access is intentionally disabled pending protected client configuration. A round-2 failure is final automatic escalation; further work needs Tech Lead/human authorization.
+**Historical roadmap, superseded where Phase 3.1 and later Auth0 changes apply:** Single-host SQLite and bounded synchronous gh reads serialize writes; no high-throughput claim. Token rotation/role-based authorization/OAuth, independently trusted effort attestation, safe controller dispatch, scheduler routing, notifications and UI were future integration points at the date this section was written. Consult current source, [Phase 3.1 runbook](phase-3.1.md) and [Auth0 runbook](auth0-oauth.md) before using any of these claims. No automatic merge, restart of external tunnel, production deployment or TASK-001 application changes were performed. Default workflow access is intentionally disabled pending protected client configuration. A round-2 failure is final automatic escalation; further work needs Tech Lead/human authorization.
 
 SDK reference: https://github.com/modelcontextprotocol/python-sdk/tree/v1.30.0 (implementation was checked against the locally installed 1.30.0 API).
 
