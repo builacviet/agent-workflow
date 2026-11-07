@@ -34,3 +34,18 @@ Improve a *fresh agent's* ability to distinguish what CURRENT code actually does
 **Independent review:** Fresh review must check seven Claude findings against source/test evidence at exact PR HEAD; maximum two rounds. Owner alone may merge. Any code hardening of dispatch ownership, metadata, reconciliation audit, PR idempotency and fault injection is separately scoped after onboarding sign-off.
 
 **Baseline metrics (Claude, not directly comparable to Codex):** 22 distinct files opened, 24 file reads, 0 redundant reads; approximately 2,680 lines returned/exposed across tool families; 54 total tool calls, including access/setup/task bookkeeping; actual token telemetry **UNAVAILABLE**. Do not claim specific token savings from these figures.
+
+## Independent Codex review round 1/2 — REQUEST_CHANGES
+
+Reviewed PR #17 at exact HEAD `ff04694c9f30ee34934af4771331108320d8a793`, base `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`; confirmed seven Markdown files and links. Verdict **REQUEST_CHANGES**: F2/F7 FIXED; F1/F3/F4/F5/F6 PARTIAL, plus four new documentation findings. This review did **not** run tests, Docker or production operations, and did **not** constitute independent approval.
+
+Corrections in the same PR branch for round 2/2:
+
+- **F1 / cleanup:** A valid exact-SHA `HANDOFF` event may have progressed beyond `READY_IN_REVIEW` into `IN_REVIEW` or later review/history while the dispatch slot remains held. Final `stop()` may fail after handoff but before `finish()`; this is not necessarily a handoff/finish-transaction failure. Require separate review-history and engine checks.
+- **F3:** Distinguish unit/mock cleanup tests, the real-Docker *synthetic* `tests/live_phase31_smoke.py`, and the historical Coder-reported smoke pass. **No rerun at DOC-03 HEAD;** smoke does not prove container ownership, late create exclusion or specific self-timeout execution.
+- **F4:** Matrix now includes `WFC_RUNTIME_SECONDS` self-timeout returning 124 through the entrypoint and generic phase-failure handling; Publish remote outcomes remain uncertain.
+- **F5:** Clarify the Codex Code stage cannot commit/push, while trusted Worker Publish owns Git operations; manual authorized Coder workflows are distinct.
+- **F6:** GitHub merge status of design ADRs does not, by itself, prove independent exact-SHA review records. Separate Owner task authorization **precedes coding**, mandatory synthetic negative tests happen **during implementation**, and evidence review/security gates precede acceptance/deployment.
+- **Additional findings:** Correct CURRENT Auth0 opt-in vs default legacy Bearer and mode-dependent ping/info access; correct DOC-02 baseline terminology in recovery guide; cover final cleanup errors and distinguish engine failure from ledger transaction failure.
+
+**Round 2 review required at the new exact PR HEAD.** The old Codex verdict does not apply automatically to later commits. Do not infer tested runtime behavior or measured token savings from these documentation edits. Owner alone may merge.
