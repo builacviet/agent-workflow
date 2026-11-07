@@ -25,7 +25,8 @@
 | --- | --- |
 | Small `order_service` logic | [CURRENT architecture](architecture.md), relevant `src/order_service/` module and adjacent tests; review policy only for submission |
 | Existing WFC/MCP/Controller bug or operation | Start at the [CURRENT Phase 3.1 runbook](phase-3.1.md) and only the affected source/tests; [my-wfc.md](my-wfc.md) contains **historical pre-Phase-3.1 assumptions** and is reference-only for older WFC behavior |
-| **Controller timeout, Worker disconnect, uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |\n| Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
+| **Controller timeout, Worker disconnect, uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |
+| Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
 | SQLite/schema/migration | [CL-12 persistence ADR](adr/CL-12-persistence.md), [consolidated ADR](adr/CL-12-architecture.md) relevant sections, live source/tests; do not infer migration is deployed |
 | Executor / worker security / Podman | [CL-12 consolidated ADR](adr/CL-12-architecture.md), [Executor security](adr/CL-12-executor-security.md), [deployment](adr/CL-12-deployment.md), applicable approved task and negative-test plan |
 | CI images / GHCR / telemetry | [Deployment ADR §§9–10](adr/CL-12-deployment.md), [consolidated ADR](adr/CL-12-architecture.md); future implementation requires explicit authorization |
