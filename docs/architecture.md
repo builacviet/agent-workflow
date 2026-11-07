@@ -1,4 +1,6 @@
-# Architecture
+# Architecture — CURRENT code and Phase 3.1 baseline
+
+> **Scope:** This document describes the existing source/package and Phase 3.1 POC behavior; a particular running deployment requires separate verification. The **Owner-selected TARGET design** is in [CL-12 consolidated ADR](adr/CL-12-architecture.md) with [security](adr/CL-12-executor-security.md) and [deployment](adr/CL-12-deployment.md) details. Rootless Podman/Linux-host Executor, four isolated stage containers, GHCR and Grafana are **not claimed implemented here**. Read the [agent documentation map](INDEX.md) to select only task-relevant sections.
 
 `models.py` contains frozen `OrderItem` and `Order` values with validation and computed `Decimal` totals. `service.py` owns a per-instance dictionary, creates validated orders with sequential string IDs and looks them up. `__init__.py` exports the public API. Tests depend only on that API and pytest.
 
