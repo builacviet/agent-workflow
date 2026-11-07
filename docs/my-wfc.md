@@ -61,7 +61,9 @@ Expired claims recover to READY_IN_REVIEW without spending a round; queue pollin
 
 **Historical pre-Phase-3.1 semantics (not CURRENT):** GitHub verifies the authorized branch equals the exact full SHA and base is its ancestor at handoff, claim and immediately before review writes. Fail closed on missing gh auth, timeout or mismatched head. An APPROVED historical status is not a perpetual merge permission: get_review_result rechecks remote and returns approval_current=false if moved/unverifiable. There is no atomic lock spanning GitHub and SQLite; a branch can move just after verification. Always revalidate before any future authorized merge. Never merge based solely on status. Pending handoffs cannot silently switch SHA; movement outside the prescribed correction cycle needs operator intervention.
 
-## Security and effort
+## Security and effort (historical authentication assumptions)
+
+> **HISTORICAL POC snapshot:** The following Bearer/gh and future-OAuth statements reflect older configurations. For today's applicable authentication and operator procedure read [Auth0 OAuth runbook](auth0-oauth.md), [CURRENT Phase 3.1 runbook](phase-3.1.md) and verified deployment settings. This section **does not authorize disabling authentication** or exposing the MCP endpoint.
 
 Public-safe tools are ONLY ping() and get_server_info(). All seven workflow tools require an Authorization: Bearer header, with a minimum-32-character WFC_AUTH_TOKEN configured on the server and matching client transport configuration. WFC_REVIEWER_ID is a server-configured actor label; do not treat it as independent proof of a human identity. Configure an operator-controlled dedicated credential for the Tech Lead client; protect it like write access. Multi-user roles/OAuth are future work.
 
@@ -69,7 +71,9 @@ No auth token is an LLM tool argument. Missing/short token, absent reviewer labe
 
 The runtime has NO trusted reasoning-effort attestation provider. Client actual_effort/evidence never establishes verification. Stored actual_effort is null and verification_evidence is unverified unless a trusted server-side adapter independently verifies it. Verified High tasks cannot automatically approve in the default runtime; rejection leaves round count unchanged. Requested effort remains metadata/filtering. A future attestation adapter is an explicit integration point, not a model switch. Supported effort registry is injectable; no model versions are hardcoded.
 
-## Temporary unauthenticated POC test (UNSAFE; explicit opt-in)
+## Temporary unauthenticated POC test (HISTORICAL / UNSAFE — do not use as CURRENT setup)
+
+> **Historical fixture-only bypass recipe, not a CURRENT recommended or authorized procedure.** Do not start a tunnel, set `WFC_POC_NO_AUTH`, seed data, or remove authorization based on this archived section. Consult the currently approved authentication runbook and obtain separate explicit Owner permission for any isolated experiment; retain the original instructions below as a dated record.
 
 **Not a production configuration and not OAuth.** To exercise the seven protected MCP
 tools from a ChatGPT development plugin that does not send static Bearer credentials,
@@ -118,7 +122,9 @@ Remove-Item Env:WFC_DB_PATH -ErrorAction SilentlyContinue
 This mode is intentionally insecure: it is a temporary validation aid rather than
 a replacement for OAuth, Bearer authentication or a restricted development gateway.
 
-## Start / restart / reconnect
+## Start / restart / reconnect (historical Phase 2.2 commands)
+
+> **Historical startup procedure — not CURRENT Phase 3.1 production or deployment guidance.** The commands below may install dependencies, seed fixtures, or start a service. Do not run them from an agent onboarding/review task. See [Phase 3.1 runbook](phase-3.1.md) and [Auth0 OAuth runbook](auth0-oauth.md) for relevant current procedures, subject to explicit operator permission and verified configuration.
 
 From the consolidated repository root:
 
@@ -135,7 +141,9 @@ For authenticated workflow use, first configure WFC_AUTH_TOKEN and WFC_REVIEWER_
 
 Stop only the local server process started for this project, restart the same command, and reconnect/reinitialize the MCP client. If the tunnel is still running it continues pointing to the same local port. This phase does not restart/create a tunnel or change its public hostname. Quick Tunnel hostname changes require an operator-reviewed host allowlist update and client reconnect. Refresh/reconnect the plugin tool schema after server update; end-to-end ChatGPT connector reconnect is a manual integration step, not claimed by loopback tests.
 
-## Safe manual Tech Lead POC
+## Safe manual Tech Lead POC (historical synthetic workflow)
+
+> **HISTORICAL / DO NOT EXECUTE BY DEFAULT:** Earlier synthetic review instructions including `gh` do not constitute current WFC remote-verification behavior or authorization for real task mutations. Use the [CURRENT Phase 3.1 runbook](phase-3.1.md) for actor responsibilities and GitHub verification gates.
 
 1. Confirm local ping and server_info. With no configured credentials, confirm claim/submit/handoff fail. Configure authenticated client transport before testing workflow tools.
 2. Call list_review_queue('medium'): expect POC-REVIEW-001, marked synthetic in full context. TASK-001 must never appear. This fixture references the real baseline commit through the dedicated poc/review-baseline branch, verified by gh at seed time; it makes no claim that seed executed tests.
