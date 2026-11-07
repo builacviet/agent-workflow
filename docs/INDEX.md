@@ -1,6 +1,6 @@
 # Documentation map — agent fast start
 
-**Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled: 2026-11-07 (after CL-12.7 PR #13 merge).
+**Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled for merged baseline: 2026-11-07, after DOC-02 [PR #16](https://github.com/builacviet/techlead-review-poc/pull/16) (merge `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`). Later documentation proposals are not assumed merged.
 
 ## First read — every agent
 
@@ -25,7 +25,7 @@
 | --- | --- |
 | Small `order_service` logic | [CURRENT architecture](architecture.md), relevant `src/order_service/` module and adjacent tests; review policy only for submission |
 | Existing WFC/MCP/Controller bug or operation | Start at the [CURRENT Phase 3.1 runbook](phase-3.1.md) and only the affected source/tests; [my-wfc.md](my-wfc.md) contains **historical pre-Phase-3.1 assumptions** and is reference-only for older WFC behavior |
-| **Controller timeout, Worker disconnect, uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |
+| **Controller timeout / Docker CLI disconnect / uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |
 | Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
 | SQLite/schema/migration | [CL-12 persistence ADR](adr/CL-12-persistence.md), [consolidated ADR](adr/CL-12-architecture.md) relevant sections, live source/tests; do not infer migration is deployed |
 | Executor / worker security / Podman | [CL-12 consolidated ADR](adr/CL-12-architecture.md), [Executor security](adr/CL-12-executor-security.md), [deployment](adr/CL-12-deployment.md), applicable approved task and negative-test plan |
@@ -46,5 +46,5 @@
 - Read **headings/index/required section first**, expand only referenced paragraphs; prefer file/symbol searches and bounded diffs over entire history logs. **Search the Git tree/path list first** when symbol search is missing or non-indexed; use exact file paths from this index, not speculative filenames. For GitHub `fetch_file`, request bounded `start_line/end_line` for known symbols; distinguish lines returned by a tool from lines actually placed in context. Avoid re-fetching full files just to count them.
 - A task is not understood until its **AC, current call path, trust boundary, affected tests and forbidden scope** are identified; do not sacrifice correctness for a token quota.
 - Distinguish **observed by tests**, **reported by another agent**, **Owner-selected design**, and **unverified/proposed**. Link claims to file, commit or dated evidence; never claim a design is deployed.
-- If this index and a merged ADR conflict, the **merged ADR governs target design**, while current source/tests and confirmed deployment evidence govern current behavior. **Known dated text:** `docs/adr/CL-12-executor-security.md` §8 still describes PR #12/#13 as Draft because it was authored before their merges; follow [CL-12 consolidated ADR](adr/CL-12-architecture.md) for verified PR status. The historical security ADR detail remains relevant for threat boundaries, but the old PR-status paragraph is not CURRENT. Escalate true contradictions; do not silently pick a convenient version.
+- If this index and a merged ADR conflict, the **merged ADR governs target design**, while current source/tests and confirmed deployment evidence govern current behavior. **Status provenance:** the [Executor security ADR](adr/CL-12-executor-security.md) now distinguishes merged design documentation (PRs #11/#12/#13) from separate CL-12 parent sign-off, implementation approval and production gates. Escalate true contradictions; do not silently pick a convenient version.
 - Changes to an ADR or an agent entrypoint should update this index or explicitly state why not. Never compress away audit, permission or safety gates.
