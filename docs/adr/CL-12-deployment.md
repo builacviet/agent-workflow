@@ -1,6 +1,6 @@
 # CL-12.6 — Linux-portable deployment, workspaces and operations ADR
 
-Status: **Tech Lead-authored ADR draft aligned with Owner-approved CL-12.5 (merged PR #11) / no runtime deployment validation**. Date: 2026-11-06. Task: https://app.notion.com/p/410f92014abd81f09596f250c674f596
+Status: **Owner-merged architecture documentation** ([CL-12.6 PR #12](https://github.com/builacviet/techlead-review-poc/pull/12), squash `4d7aa10db7992a0735bf095771b258db4d9eb5e6`); B3 Podman is the selected **development design only**, with no runtime deployment/native Linux security validation or general production authorization. Originally drafted: 2026-11-06; merge verified 2026-11-07. Task: https://app.notion.com/p/410f92014abd81f09596f250c674f596
 
 The Owner requested that the Tech Lead draft CL-12.5–12.7 together, overriding their drafting schedule but **not** the review, merge, security or production gates. This file is a standalone documentation-only PR originally branched from main SHA 937d0ba2203bb4cff0a63ea5a6ac3bc094b5137e; CL-12.5 subsequently **merged** in [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11) as `e4ce254d24cd46d952ff5d814304c58fde3941b3`. It now targets its Owner-selected **B3 Rootless Podman CLI** development architecture (a dedicated unprivileged Linux-host Trusted Executor). No deployment, Compose edit, code change, volume operation or database access.
 
