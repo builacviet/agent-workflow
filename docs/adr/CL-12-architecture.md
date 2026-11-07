@@ -70,7 +70,7 @@ ChatGPT / authorized Owner
 | **ADR-07 Workspaces/stages** | Executor owns Linux-host-real workspace ID mapping, immutable source/result handoff, per-stage containers and minimum credentials | Prepare/publish GitHub App only, code model auth only, test none; no .git/PEM/DB/other-project access or world-writable staging |
 | **ADR-08 Operations/release** | **GHCR** versioned immutable OCI Worker image digest, pre-pull into Executor rootless Podman store and stage `--pull=never`; fail-closed BLOCKED recovery, deliberate startup and rollback; journald/metrics first, staged **Grafana + Prometheus + Loki + Alloy** | Source SHA ↔ image digest ↔ policy version recorded; no per-stage image pull, automatic retry after ambiguous publish, broad monitoring socket or production deployment without tests |
 
-**Selection status:** ADR-01–08 form a coherent **development design baseline** from accepted subtask ADRs. The Owner must still independently approve this exact consolidated PR/parent CL-12. Runtime implementation and production security sign-off are separate approvals.
+**Selection status:** ADR-01–08 form the Owner-merged **development design baseline** via [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13). The PR #13 review/merge gate is complete; **separate parent CL-12 final sign-off is not evidenced by that merge**. Runtime implementation, Executor security validation and production sign-off remain distinct, not granted by documentation approval.
 
 ## 4. Image release, monitoring, and stage lifecycle decisions
 
