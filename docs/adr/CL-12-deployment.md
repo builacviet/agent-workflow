@@ -70,7 +70,7 @@ Compose mechanisms such as healthcheck and depends_on conditions only address de
 
 Health and restart design: distinguish liveness, readiness and permission to dispatch. Running Controller != permission to dispatch a new job. Restart after a crash must discover any ACTIVE/BLOCKED jobs and their external effects; unknown jobs stay BLOCKED until operator reconciliation, never re-run merely because the container restarted.
 
-Use image digests/pinned dependencies, independent entrypoints and no hidden migrations in startup. Document Compose version tested, service-scoped host-port binds, capabilities, seccomp, read-only roots, tmpfs, logging, secret mounts, volume ownership and resource limits. Policies are build/runtime claims until validated on actual hosts.
+Use image digests/pinned dependencies, independent entrypoints and no hidden migrations in startup. **Owner-approved distribution design:** GHCR releases pinned by immutable manifest digest, pre-pulled into the Executor user's rootless Podman local store and launched per stage with `--pull=never`; see §9. Document Compose version tested, service-scoped host-port binds, capabilities, seccomp, read-only roots, tmpfs, logging, secret mounts, volume ownership and resource limits. Policies are build/runtime claims until validated on actual hosts.
 
 ## 4. Data volumes, filesystem and workspace provenance
 
@@ -121,10 +121,10 @@ Record concrete WSL2/native Linux environments, exact Podman/worker image/policy
 
 - **CL-12.5:** Owner-approved **B3 Rootless Podman development architecture** is merged on `main` (PR #11, squash `e4ce254d24cd46d952ff5d814304c58fde3941b3`); **actual Executor security gates and native Linux production approval are still outstanding**. P3 original REPORT/JSON are pending independent inspection; CL-02 permission issue includes `stage.chmod(0o777)`.
 - **CL-12.4 / CL-11:** explicit versioned SQLite migration runner/backup/restore; documented but not implemented.
-- **CL-12.7:** consolidate the already merged CL-12.5 ADR and this CL-12.6 deployment ADR only after this PR passes Owner review/merge; consolidated architecture remains Draft until then.
+- **CL-12.7:** consolidate the already merged CL-12.5 ADR and this CL-12.6 deployment ADR only after this PR passes Owner review/merge; consolidated architecture remains Draft until then. Carry forward the §9 GHCR image policy and §10 observability roadmap.
 - **Implementation sequencing:** CL-07 regression characterization -> CL-09 namespace-only -> independently authorized package/contract/DI extraction -> CL-11 migration -> CL-10 operational cutover -> remaining CL-01..04/CL-08 security and operations. Executor implementation has extra CL-12.5/12.6 security gates and no silent fallback. CL-05/CL-06 remain deferred.
 
-**Evidence:** Repo/Notion read-only inspection and official Compose/SQLite/Podman/Docker docs; CL-12.5 P2/P3 experiment results are taken from Codex's Owner-forwarded reports, not independently re-executed by this ADR author. No Compose execution, container build, pytest run, Windows/Linux portability proof, runtime inspection or backup occurred during authoring. Owner must independently review/approve this draft and any PR merge; no automatic next-task release.
+**Evidence:** Repo/Notion read-only inspection and official Compose/SQLite/Podman/Docker docs; CL-12.5 P2/P3 experiment results are taken from Codex's Owner-forwarded reports, not independently re-executed by this ADR author. GHCR and Grafana observability components in §9–10 are future architectural choices, not deployed or benchmarked. No Compose execution, container build, pytest run, Windows/Linux portability proof, runtime inspection or backup occurred during authoring. Owner must independently review/approve this draft and any PR merge; no automatic next-task release.
 
 ## 8. B3 host Executor + Rootless Podman deployment contract (development target only)
 
@@ -160,3 +160,50 @@ Record concrete WSL2/native Linux environments, exact Podman/worker image/policy
 ### 8.4 Separation from currently running POC
 
 Current Phase 3.1 Docker CLI/Compose, the Windows bind-mounted SQLite, existing GitHub App credentials, tunnel and separate Workflow Console v2 resources **remain untouched by this ADR**. A later Owner-authorized cutover must explicitly describe rollback, physical SQLite identity, migration ownership, stopped/reconciled jobs and config/version pinning. A host-installed Executor does not automatically acquire a valid local path to Docker Compose volumes; operators must supply approved mappings and verify them before activation. **No implementation, service installation, new mounts, Compose edit, or production deployment is authorized by this document.**
+
+
+## 9. Owner decision — GHCR image registry and fast version-pinned Worker startup (2026-11-07)
+
+**Decision:** Use **GitHub Container Registry (GHCR)** as the managed OCI image registry; **Rootless Podman's local per-user image store** on the dedicated Linux-host Executor is the runtime cache. A registry is for building/distributing/auditing approved images; **it is not contacted for every stage**. This design does not require operating a private registry server. The existing Docker Desktop POC is unchanged.
+
+**Release lifecycle**
+
+1. **CI build/test/publish:** Approved GitHub CI builds the Worker image once from an reviewed source commit, runs the defined test and vulnerability/security gates and publishes to GHCR. Associate release version (`v0.1.0` illustrative), full source SHA, build/run provenance, OCI manifest digest, CPU architecture, worker contract and immutable policy/seccomp digests. Define SBOM and attestation/signature verification at the release gate; do not claim these controls already exist.
+2. **Version semantics:** Human-friendly tags are discovery labels and may move. The release manifest and executor policy must store the **verified immutable sha256 manifest digest** (and platform); never execute by `latest` or by trusting a mutable tag. No invented digest, no arbitrary image URL or caller-controlled image flag.
+3. **Owner-controlled activation:** Only an approved digest and policy version becomes eligible for dispatch. A dedicated, narrowly scoped GHCR pull identity may fetch the approved package; registry credentials are **not mounted into Coder/Test/Prepare/Publish Workers** and are not supplied to Controller or generic IPC jobs.
+4. **Pre-pull and readiness:** Before accepting jobs, an approved operator/release step pulls the exact digest into the **Executor's unprivileged Podman UID storage**, verifies the local digest and architecture, and records release readiness. If image is absent, mismatched or cannot be verified, **fail closed**; never auto-fetch `latest` or silently switch engine/user context.
+5. **Cached stage execution:** `Prepare → Coder → Test → Publish` creates distinct short-lived containers from the same approved image digest cached locally, with `--pull=never` and stage-specific mounts/credentials/network policy. No build, push, registry pull, or deployment of long-lived stage services occurs on each transition. If stage-specific images are introduced, each requires separate approved digest/contract.
+6. **Rollback and GC:** Every job/audit entry records immutable image digest, policy version and source/release SHA. Existing jobs remain bound to their recorded digest. Keep previous approved digests cached for safe rollback until work is reconciled. Remove only authorized and unreferenced image layers after a reviewed retention/GC step; do not globally prune other Podman users' or projects' image stores.
+
+**Implementation tests:** digest/tag substitution and wrong architecture, unauthorized registry access, missing-cache `--pull=never` failure, image trust checks, cold and warm cache, pre-pull/rollback/GC, disk/inode exhaustion, cross-user store isolation and no image/registry credentials in Worker stages. Benchmark separate image distribution time versus cached container startup, stage artifact handoff, and Coder/Test durations (p50/p95). A provisional objective of **under 5% total job time** for stage transition overhead is subject to measurement; **do not trade away stage isolation to satisfy it**.
+
+## 10. Owner decision — Linux Executor observability and staged Grafana rollout (2026-11-07)
+
+**Decision:** Monitoring is required for the host Executor/ephemeral Workers, but deploying the full metrics/logging stack is **not** a prerequisite to the first safe POC. Start with **structured Executor logs to systemd-journald**, bounded health status, basic Prometheus-compatible metrics or a trusted read-only exporter, and a practical incident notification. During staging, adopt **Grafana dashboards**, **Prometheus** for time-series metrics, **Loki** for logs, and **Grafana Alloy** (or equivalently constrained collector) for host metrics/journal collection. These are future implementation choices, not running services.
+
+**Telemetry and least privilege**
+
+- Host health: systemd Executor uptime/restarts/readiness, CPU/RAM/disk/inodes, rootless storage usage, cgroup v2 delegation, resource headroom and capacity.
+- Job/stage health: RUNNING/BLOCKED/finished counts and ages, p50/p95 stage duration, startup/cleanup latency, OOM/timeout/PID failures, CPU/memory throttle, orphan count, rejected requests, image digest/cache status, GHCR pre-pull failures, and publish status/ambiguous external effects.
+- Logs: structured correlation IDs, job/stage state, release and policy digests and bounded sanitized errors. **Never log GitHub App tokens/PEM, Codex auth, OAuth data, raw source, secret environment or unrestricted workspace paths**; redact Worker stdout and sensitive exception data. Avoid unbounded high-cardinality job IDs in metric labels; keep searchable correlation in access-controlled logs instead.
+- Collectors read limited OS/systemd journald and Executor-exported metrics through protected read-only interfaces. **Never mount Podman/Docker socket into Grafana, Prometheus, Alloy, Loki, MCP or Controller solely for monitoring.** Avoid privileged collector, host PID namespace, unrestricted API, remote open metrics port. Protect ingestion/queries with scoped RBAC, TLS/auth where remote, retention and disk quotas; finalize supported versions and capacity in an approved implementation task.
+
+**Alerting and runbook**
+
+| Alert signal | Required response |
+| --- | --- |
+| Executor unready/down, repeated systemd restart or IPC inaccessible | Stop/hold dispatch, inspect service identity and rootless dependencies; no rootful fallback |
+| Old RUNNING or increasing BLOCKED jobs, orphan containers, failed cleanup | Quarantine affected dispatch; reconcile owned jobs and external GitHub effects before retry |
+| Repeated OOM, PID/CPU enforcement failures, timeouts, low disk/inodes | Investigate actual cgroup and policy/profile; change limits only with review |
+| Missing/untrusted image digest, GHCR pull failure, image-store capacity exhaustion | Fail closed; restore approved digest or roll back via explicit release gate |
+| Ambiguous publish result, auth/secret policy violations | Pause affected stage; preserve redacted audit trail; escalate for Owner action |
+
+Alerts initially can be local/operator-facing; optional Telegram integration requires a separately approved scoped token, destination and test. Grafana is **observability only**, never an engine command surface and never a substitute for durable Controller BLOCKED state. Confirm alert delivery, noise thresholds, RBAC, log retention and incident acknowledgement at staging/production gates; no fabricated SLA or threshold values.
+
+**Roadmap and acceptance**
+
+- **CL-12.6:** document GHCR/distribution/version/cache and minimum observability/security expectations only; no CI, registry, host or runtime changes.
+- **CL-12.7:** include these decisions in the consolidated ADR, without claiming deployment.
+- **Executor implementation (separate Owner authorization):** release-pinning/pre-pull and no-pull negative tests, structured journald logs/metrics, fail-closed release and worker reconciliation, image cache lifecycle and stage startup benchmarks.
+- **Staging:** implement/test GHCR CI and controlled release workflow; add Grafana + Prometheus + Loki + Alloy stack as warranted; verify telemetry access boundaries, dashboard/alerts, log redaction, resource limits and native Linux behavior.
+- **Production:** explicit Owner sign-off after secure operating model, incident drills, retention/cost and rollout/rollback prove acceptable.
