@@ -145,7 +145,8 @@ Every task follows branch/worktree + approved changed paths + tests/negative che
 
 - [x] CL-12.5 [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11) merged, conditional B3 Rootless Podman development decision recorded.
 - [x] CL-12.6 [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12) merged, Linux deployment + GHCR + monitoring design recorded.
-- [x] CL-12.7 [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) Owner-reviewed/merged at exact head `57965bef2de386cf42096a12a9f2d629cb4949b3` as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`.\n- [ ] Explicit **parent CL-12 final architecture sign-off**, if required by the project gate, is **not inferred from individual PR merges**.
+- [x] CL-12.7 [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) Owner-reviewed/merged at exact head `57965bef2de386cf42096a12a9f2d629cb4949b3` as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`.
+- [ ] Explicit **parent CL-12 final architecture sign-off**, if required by the project gate, is **not inferred from individual PR merges**.
 - [ ] P3 original REPORT/JSON independently inspected if P3 evidence is to be formally accepted; otherwise preserve clearly as reported, not verified.
 - [ ] New atomic implementation tasks, exact source/config allowlist and Owner approval granted separately before any Executor code, GHCR CI or Grafana installation.
 - [ ] Before production, native Linux parity, security negative tests, DB backup/restore, alert and crash-reconciliation evidence satisfy the gates above.
