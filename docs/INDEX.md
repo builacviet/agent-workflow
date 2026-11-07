@@ -24,8 +24,8 @@
 | Task / role | Start with, after the first-read trio |
 | --- | --- |
 | Small `order_service` logic | [CURRENT architecture](architecture.md), relevant `src/order_service/` module and adjacent tests; review policy only for submission |
-| Existing WFC/MCP/Controller bug or operation | [Current WFC behavior](my-wfc.md), [Phase 3.1 runbook](phase-3.1.md), source/entrypoints/tests, plus [review policy](review-policy.md) if submitting |
-| Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
+| Existing WFC/MCP/Controller bug or operation | Start at the [CURRENT Phase 3.1 runbook](phase-3.1.md) and only the affected source/tests; [my-wfc.md](my-wfc.md) contains **historical pre-Phase-3.1 assumptions** and is reference-only for older WFC behavior |
+| **Controller timeout, Worker disconnect, uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |\n| Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
 | SQLite/schema/migration | [CL-12 persistence ADR](adr/CL-12-persistence.md), [consolidated ADR](adr/CL-12-architecture.md) relevant sections, live source/tests; do not infer migration is deployed |
 | Executor / worker security / Podman | [CL-12 consolidated ADR](adr/CL-12-architecture.md), [Executor security](adr/CL-12-executor-security.md), [deployment](adr/CL-12-deployment.md), applicable approved task and negative-test plan |
 | CI images / GHCR / telemetry | [Deployment ADR §§9–10](adr/CL-12-deployment.md), [consolidated ADR](adr/CL-12-architecture.md); future implementation requires explicit authorization |
@@ -36,13 +36,13 @@
 ## Navigation by purpose
 
 - **Contracts:** [`AGENTS.md`](../AGENTS.md) → [review policy](review-policy.md) → [handoff template](templates/handoff.md) → relevant authorized task (for example, [CL-12](tasks/CL-12.md)).
-- **As-built:** [architecture](architecture.md) → [my-wfc](my-wfc.md) → [Phase 3.1](phase-3.1.md).
+- **As-built:** [architecture](architecture.md) → [Phase 3.1 CURRENT runbook](phase-3.1.md) → [scenario-specific source/test map](guides/dispatch-recovery.md) when relevant. [my-wfc](my-wfc.md) is partly historical, not the default dispatch authority.
 - **Target:** [CL-12 summary](adr/CL-12-architecture.md) → open the exact linked ADR section relevant to the current task.
 - **Historical:** [old handoff log](history/handoff-log.md), [migration notes](migration-my-wfc.md), [POC workflow](poc-workflow.md), [historical TASK-001](tasks/TASK-001.md). These are not general startup reading.
 
 ## Token and evidence discipline
 
-- Read **headings/index/required section first**, expand only referenced paragraphs; prefer file/symbol searches and bounded diffs over entire history logs.
+- Read **headings/index/required section first**, expand only referenced paragraphs; prefer file/symbol searches and bounded diffs over entire history logs. **Search the Git tree/path list first** when symbol search is missing or non-indexed; use exact file paths from this index, not speculative filenames. For GitHub `fetch_file`, request bounded `start_line/end_line` for known symbols; distinguish lines returned by a tool from lines actually placed in context. Avoid re-fetching full files just to count them.
 - A task is not understood until its **AC, current call path, trust boundary, affected tests and forbidden scope** are identified; do not sacrifice correctness for a token quota.
 - Distinguish **observed by tests**, **reported by another agent**, **Owner-selected design**, and **unverified/proposed**. Link claims to file, commit or dated evidence; never claim a design is deployed.
 - If this index and a merged ADR conflict, the **merged ADR governs target design**, while current source/tests and confirmed deployment evidence govern current behavior. Escalate true contradictions; do not silently pick a convenient version.
