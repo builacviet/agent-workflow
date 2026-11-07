@@ -1,5 +1,7 @@
 # Tech Lead Review POC
 
+**Agent onboarding:** Start with [AGENTS.md](AGENTS.md) and the [documentation map](docs/INDEX.md), then the current approved task and only its relevant source/tests. [CURRENT architecture](docs/architecture.md) and [TARGET CL-12 ADR](docs/adr/CL-12-architecture.md) are different; merged design decisions are **not** deployed features. For handoff use the [short template](docs/templates/handoff.md); the [historical log](docs/history/handoff-log.md) is not required startup context.
+
 Two independently importable Python packages share this repository:
 
 - `order_service`: small immutable in-memory order domain using Decimal. Application source and tests are unchanged from target main.
