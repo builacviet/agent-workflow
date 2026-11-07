@@ -1,135 +1,156 @@
-# CL-12.7 — Consolidated architecture decision record and handoff
+# CL-12.7 — Consolidated architecture decision record and implementation handoff
 
-**Status: Tech Lead-authored DRAFT for Owner decision, NOT final ADR approval.** Date: 2026-11-06. Task: https://app.notion.com/p/410f92014abd810284d7e98107016b61
+**Status: Consolidated CL-12 design proposal, ready for independent Owner review; NOT implementation or production approval.** Updated: 2026-11-07. Task: https://app.notion.com/p/410f92014abd810284d7e98107016b61
 
-This document consolidates CL-12.1–CL-12.6 at the authorized known main base 937d0ba2203bb4cff0a63ea5a6ac3bc094b5137e. The Owner requested simultaneous *drafting* of CL-12.5, CL-12.6 and CL-12.7 by Tech Lead. **It does not waive dependency order for review/merges, runtime/security validation, final ADR sign-off or implementation authorization.** Treat the draft CL-12.5/12.6 decisions below as provisional until their PRs are approved and merged. This PR changes documentation only; no source/Compose/DB/runtime changes.
+This document reconciles **CL-12.1–CL-12.6** against the actual merged architecture ADRs: [PR #11 — CL-12.5 security](https://github.com/builacviet/techlead-review-poc/pull/11), squash commit `e4ce254d24cd46d952ff5d814304c58fde3941b3`; and [PR #12 — CL-12.6 deployment](https://github.com/builacviet/techlead-review-poc/pull/12), squash commit `4d7aa10db7992a0735bf095771b258db4d9eb5e6`. The Owner selected **Rootless Podman for development**, **GHCR for image version/distribution**, and a **staged Executor observability approach**. This is a documentation-only PR and does not amend runtime behavior or retrospectively certify P2/P3 evidence.
 
-## 1. Context and linked evidence
+## 1. Inputs, traceability and evidence
 
-| Subtask | Purpose/evidence | Status at drafting |
+| Subtask | Governing artifact | State for this synthesis |
 | --- | --- | --- |
-| CL-12.1 | [Task and review contract](../tasks/CL-12.md) | Previously Owner Approved and merged |
-| CL-12.2 | [Source inventory: 24 Python modules, import graph and trust boundaries](CL-12-current-state.md) | Approved; GitHub PR #8 merged |
-| CL-12.3 | [Target modules, DI and DRY ownership matrix](CL-12-module-boundaries.md) | Approved; GitHub PR #9 merged |
-| CL-12.4 | [Single-host SQLite, migrations, backup and recovery](CL-12-persistence.md) | Approved; GitHub PR #10 merged |
-| CL-12.5 | [Executor threat model](https://github.com/builacviet/techlead-review-poc/pull/11) / proposed CL-12-executor-security.md | Tech Lead draft PR #11, awaiting Owner and independent security review |
-| CL-12.6 | [Deployment/workspace/operations](https://github.com/builacviet/techlead-review-poc/pull/12) / proposed CL-12-deployment.md | Tech Lead draft PR #12, dependent on CL-12.5 approval |
-| CL-12.7 | This consolidated ADR | Draft PR; acceptance depends on both preceding drafts |
+| CL-12.1 | [Task/review contract](../tasks/CL-12.md) | Owner Approved/merged previously |
+| CL-12.2 | [Current 24-module inventory and trust boundaries](CL-12-current-state.md); PR #8 | Approved/merged |
+| CL-12.3 | [Target package/DI/DRY boundaries](CL-12-module-boundaries.md); PR #9 | Approved/merged |
+| CL-12.4 | [SQLite persistence, migration and recovery](CL-12-persistence.md); PR #10 | Approved/merged |
+| CL-12.5 | [Trusted Executor security ADR](CL-12-executor-security.md); [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11), squash `e4ce254d24cd46d952ff5d814304c58fde3941b3` | **Merged**: B3 Rootless Podman **development architecture**, security gates deferred |
+| CL-12.6 | [Linux deployment, workspaces and operations](CL-12-deployment.md); [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12), squash `4d7aa10db7992a0735bf095771b258db4d9eb5e6` | **Merged**: host Executor topology, GHCR/versioning, staged Grafana |
+| CL-12.7 | This consolidated ADR; [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) | **In Owner review**; no merge/final parent CL-12 sign-off yet |
 
-Controlling decisions: [Parent CL-12 Notion ADR Decision Set v0.2](https://app.notion.com/p/410f92014abd81cdbceded689b7d4945), [CL-10.1 DB audit](https://app.notion.com/p/410f92014abd8186b104d65641e0c9ca), repository AGENTS.md, docs/architecture.md, docs/review-policy.md and docs/handoff.md. The historical status notes on the parent include superseded Proposed drafts; the specific later Owner authorizations and actual PR merges govern each completed subtask.
+Other governing sources: [parent CL-12 Notion](https://app.notion.com/p/410f92014abd81cdbceded689b7d4945), [CL-10.1 DB inventory](https://app.notion.com/p/410f92014abd8186b104d65641e0c9ca), `AGENTS.md`, `docs/architecture.md`, `docs/review-policy.md`, `docs/handoff.md`. Historical Notion or draft descriptions naming a selected dedicated rootless Docker daemon are **superseded for this development phase** by PR #11 and #12.
 
-Evidence classifications: **Observed** = static source/config at recorded SHA or dated CL-10.1 operator-reported audit; **Decided baseline** = Owner-preferred design pending tests/sign-off; **Validation gate** = test still to perform; **Proposal** = not authorized to implement. A passing existing pytest suite does not verify a newly proposed architecture.
+**Evidence classes:** (a) **Existing observed baseline** = source/config and dated CL-10.1 audit, not production proof; (b) **Owner-approved development design** = decisions merged in PR #11/#12; (c) **Codex-reported probe** = WSL2 P2/P3 results, with P3 original REPORT/JSON still pending independent Tech Lead inspection; (d) **Acceptance gate** = behavior to test only during separately authorized implementation/staging/native Linux rollout. Do not treat a merged document as a passed integration/security test.
 
-## 2. Proposed deployment and trust flow
+## 2. Target deployment and trust boundary
 
-~~~text
-ChatGPT Tech Lead
-   | OAuth-secured workflow review (not Docker control)
-TLS ingress -> [MCP interface] ----+
-                                   | same *physical* Linux-local
-                              [workflow_state SQLite]
-                                   |
-                         [Controller] (opt-in; off by default)
-                                   | authenticated bounded typed job
-                            [Trusted Executor]  <- only after CL-12.5 gate
-                                   |
-                         [Dedicated rootless worker daemon] (candidate B2)
-                                   |
-                       +-----------+-----------+
-                 trusted prepare  code        test       trusted publish
-                 Git/App scoped  model auth   none       Git/App scoped
-                        Git metadata stays in trusted stages
-~~~
+```text
+ChatGPT / authorized Owner
+         |
+     TLS + OAuth
+         v
++------------------------ Docker Compose on Linux host -----------------------+
+|  MCP service (OAuth, workflow API)                 Controller (opt-in only) |
+|       |                                                  |                  |
+|       +-- shared, SAME physical Linux-local SQLite DB ---+                  |
+|                                                          |                  |
++----------------------------------------------------------|------------------+
+                                                           |
+                                  authenticated, strictly typed bounded IPC
+                                  no direct Podman/Docker engine socket/API
+                                                           |
+                                +--------------------------v-----------------+
+                                | Trusted Executor (Linux HOST systemd)       |
+                                | dedicated UNPRIVILEGED user / policies     |
+                                | local rootless Podman CLI, image cache     |
+                                +--------------------------|-----------------+
+                                                           |
+                                          disposable stage containers
+                                                           |
+                          Prepare -> Coder -> Test -> Publish
+                         trusted   untrusted untrusted trusted
+                         App Git    model auth  no auth    App Git
+                         source     sandboxed   offline    commit/push/PR
+```
 
-Keep code/test untrusted, with source snapshot and strict write-path policy; model code has only needed model egress, test is no-network and credential-free. Prevent socket, PEM, .git, SQLite, secret env and other project paths from entering code/test. Trusted publish validates exact remote SHA/ancestry before ordinary push/PR handoff; Tech Lead independently verifies GitHub and Owner approves merge.
+- **Controller** owns durable dispatch orchestration, bounded requests and state, but must not directly invoke any Podman/Docker CLI/API, mount engine sockets, accept arbitrary image/mount flags or receive GitHub App secrets.
+- **Trusted Executor** is a distinct Linux-host systemd service, not a Compose container. The Controller-to-Executor **transport implementation remains to be selected/validated**: an authenticated private Unix socket is a candidate subject to container-to-host mount, peer identity/ACL and namespace tests; a private authenticated alternative requires its own review. The **typed IPC contract**, caller authorization, request policy and replay/idempotency checks are mandatory regardless of transport. No generic engine API exposure.
+- **Executor→Worker** uses only local **Rootless Podman CLI** under the dedicated non-root user (no general worker HTTP management endpoint). Executor owns fixed image digest, stage profiles, workspace mappings, lifecycle, typed result verification and selective cleanup.
+- **Prepare/Coder/Test/Publish are four logical stages** with fresh bounded containers and different mount/network/credential policies, **not four always-on services**. Containers can reuse the **same pre-cached immutable Worker image**; no rebuild or registry fetch between stages. Prepare obtains verified source snapshot, Coder edits within approved allowlist, Test runs without model/App credentials and with no network, **trusted Publish validates immutable source/diff/test evidence, commits/pushes approved changes and creates a Draft PR using narrowly scoped GitHub App identity**. Coder does not receive a GitHub push credential. Artifacts remain in trusted host-managed storage after each container is removed; every handoff is validated by digest, ownership and policy. Test success claimed by Coder alone does not authorize Publish.
+- In real code the Controller currently uses Docker CLI/Windows-oriented paths. The above is a **target architecture**; existing Phase 3.1 Docker Desktop runtime, data, tunnel and Workflow Console v2 are preserved until a separately approved transition.
 
-**No Docker socket in MCP/Controller/Codex.** Executor's privileged capability must be explicit and narrowly authorized. A generic socket proxy is insufficient. Rootless dedicated daemon is a preference, not an already proven secure deployment; privileged DinD is prohibited. B1 minimal trusted host executor requires a separately signed Owner decision if B2 tests fail. Current implementation still uses local Controller Docker CLI; this diagram is not proof of current runtime.
+## 3. Eight reconciled architecture decisions
 
-## 3. Eight decision records (CL-12 Decision Set v0.2)
-
-| ID | Preferred baseline | Rationale and hard stop |
+| ID | Owner-approved or proposed baseline | Boundary / condition |
 | --- | --- | --- |
-| ADR-01 Deployment | Modular monolith within one repo; separate MCP and Controller services in Linux Compose; Windows Docker Desktop for development | No microservice proliferation, Controller not implicitly started by MCP |
-| ADR-02 Boundaries | workflow_engine domain/application/ports/SQLite, mcp_server adapters, controller orchestration, worker_executor boundary, coder_worker stages, independent order_service | No framework rewrite or cross-import of privileged adapters into core; runtime behavior preserved |
-| ADR-03 DRY | Conditional pure worker_contracts for only genuinely shared SHA/path/deadline/error/job values, with single policy owner and no cycles | No broad utils or IO, DB, Docker, OAuth, secrets in shared package; Pydantic strictness preserved across any DTO move |
-| ADR-04 DB | sqlite3 single host, one physically shared Docker-managed Linux-local volume; MCP/Controller as separate trusted writers | No network filesystem/Windows bind as assumed safe; Postgres only after measured concurrency/HA/multi-host need |
-| ADR-05 Schema | Ordered SQL/Python runner, PRAGMA user_version plus exact schema manifest, existing-only location checks, one-shot pre-start migration, verified backups | CL-11 owns implementation/constructor DDL removal; no implicit bootstrapping/DDL or unreviewed Alembic adoption |
-| ADR-06 Executor | Authenticated strict typed internal job API, conditionally dedicated rootless worker daemon (B2); Controller and MCP lack daemon authority | B2 platform/negative tests required; no privileged DinD or automatic fallback; B1 host executor needs new Owner sign-off |
-| ADR-07 Workspaces | Executor owns daemon-host-real mapping for logical task workspace IDs; stage snapshot isolation and minimum secret scope | No Windows absolute-path contract in target, arbitrary host mount, .git/PEM/DB leaks, or world-writable stage by default |
-| ADR-08 Operations | Independent pinned images/entrypoints, explicit start/health/schema gate, fail-closed BLOCKED reconciliation, isolated restore and rollback | No deployment-triggered dispatch, credential in image, hot SQLite raw-copy, unbounded retry or volume deletion |
+| **ADR-01 Deployment** | Modular monolith, one repo, Linux-host MCP/opt-in Controller as separate Compose containers; **Executor outside Compose as systemd host service** | MCP can run alone; Controller dispatch off by default; host Executor activation requires independent gate |
+| **ADR-02 Package boundaries** | `workflow_engine` domain/application/ports/SQLite, `mcp_server` auth/transport, `controller` dispatch, trusted `executor` adapter, `coder_worker` stage entrypoints, independent `order_service` | No direct framework/privileged adapter imports into domain; refactor only in atomic reviewed tasks |
+| **ADR-03 DRY & contracts** | Minimal pure `worker_contracts` only if shared semantics justify it; one authoritative SHA/path/deadline/error/job rule | No giant utils, DB/OAuth/Podman/secrets in pure contract package; strict DTO compatibility |
+| **ADR-04 Persistence** | Python `sqlite3` single-host, one verified **physical Linux-local** SQLite DB shared by MCP+Controller (not Executor/Workers) | Test WAL/locking/UID/backups/concurrency; no unproven Windows bind or network filesystem parity |
+| **ADR-05 Migration** | Ordered versioned SQL/Python runner, `PRAGMA user_version` plus exact schema manifest, explicit existing-file checks and operator-controlled backup/restore | No schema creation/migration on ordinary process import/startup; CL-11 owns implementation |
+| **ADR-06 Executor** | **B3: dedicated unprivileged Linux-host Trusted Executor using local Rootless Podman CLI**, invoked only via authenticated typed Controller IPC | **Selected for development, NOT production-approved**; no engine socket or arbitrary flag API to Controller; Docker comparator deferred |
+| **ADR-07 Workspaces/stages** | Executor owns Linux-host-real workspace ID mapping, immutable source/result handoff, per-stage containers and minimum credentials | Prepare/publish GitHub App only, code model auth only, test none; no .git/PEM/DB/other-project access or world-writable staging |
+| **ADR-08 Operations/release** | **GHCR** versioned immutable OCI Worker image digest, pre-pull into Executor rootless Podman store and stage `--pull=never`; fail-closed BLOCKED recovery, deliberate startup and rollback; journald/metrics first, staged **Grafana + Prometheus + Loki + Alloy** | Source SHA ↔ image digest ↔ policy version recorded; no per-stage image pull, automatic retry after ambiguous publish, broad monitoring socket or production deployment without tests |
 
-The selected baseline is **not** a sign-off for rootless engine implementation or production persistence cutover. Technology selection remains subject to final Owner approval plus empirical gates.
+**Selection status:** ADR-01–08 form a coherent **development design baseline** from accepted subtask ADRs. The Owner must still independently approve this exact consolidated PR/parent CL-12. Runtime implementation and production security sign-off are separate approvals.
 
-## 4. Alternatives explicitly rejected or conditional
+## 4. Image release, monitoring, and stage lifecycle decisions
 
-| Alternative | Disposition | Revisit when |
+**Worker image/release path:** reviewed source + controlled CI build/test → GHCR (tag for discovery, **sha256 manifest digest for identity**) → explicit release approval → one verified **pre-pull for the Executor's unprivileged Podman identity** → local image store → each ephemeral stage runs from the pinned digest with `--pull=never`. Keep old approved digest for rollback and garbage-collect only scoped unreferenced images. Missing/mismatched/unsupported image must **block** the job. Use scoped registry pull credentials separate from Worker secrets; future CI attestation/SBOM/signature policy requires validation.
+
+**Operations path:** Executor publishes bounded health and metrics (job/stage duration, blocked/unknown state, OOM/timeouts/PID/CPU cgroup events, orphans/cleanup, image cache/digest, ambiguous GitHub publish, systemd restarts). Structured logs go to `journald`, with no PEM/tokens/source or uncontrolled workspace paths. POC can use local metrics + operator alerts. Staging adds **Grafana dashboards, Prometheus, Loki and Alloy/equivalent constrained collector** with TLS/auth/RBAC, redaction, retention, tested alert delivery and no Podman/Docker engine socket to the telemetry stack. Neither monitoring nor registry requires creating four persistent Worker services.
+
+**Lifecycle/handoff:** Executor creates a unique per-stage container with fixed CPU/RAM/PID/timeout/security profile, records the authoritative exit status and stores validated artifact digests in host-owned storage, reaps the stage container, then starts the next stage only after policy success. Stage outputs are **untrusted** until checked, including when produced by a trusted-stage image with compromised inputs. The Publish stage must independently verify approved file changes, base/input SHA, tested artifact digest, branch policy and actual remote state; duplicates or uncertain remote pushes remain **BLOCKED** until reconciliation. Engine container-name uniqueness is **not** durable job idempotency.
+
+**Performance requirement:** Benchmark on the future Executor host: cold pre-pull separately from cached warm start/stop, artifact handoff, and AI/test runtime; record failures and p50/p95 per stage. The discussed goal of stage transitions **under 5% of job duration** is a provisional engineering target, not demonstrated or a reason to weaken isolation.
+
+## 5. Alternatives and non-goals
+
+| Alternative | Decision / reopening condition |
+| --- | --- |
+| Dedicated rootless Docker daemon (historical B2) | Not selected for current development; reopen only if Podman fails mandatory limits, policy or operability |
+| Trusted rootful host Executor (historical B1) | NOT approved or automatic fallback; requires fresh explicit Owner threat/privilege decision |
+| Privileged DinD, generic engine socket/proxy to Controller/MCP/AI/monitoring | Prohibited in current threat model |
+| Four long-running per-stage Worker services or rebuilding/pulling image per stage | Not required; short-lived distinct containers from GHCR-provisioned local cache |
+| Self-hosted registry in current phase | Defer; use GHCR unless reliability/security requirements justify private hosting |
+| Full Grafana stack before first isolated POC | Defer to staging; minimum journald/health/alerts required during Executor development |
+| Switch from SQLite to Postgres; immediately adopt SQLAlchemy/Alembic | Defer until actual concurrency/HA/migration complexity warrants |
+| Django/FastAPI microservice rewrite or broad `common` utility module | Reject without measured value; preserve domain/ports, minimal shared contracts |
+| Implicit DB migration, Controller auto-dispatch, automatic retry of uncertain publish | Prohibited; operator gates and fail-closed reconciliation |
+| Production deployment from a successful WSL2 probe | Not approved; native Linux host/VM parity and threat model gates mandatory |
+
+## 6. Open implementation and security gates (do not infer PASS)
+
+| Gate | Required evidence / owner |
+| --- | --- |
+| **G-01 Executor IPC & authority** | Authenticated caller, invalid/replay/conflicting requests, arbitrary flag/image/mount/path rejection with zero container effects, bounded API, socket/transport ownership and denial from untrusted zones |
+| **G-02 Workspace/permissions** | Fix/review historical `stage.chmod(0o777)`, worker source mode; effective UID/GID, symlink/hardlink/TOCTOU, secret leakage, sibling-project path escape negatives (CL-02) |
+| **G-03 Rootless runtime** | Actual Executor-launched worker seccomp/no-new-privileges/caps/resource cgroups, userns/subuids, timeout, orphan cleanup; private mount propagation impacts; AppArmor/SELinux or documented host compensating policy |
+| **G-04 Executor lifecycle** | Durable job-idempotency, crash before/after container create and GitHub push, lost network, cancel/restart, reconciliation of ambiguous publish; no duplicate push |
+| **G-05 Stage credentials/network** | Trusted App PEM only prepare/publish; model auth only code; test none/no-network; deny unexpected egress and cross-stage secrets on the actual mounted environment |
+| **G-06 SQLite and migration** | Single physical Linux-local file identity, concurrent MCP/Controller WAL/lock/backup/restore, schema manifest + existing-only migrations and rollback without corrupting live Phase 3.1 state |
+| **G-07 GHCR release** | Approved digest/provenance/architecture, scoped CI/pull identity, immutable policy, pre-pull + `--pull=never` negative tests, rollback, retention, cold/warm startup benchmark |
+| **G-08 Observability** | journald redaction, bounded metrics, health vs dispatch permission, alerts for down/BLOCKED/orphans/OOM/publish unknown; monitoring collector least privilege, TLS/RBAC/retention |
+| **G-09 Native Linux parity** | Reproduce actual Executor/Worker isolation, cgroups/user systemd, rootless storage/network, mount ACL and operational behavior on a native Linux VM/host; WSL2 test alone insufficient |
+| **G-10 Packaging/regression/review** | Worker-only image packaging (no accidental broad `COPY src`), pure contract/import/wheel resources, CL-07 characterization, real tests/CI, exact-SHA independent review and Owner approvals |
+
+**Podman evidence boundary:** CL-12.5-P2 metadata was reported PASS (Podman 4.9.3/rootless UID 1000 on Ubuntu 24.04 WSL2). CL-12.5-P3 synthetic behavior reported CPU `cpu.max=25000 100000`, 30/31 throttled periods; 64 MiB memory OOM; PID max 32; restricted seccomp, no-network, bounded tmpfs and cleanup. **Tech Lead has not inspected P3's original `REPORT.md`/JSON**; P3 is separately **In Review**. This supports a development engine choice with explicit unresolved risks; not a native Linux or full Executor PASS.
+
+## 7. Parent CL-12 acceptance coverage
+
+| Parent AC | Documentation evidence | Disposition |
 | --- | --- | --- |
-| Keep Windows host Controller + Linux-container DB bind as production architecture | Reject as unvalidated cross-OS SQLite locking/path contract | Only if separately proven and explicitly approved; Linux-local single-host target preferred |
-| Adopt Postgres immediately | Defer | Measured lock contention/SLO, multi-host writers or HA requirements justify cost |
-| Switch to SQLAlchemy/Alembic immediately | Defer | Multiple backends, repeated complex SQLite rebuilds or maintenance metrics justify adapter/migration overhead |
-| Rewrite as Django/FastAPI/microservices | Reject for present scope | Concrete requirements show existing FastMCP/service adapters insufficient |
-| Direct /var/run/docker.sock in Controller/MCP; generic Docker proxy | Reject by default | No implicit relaxation; explicit new security/Owner decision required |
-| Privileged Docker-in-Docker for rootless worker engine | Reject | Not an acceptable B2 implementation under current risk baseline |
-| Trusted host executor B1 | Conditional fallback | B2 fails documented capability/security tests; Owner reviews and approves narrowly scoped IPC/privileges |
-| Share a giant worker/common utils module | Reject | Only minimal pure contracts with real matching consumers and negative import tests |
-| Automatic migrations, auto-redispatch or rollback to stale DB | Reject | Operator-approved one-shot migration, reconcile uncertain Git/worker and later-write effects first |
+| AC1 Package direction and security boundaries | CL-12.2 inventory, CL-12.3 boundary matrix, CL-12.5 threat model, CL-12.6 Linux-host layout | Design **documented**, implementation untested |
+| AC2 SQLite vs SQLAlchemy/Alembic analysis | CL-12.4 sqlite3 choice and migration alternatives | **Documented**, runner not implemented |
+| AC3 Versioned schema/technology decision | ADR-04/05 and CL-12.4 `user_version` + exact manifest design | **Development baseline recorded**, Owner final CL-12 sign-off pending |
+| AC4 Backup, deployment and Phase 3.2 rollout gates | CL-12.4 persistence; CL-12.6 startup/backup, GHCR and monitoring roadmap | **Planned**, no live cutover/restore or production proof |
+| AC5 Documentation-only CL-12 scope | PRs #8–#12 merged as docs; PR #13 changes only this ADR | No runtime modifications by CL-12 PR #13; must re-check exact diff |
 
-## 5. Known security and engineering blockers
+Subtask coverage: CL-12.1 contract, 12.2 inventory, 12.3 boundaries, 12.4 persistence, 12.5 security, 12.6 deployment, 12.7 consolidation. **Completion of this ADR does not by itself approve code migration or Phase 3.2.**
 
-| ID | Why blocked | Required future gate/owner |
-| --- | --- | --- |
-| G-01 Executor privilege | Rootless engine deployment, seccomp/AppArmor/UID/pids/resources, engine socket separation not tested on Linux/Desktop | CL-12.5 negative test plan and separately approved Executor implementation; Owner reviews B1 fallback |
-| G-02 Permissions | coder_runtime.py:324–325 uses stage.chmod(0o777); worker source also broadens permissions. Effective ACL/UID attack path untested | CL-02 and CL-12.5 exact ownership/least-privilege, path-race and secret-isolation tests |
-| G-03 DB concurrency | Present live database uses Windows bind; same-host Linux-local WAL/busy_timeout/BEGIN IMMEDIATE not proven with two processes | CL-11 plus CL-12.6 target filesystem tests |
-| G-04 Migration/recovery | v1 schema has both dispatch-table-present and absent possible variants; constructor DDL, no existing-only manifest gate | CL-11.1–11.3 runner/fingerprint/migrate/restore tests, no live change without cutover approval |
-| G-05 Workspace/cross-platform | Absolute linked worktree and daemon-host path mapping/UID/link behavior may diverge on Docker Desktop and Linux | CL-12.6 parity/negative tests; no arbitrary mount controls |
-| G-06 Packaging/dependencies | Worker image COPY src; potential accidental workflow dependency and resource lookup drift after extraction | Separate package/image changes with wheel tests, forbidden imports and secret scan |
-| G-07 Behavioral parity | Shared DTO, error, deadlines, SHA and path policy require exact acceptance/cancellation/timeout behavior | CL-07 characterization before CL-09 rename and independent extraction |
-| G-08 Operational recovery | Crash after Git push or worker publish can leave unknown effects; restoring SQLite may lose later records | Fail-closed BLOCKED reconciliation, isolated backup restore, Owner cutover gates |
-| G-09 Review integrity | Tech Lead authored CL-12.5/6/7, so cannot present them as independent passed review or Owner approval | Independent Owner/qualified security review; exact SHA plus one-by-one merge |
-| G-10 Documentation dependency | CL-12.5/12.6 drafts may change before approval, invalidating this synthesis | Reconcile against merged exact SHA before final CL-12.7 acceptance |
+## 8. Proposed atomic implementation DAG after separate Owner authorization
 
-No claim is made that these gates passed. The extant 179 passed/1 skipped Coder test reports for prior documentation PRs are historical regressions, not security/platform validation of this target.
+This is a proposal for **future separately scoped tasks** (not a new task authorization, implementation PR or deployed infrastructure):
 
-## 6. Parent CL-12 AC reconciliation and task coverage
+1. **CL-07 baseline characterization:** Capture current idempotency, code/test, SHA/path/deadline/security, worker GitHub publishing, OAuth and packaging parity in regression fixtures.
+2. **CL-09 namespace rename only:** Mechanically rename `my_wfc` → `workflow_engine`; verify imports/wheels/entrypoints; no behavior changes.
+3. **Atomic package/contract extraction:** Separate pure job/DTO contracts, persistence ports/DI, MCP/auth, Controller, trusted Executor interface and Worker packaging. Stage behavior and policy authority remain test-covered; each change has path allowlist, exact SHA and individual PR.
+4. **CL-11 schema/migration track:** Implement existing-file manifest, ordered runner, constructor DDL removal, verified isolated backup/restore and concurrent Linux-local SQLite tests. No automatic cutover.
+5. **Executor development track (separately Owner-approved):** Choose/verify narrow Controller→host IPC transport; implement local Podman worker lifecycle and four-stage artifact handoffs, durable idempotency/reconciliation, safe secrets/network/mounts. Include **GHCR pinned release/pre-pull/cache** and **journald/metrics/alerts** with negative tests; compare native Linux behavior before any production gate.
+6. **Staging operational track:** CI image release, restricted monitoring stack as warranted, startup/stop/recovery and alert drills, realistic performance/capacity benchmark, secure release rollback, no host-wide socket/privilege relaxation.
+7. **Controlled cutover:** Only Owner-approved CL-10.2/10.3 after persistence/migration tests, target DB physical identity, backup+restore, blocked-job reconciliation, compatible Executor policy and rollback plan. MCP first, Controller opt-in; no implicit worker dispatch.
+8. **Remaining cleanup:** CL-01–04/CL-08 where dependencies allow; CL-02 least-privilege fix is a hard prerequisite for live Executor launch. CL-05/06 deferred. Phase 3.2 only after all required cleanup gates.
 
-| Parent AC | Evidence | Current result |
-| --- | --- | --- |
-| AC1 Modules/dependency direction and trust separation | CL-12.2 observed inventory; CL-12.3 target import/DI; CL-12.5/12.6 proposed trust/deployment diagrams | **Documented**; implementation/negative tests pending |
-| AC2 SQLite migrations versus SQLAlchemy/Alembic comparison | CL-12.4 ADR cost, transaction limits, fixture/restore matrix | **Documented**, future runner unimplemented |
-| AC3 Technology/schema versioning decision after Owner review | ADR-04/05 baseline and CL-12.4 user_version+manifest proposal | **Preferred baseline**, final Owner sign-off pending |
-| AC4 Backup/snapshot, deployment and Phase 3.2 gate | CL-12.4 recovery; CL-12.6 deployment/runbook; CL-10 inventory | **Planned** only; no live backup/cutover exercise |
-| AC5 No runtime/code change during CL-12 ADR | CL-12.1–12.4 were docs-only PRs; CL-12.5/6/7 are proposed docs-only | **Document-only scope maintained in submitted diffs**, must recheck each PR before merge |
+Every task follows branch/worktree + approved changed paths + tests/negative checks + diff review + commit/push + exact-SHA Tech Lead review (max two rounds) + **Owner merge**; a new SHA invalidates earlier review. Tech Lead-authored architecture drafts require independent Owner/security acceptance, not author self-approval.
 
-Seven subtasks coverage check: 12.1 contract; 12.2 inventory; 12.3 package/DRY; 12.4 SQLite; 12.5 Executor; 12.6 deployment; 12.7 synthesis. **Do not mark all seven Approved** until individual PRs pass their acceptance and Owner merge, or claim the parent ADR is final from document creation alone.
+## 9. Owner review checklist and non-authorization
 
-## 7. Atomic implementation DAG and no-go conditions
+- [x] CL-12.5 [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11) merged, conditional B3 Rootless Podman development decision recorded.
+- [x] CL-12.6 [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12) merged, Linux deployment + GHCR + monitoring design recorded.
+- [ ] CL-12.7 [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13): independent review of **updated exact HEAD**, merge and then explicit parent CL-12 Owner sign-off.
+- [ ] P3 original REPORT/JSON independently inspected if P3 evidence is to be formally accepted; otherwise preserve clearly as reported, not verified.
+- [ ] New atomic implementation tasks, exact source/config allowlist and Owner approval granted separately before any Executor code, GHCR CI or Grafana installation.
+- [ ] Before production, native Linux parity, security negative tests, DB backup/restore, alert and crash-reconciliation evidence satisfy the gates above.
+- [ ] Phase 3.1 data, Docker Desktop, GitHub App credentials, separate Workflow Console v2 and external side effects preserved until authorized change.
 
-This is a **proposed task graph**, not automatically created Notion records or authorization to write source/DB:
+**Authoring/review provenance:** This document is directly authored by ChatGPT Tech Lead from merged repository ADRs, Notion records and Owner decisions. No new `pytest`, local `git diff --check`, CI run, Linux/WSL security experiment, Docker/Podman Worker execution, DB or runtime action occurred while writing this ADR. GitHub exact-head verification and file allowlist verification are required after commit; the document intentionally does not embed its own HEAD SHA.
 
-1. **Baseline:** CL-07 captures current reviews, attempts, immutable history, dispatch idempotency, code/test sandbox, OAuth, path/SHA/DTO validation, deadline, failure and packaging behavior. Preserve all regression fixtures and exact version evidence.
-2. **Namespace only:** CL-09 mechanically renames my_wfc -> workflow_engine (flat initially) with import/resource/entrypoint parity. Do not slip in policy/SQLite/Executor behavior changes.
-3. **Package extraction as separate Owner-authorized tasks:** pure SHA/error contracts; lexical paths; deadline math; repository ports and DI; domain/DTO compatibility; MCP auth/tool extraction; Controller split; worker contract/packaging. Each slice gets its own tests, rollback boundary, exact allowlist and PR; the sequence may be refined after characterization. Do not assume moving files creates isolation.
-4. **Schema track:** CL-11.1–11.3 implements version-manifest, controlled migrations, constructor DDL removal and isolated backup/restore tests. Can be planned in parallel, but deployment of new DB writer processes requires a verified compatible schema and final prior gates.
-5. **Executor track:** only after CL-12.5/12.6 security/platform approval, implement typed Executor and dedicated daemon isolation in distinct atomic tasks. If B2 fails, require Owner B1 decision; no privileged fallback. CL-02 permission fixes must pass before Executor production use even if the cleanup backlog scheduled CL-01..04 later.
-6. **Operational cutover:** CL-10.2/10.3 only after final ADR, reviewed CL-11, target volume/lock tests, backup + isolated restore, release compatibility and Executor/Controller enablement decision. Start MCP alone and verify OAuth/DB; Controller remains opt-in, not automatically dispatched.
-7. **Remaining cleanup:** CL-01..04 (security/performance/permission hardening) and CL-08 docs/runbooks with dependencies on code extracted. Any safety-critical CL-02 fix needed for Executor launch is a **precondition**, regardless of nominal backlog ordering. CL-05 and CL-06 stay deferred. Phase 3.2 must wait for all required cleanup gates; no implicit activation.
-
-Per-task gate: isolated branch/worktree, exact base SHA and changed-path allowlist, review of diff, actual pytest/negative integration evidence (or blocker), ordinary push, PR, exact-head Tech Lead review at most 2 rounds, Owner approval before merge, next-task authorization separately. A new SHA invalidates prior review. Tech Lead-authored documentation requires an independent acceptance check; author does not self-sign an impartial review.
-
-## 8. Final Owner decision checklist (not yet satisfied)
-
-- [ ] PR #11 CL-12.5 independently reviewed for capability/threat details and accepted/merged.
-- [ ] PR #12 CL-12.6 reconciled against merged CL-12.5 and accepted/merged.
-- [ ] This PR rebased/verified against the two accepted documents, all dependency links resolved, exact SHA reviewed; accepted/merged.
-- [ ] Owner signs full parent CL-12 ADR-01..08 baseline and notes unresolved security/portability gates without authorizing implementation.
-- [ ] Owner authorizes only the next specific atomic code task, never generic Phase 3.2 or production migration.
-- [ ] Rollback, secrets, storage/legacy preservation and external effects are included in future implementation/runbook review.
-
-## 9. Review handoff / evidence limitations
-
-**Author:** ChatGPT Tech Lead acting on Owner request for documentation. **Base at authoring:** 937d0ba2203bb4cff0a63ea5a6ac3bc094b5137e. **Allowlisted change:** docs/adr/CL-12-architecture.md only. Branch/head SHA, remote state and PR URL must be recorded in PR metadata after commit; a file cannot contain its own commit SHA.
-
-Source verification comprised read-only GitHub files/Notion task specs and public Docker/SQLite documentation. No pytest, Docker, Compose, static AST job, Linux security test, live DB probe, migrations, backup, Controller dispatch or deployment was executed by Tech Lead. Any regression/security test numbers elsewhere are historical and not reproducible evidence for these new drafts.
-
-**Stop:** All three Tech Lead-authored ADR PRs await independent review and sequential Owner merge. No self-APPROVE, auto-merge, next task creation, live security experiment or refactor from this document.
+**Stop gate:** Do not merge #13 automatically; independent Owner approval is mandatory. Even after #13 merge, the CL-12 ADR sign-off authorizes **documentation architecture only** unless the Owner separately approves a specific implementation task. 
