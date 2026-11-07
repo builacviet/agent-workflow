@@ -1,0 +1,19 @@
+# DOC-02 — Onboarding follow-up: CURRENT recovery navigation and doc consistency
+
+**Status:** Proposed documentation-only follow-up to Owner-merged DOC-01 ([PR #15](https://github.com/builacviet/techlead-review-poc/pull/15)). Motivated by the Owner-supplied independent Codex onboarding audit (NEEDS IMPROVEMENT), which read 25 files/51 successful fetches and reported 1,608 lines shown vs 5,507 returned. **Actual token usage is unavailable**, so do not invent token savings.
+
+## Purpose and constraints
+
+Fix *navigation* and *dated documentation accuracy* without changing behavior, source, tests or the previously accepted CL-12 architectural decisions. Keep the historical Phase 3.1 contract intact, while clearly marking superseded sections and routing new agents straight to current source/test symbols.
+
+## Acceptance criteria
+
+1. **AC1 — Scenario route:** `docs/INDEX.md` prioritizes the current Phase 3.1 runbook and links a focused timeout/disconnect source/test map; agent can locate claim, lifecycle, publish, handoff, ledger and relevant tests without guessing file paths.
+2. **AC2 — CURRENT recovery evidence:** Add `docs/guides/dispatch-recovery.md` with source-verified uncertain-effect matrix and blocked operator gates. Update Phase 3.1 runbook with an entry link. Do **not** add automatic retry, new CLI permission or unverified production procedures.
+3. **AC3 — Superseded markers:** Mark `docs/my-wfc.md` historical for deprecated remote-verifier/dispatch descriptions; mark `docs/tasks/PHASE-3.1.md` original AC/design as dated, superseded by its later Owner revisions; retain historical text verbatim except new headers/pointers. Current runbook supersedes them for current responsibilities.
+4. **AC4 — ADR status:** Correct CL-12.7 and CL-12.6 ADR status text *only* to reflect confirmed Owner-merged documentation PRs #13/#12, while keeping **parent CL-12 final sign-off, Executor implementation and production readiness separate/unverified**.
+5. **AC5 — Open decisions:** Maintain explicit checklist for TARGET IPC/durable checkpoints/reconciliation as **future Executor Tech Spec** work, not unreviewed protocol detail.
+6. **AC6 — Scope/test integrity:** Only Markdown paths `docs/INDEX.md`, `docs/guides/dispatch-recovery.md`, `docs/tasks/DOC-02.md`, `docs/phase-3.1.md`, `docs/my-wfc.md`, `docs/tasks/PHASE-3.1.md`, `docs/adr/CL-12-architecture.md`, `docs/adr/CL-12-deployment.md`. Verify links, source symbols and HEAD/changed-path list. No source/runtime/DB/Compose/CI/host/config edits. No merge without independent Owner review.
+7. **AC7 — Retest:** A fresh agent with no conversation history repeats the timeout scenario using `AGENTS.md` and `docs/INDEX.md`. Record actual files and fetches/lines (tokens only if tool exposes them). No promised percentage reduction until measured; report remaining correctness gaps.
+
+This is documentation navigation, not authorization for CL-07, CL-11, Executor/GHCR/Grafana implementation or production cutover.
