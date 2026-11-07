@@ -35,7 +35,7 @@
 
 ## Navigation by purpose
 
-- **Contracts:** [`AGENTS.md`](../AGENTS.md) → [review policy](review-policy.md) → [handoff template](templates/handoff.md) → specific [task](tasks/).
+- **Contracts:** [`AGENTS.md`](../AGENTS.md) → [review policy](review-policy.md) → [handoff template](templates/handoff.md) → relevant authorized task (for example, [CL-12](tasks/CL-12.md)).
 - **As-built:** [architecture](architecture.md) → [my-wfc](my-wfc.md) → [Phase 3.1](phase-3.1.md).
 - **Target:** [CL-12 summary](adr/CL-12-architecture.md) → open the exact linked ADR section relevant to the current task.
 - **Historical:** [old handoff log](history/handoff-log.md), [migration notes](migration-my-wfc.md), [POC workflow](poc-workflow.md), [historical TASK-001](tasks/TASK-001.md). These are not general startup reading.
