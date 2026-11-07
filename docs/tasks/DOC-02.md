@@ -17,3 +17,10 @@ Fix *navigation* and *dated documentation accuracy* without changing behavior, s
 7. **AC7 — Retest:** A fresh agent with no conversation history repeats the timeout scenario using `AGENTS.md` and `docs/INDEX.md`. Record actual files and fetches/lines (tokens only if tool exposes them). No promised percentage reduction until measured; report remaining correctness gaps.
 
 This is documentation navigation, not authorization for CL-07, CL-11, Executor/GHCR/Grafana implementation or production cutover.
+
+
+## Independent Codex review — REQUEST_CHANGES (2026-11-07)
+
+[PR #16](https://github.com/builacviet/techlead-review-poc/pull/16) was independently reviewed at exact HEAD `4b2aad71bd93df44ffea7b457f970d38fb83b702`. Result: **REQUEST_CHANGES**, seven findings (one High, four Medium, two Low). DOC-02 follow-up changes remain within the same 8-file Markdown allowlist: (1) clarify pre-acknowledge verification of correct DB/dispatch lease, Docker endpoint, container provenance and possible late create; (2) distinguish existing-Draft-PR head/body drift and POST/PATCH response loss; (3) correct post-merge ADR statements; (4) link runbook to recovery guide and distinguish ACTIVE/BLOCKED; (5) locally label unsafe/historical WFC instructions; (6) add focused stage/publish tests and distinguish mock/real-bare-Git/HTTP GET coverage; (7) fix literal-escaped newlines in Phase 3.1 task banner and mark original AC.
+
+**Out-of-scope dated paragraph:** Security ADR §8 still calls PR #12/#13 Draft. This historical claim is flagged in `docs/INDEX.md` and `docs/guides/dispatch-recovery.md`; that ADR is not changed without a separately authorized path allowance. No source/code/runtime behavior changes, no new tests run, no measured token savings asserted. **Independent re-review required on the updated exact HEAD before Owner merge.**
