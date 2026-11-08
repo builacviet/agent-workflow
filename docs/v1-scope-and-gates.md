@@ -3,6 +3,8 @@
 > **Status:** **Owner-approved V1 delivery scope** via [merged PR #22](https://github.com/builacviet/agent-workflow/pull/22) (merge `86c47481e0af6fc66c30d9e1cd70882e06ced678`). This contract does not by itself grant deployment, credential access, or task-execution approval.
 >
 > **Baseline:** `main` at `4a23d5dfac28c1f8ee71187fe00cac06e880d4d1` (following PR #21). [V1-00 acceptance criteria and planning draft](https://app.notion.com/p/412f92014abd81528012fd5ea320cde3).
+>
+> **Visual overview:** [V1 architecture + planning/execution flowcharts](v1-visual-flows.md) (Mermaid). Read these first for orientation; the written gates below remain authoritative.
 
 ## 1. Scope and precedence
 
