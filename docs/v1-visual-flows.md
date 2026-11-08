@@ -85,7 +85,9 @@ flowchart TD
   DEV --> PR["Trusted Worker<br/>Commit / push / Draft PR to main"]
   PR --> CI["GitHub Actions<br/>CI on exact latest PR HEAD"]
   CI --> CIPASS{"Exact-HEAD CI<br/>passed?"}
-  CIPASS -->|No / pending / stale / unknown| BLOCKED["BLOCKED<br/>operational or CI issue<br/>stop and reconcile"]
+  CIPASS -->|Failed checks| FIXCI["Dev fixes failing checks<br/>new PR HEAD"]
+  FIXCI --> PR
+  CIPASS -->|Pending / stale / unknown| BLOCKED["BLOCKED<br/>missing or uncertain evidence<br/>stop and reconcile"]
   CIPASS -->|Yes| TL["Independent Codex TL Reviewer<br/>Code diff + AC + security"]
   TL --> TLPASS{"Code accepted?"}
   TLPASS -->|No, first round| REWORK["Dev corrections<br/>new PR HEAD invalidates evidence"]
@@ -95,7 +97,8 @@ flowchart TD
   QCQ -->|required| TEST["Codex QC executes<br/>preapproved MTP on reviewed HEAD"]
   TEST --> QCRESULT["Independent TL Reviewer<br/>checks QC artifacts"]
   QCRESULT --> QCPASS{"QC evidence accepted<br/>for exact HEAD?"}
-  QCPASS -->|No / uncertain| HOLD["HOLD / BLOCKED<br/>reconcile or escalate"]
+  QCPASS -->|No| HOLD["HOLD<br/>resolve QC findings or escalate<br/>without bypassing code gate"]
+  QCPASS -->|Uncertain evidence| BLOCKED
   QCPASS -->|Yes| OWNER
   QCQ -->|skip| OWNER{"Owner explicitly approves<br/>merge for this PR + HEAD?"}
   OWNER -->|No| WAIT["WAIT<br/>no auto merge"]
