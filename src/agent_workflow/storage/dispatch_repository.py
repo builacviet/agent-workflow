@@ -1,10 +1,8 @@
 """SQLite dispatch storage adapter; no Git/GitHub capabilities."""
 
-from __future__ import annotations
-
 import time
 import uuid
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 from agent_workflow.integrations.github import (
     REPOSITORY,
@@ -12,9 +10,7 @@ from agent_workflow.integrations.github import (
     canonical_repository,
     validate_sha,
 )
-
-if TYPE_CHECKING:
-    from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.service import WorkflowService
 
 
 class DispatchLedger:
