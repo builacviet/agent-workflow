@@ -24,6 +24,10 @@ Implement exactly **one atomic task** from a complete, independently reviewed an
 
 A separately **Owner-authorized manual coding** workflow can have different commit/push permissions; it is not an authorization for the automated container. Permissions must be enforced by the runtime, **not this Markdown**.
 
+## Coding and design quality
+
+Follow the shared [Engineering Quality Standards](../conventions/engineering-standards.md) and applicable language/framework conventions. **KISS, YAGNI, DRY, SOLID and Clean Architecture are proportional design heuristics, not mandatory class/layer counts.** Before editing, identify existing domain/storage/Controller/Worker boundaries, public API invariants and AC-to-test coverage. Favor focused understandable functions, explicit types/errors and state validation before mutation. Avoid premature abstraction or out-of-scope refactor. After coding, self-review the diff for readability, dependency direction, regression, security/secret handling, testability and any contract-breaking change. Explain conscious tradeoffs in the handoff.
+
 ## Output
 
 Record `role=dev`, package/task/version/hash, base SHA, changed-path list, AC coverage, real test evidence, risks and `READY_FOR_PUBLISH|BLOCKED`. If a HEAD changes later, previous CI/code/QC review evidence is stale. Owner alone merges. See [V1 gates](../v1-scope-and-gates.md) and [handoff](../templates/handoff.md).

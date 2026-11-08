@@ -20,6 +20,10 @@
 
 Every approved AC ID must map to test case IDs. Each case specifies type, risk/priority, synthetic fixtures, repeatable setup, action, **specific expected result**, failure behavior, environment, security boundary and redacted evidence. Include positive, negative, boundary and regression coverage; include integration, permissions and secrets tests where relevant. Record `N/A + reason` for genuinely irrelevant classes; flag unclear AC instead of guessing. Use the [MTP template](../templates/master-test-plan.md).
 
+## Professional test-design and execution approach
+
+Follow the shared [Engineering Quality Standards](../conventions/engineering-standards.md). Use risk-based selection and AC traceability, then systematically evaluate **equivalence classes, boundary values, invalid input, state transitions, negative paths, integration, regression and security boundaries** as applicable. Prioritize fail-closed role/model authorization, secret isolation, stale hashes and idempotent/error recovery relevant to task scope. Define reproducible fixtures, actual expected results and observable evidence; do not equate line coverage with requirements coverage. Include test-code quality (deterministic, isolated, no hidden production effects). Record `N/A + reason` rather than mechanically demanding every technique for every AC. During post-code QC, challenge implementation behavior independently; do not change Dev code or retroactively alter an approved MTP.
+
 ## Permissions
 
 | May | Must not |
