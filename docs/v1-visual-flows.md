@@ -45,6 +45,7 @@ flowchart TB
   PC -.->|"Manual repo maintenance"| GH
   CT <-->|"Workflow state"| DB
   MCP <-->|"Authenticated WFC calls"| DB
+  MCP -.->|"Future read-only: latest rejection feedback<br/>requires new approved compatible MCP API"| PLANNER
   CT -->|"Controlled stages"| DC
   DC --> ENG
   ENG --> DEV
@@ -85,13 +86,47 @@ flowchart TD
   RV -->|Yes| PIN["Pin immutable<br/>planning package version/hash"]
   PIN --> TG["Telegram approval request (V1-12 target)<br/>Summary + source links + exact package version/hash"]
   TG --> APPROVE{"Authenticated Owner approves<br/>this exact reviewed package?"}
-  APPROVE -->|No| HOLD["STOP / return for revision"]
-  APPROVE -->|Yes| READY(["Approved package<br/>tasks may be dispatched sequentially"])
+  APPROVE -->|Reject| REJECT["Persist reject reason + package ID/version/hash<br/>NO dispatch; invalidate approval request"]
+  REJECT --> REOPEN["Owner returns to same ChatGPT Planning chat"]
+  REOPEN --> DISCUSS
+  APPROVE -->|Approve| READY(["Approved package<br/>tasks may be dispatched sequentially"])
 ```
 
-**Telegram approval is V1-12 target behavior, not yet deployed.** The Owner reviews the full package via versioned document links; the signed/identity-gated decision refers to an immutable package hash. Owner **planning approval does not authorize automatic PR merges**. Changed approved content must be reviewed and approved again. Unresolved plan revisions escalate rather than looping indefinitely.
+**Telegram approval is V1-12 target behavior, not yet deployed.** The Owner reviews the full package via versioned document links; the authenticated decision refers to an immutable package hash. A Reject **persists the reason, blocks dispatch and returns to the same planning conversation**. The Owner must explicitly ask ChatGPT to resume; the system cannot force a new message into an existing ChatGPT session. Owner **planning approval does not authorize automatic PR merges**. Changed approved content must be reviewed and approved again. Unresolved plan revisions escalate rather than looping indefinitely.
 
-## 3. Execution — sequential atomic PR and exact-SHA gates
+## 3. Owner Reject → resume the same ChatGPT planning conversation (target V1-12)
+
+```mermaid
+flowchart TD
+  R["Telegram: Owner Reject<br/>one immutable package version/hash + reason"] --> STORE["Trusted Controller verifies Owner identity<br/>durably records Reject and blocks dispatch"]
+  STORE --> RETURN["Owner returns to the SAME ChatGPT Planning chat<br/>and asks to continue the rejected package"]
+  RETURN --> ACCESS{"Authenticated read-only<br/>planning-feedback API available?"}
+  ACCESS -->|Yes| READ["ChatGPT queries WFC/MCP<br/>package ID, version, hash, latest Reject + reason"]
+  ACCESS -->|No / unavailable| COPY["STOP automatic retrieval<br/>Ask Owner to paste rejection details<br/>Do not guess feedback or status"]
+  READ --> VALID{"Correct package<br/>and latest rejected version?"}
+  VALID -->|No / ambiguous| COPY
+  VALID -->|Yes| DISCUSS["Owner ↔ ChatGPT TL Planner<br/>Discuss changes and compare versions"]
+  COPY --> DISCUSS
+  DISCUSS --> REVISE["Prepare new version/hash<br/>Plan + Tasks + AC + QC policy"]
+  REVISE --> MTP{"Does QC require<br/>a new or updated MTP?"}
+  MTP -->|Yes| QC["Codex QC updates pre-Dev MTP"]
+  MTP -->|No| REVIEW["Independent Codex TL Reviewer<br/>reviews NEW package"]
+  QC --> REVIEW
+  REVIEW --> RES{"Reviewed and accepted?"}
+  RES -->|No| DISCUSS
+  RES -->|Yes| TELE["Telegram: new approval request<br/>for exact NEW package version/hash"]
+  TELE --> OWNER{"Owner approves new package?"}
+  OWNER -->|Reject| R
+  OWNER -->|Approve| START(["Controller may dispatch first atomic task"])
+```
+
+**Conversation resume contract (target, not implemented):** The Owner returns to the **original ChatGPT Planning conversation** and types a short resume instruction. ChatGPT should identify the currently discussed package from that conversation, then use an **authenticated read-only WFC/MCP interface** to fetch the latest rejection and provenance (package ID, version/hash, Owner decision, reason and timestamp). If there are multiple candidates or the read fails, fail closed and ask the Owner for the exact package/feedback. **The nine existing MCP tools do not currently expose planning rejection feedback**: a compatible, separately approved read-only extension is required; do not pretend that memory or Notion alone proves the authoritative WFC decision.
+
+A rejection never authorizes Dev work, is **not a code-review round**, and does not mutate a previously pinned package. The revised package receives a new version/hash and appropriate QC MTP updates, independent review and fresh Owner approval. The Owner can view diff from rejected version; old Telegram buttons and approvals must be rejected as stale.
+
+**Owner integration test plan:** [V1-12 Owner Reject → ChatGPT round-trip UAT](tasks/V1-12-owner-reject-uat.md). This is a future acceptance test, **not evidence that Telegram→WFC→ChatGPT retrieval currently works**.
+
+## 4. Execution — sequential atomic PR and exact-SHA gates
 
 ```mermaid
 flowchart TD
@@ -124,7 +159,7 @@ flowchart TD
 
 **Failure semantics:** Infrastructure uncertainty is **BLOCKED** and does not consume a code-review round. Two **failed code reviews** mean **ESCALATED**. A changed PR HEAD invalidates earlier CI/review/QC approvals; fresh checks and applicable review are required. QC failures do not silently authorize a third code-review round. No parallel task dispatch or automatic merge.
 
-## 4. Where to read next
+## 5. Where to read next
 
 - [V1 Scope & Gate Contract](v1-scope-and-gates.md): authoritative detailed rules.
 - [Current Phase 3.1 architecture](architecture.md) and [runbook](phase-3.1.md): what is presently implemented, **not** proof of WSL2 deployment.
