@@ -10,8 +10,9 @@
 
 ```mermaid
 flowchart TB
-  OWNER["Owner<br/>Approval authority"]
+  OWNER["Owner<br/>Requirements + approval authority"]
   PLANNER["ChatGPT<br/>TL Planner"]
+  PKG["Reviewed Planning Package<br/>Plan + atomic Tasks + AC + QC policy<br/>conditional QC Master Test Plan<br/>immutable version/hash"]
   PC["Windows PC<br/>Primary Git checkout + manual worktrees"]
 
   subgraph UB["Ubuntu WSL2 — proposed Controller host"]
@@ -24,7 +25,7 @@ flowchart TB
 
     subgraph JOBS["Isolated workflow stages (Docker)"]
       DEV["Codex CLI<br/>Dev"]
-      QC["Codex CLI<br/>QC"]
+      QC["Codex CLI<br/>QC — pre-Dev MTP + post-review tests"]
       REVIEW["Codex CLI<br/>Independent TL Reviewer"]
       WORKER["Trusted Worker<br/>Prepare / Publish + GitHub App"]
     end
@@ -33,11 +34,14 @@ flowchart TB
   subgraph SERVICES["External systems"]
     GH["GitHub<br/>Task branch / Draft PR / merge"]
     CI["GitHub Actions<br/>exact-HEAD CI"]
-    TELE["Telegram<br/>Notifications + Owner gate (V1-12)"]
+    TELE["Telegram (V1-12 target)<br/>Planning-package summary + document links<br/>Approve / Reject exact version/hash"]
   end
 
-  PLANNER -->|"Plan + atomic tasks + AC"| CT
-  OWNER -->|"Planning and PR approvals"| CT
+  OWNER <-->|"Discuss requirements / revise draft Plan"| PLANNER
+  PLANNER -->|"Plan / Tasks / AC / QC policy"| PKG
+  QC -->|"Prepare Master Test Plan if QC required"| PKG
+  REVIEW -->|"Independent Plan + AC + MTP review"| PKG
+  PKG -->|"Reviewed package version/hash"| CT
   PC -.->|"Manual repo maintenance"| GH
   CT <-->|"Workflow state"| DB
   MCP <-->|"Authenticated WFC calls"| DB
@@ -52,10 +56,13 @@ flowchart TB
   GH -->|"Signed CI completion event"| HOOK
   HOOK -->|"Notify pending CI task"| CT
   CT <-->|"Re-query exact HEAD/checks and reconcile"| GH
-  CT -->|"Notify + request approval"| TELE
-  TELE -->|"Owner-identity-gated decision"| CT
-  OWNER -.->|"Approve and perform merge"| GH
+  CT -->|"Send package links + approval request"| TELE
+  TELE <-->|"Owner checks summary, Approve / Reject"| OWNER
+  TELE -->|"Authenticated decision for exact version/hash"| CT
+  OWNER -.->|"Separately approve and perform PR merge"| GH
 ```
+
+**Planning approval channel (target V1-12, NOT deployed):** The Owner and ChatGPT TL Planner discuss drafts directly. If a task requires QC, Codex QC prepares an **AC-traceable pre-Dev Master Test Plan**; independent Codex TL Reviewer reviews the whole package. Only a pinned **reviewed package version/hash** may be presented via Telegram for an Owner-identity-gated **Approve / Reject**. Telegram provides a concise summary and links to the full versioned Plan/Tasks/AC/MTP (for example, Notion/GitHub); it is not the source of the plan itself. Controller must verify the decision and exact package identity before dispatch. Planning approval never automatically approves any subsequent PR merge.
 
 **Webhook signal:** GitHub emits a signed `workflow_run.completed` notification; the receiver validates and durably records it. Controller must re-query GitHub's **current PR HEAD** and named exact-HEAD checks before advancing. After WSL2 sleep/restart, reconcile in-flight CI tasks to recover missed notifications; do not poll every 60 seconds as the primary mechanism. Webhook/adapter are **not yet implemented**.
 
@@ -65,7 +72,8 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-  START([Planning starts]) --> PLAN["ChatGPT TL Planner<br/>Plan + atomic tasks + AC<br/>QC required/skip + reason"]
+  START([Planning starts]) --> DISCUSS["Owner ↔ ChatGPT TL Planner<br/>Discuss requirements and iterate draft"]
+  DISCUSS --> PLAN["ChatGPT TL Planner<br/>Plan + atomic tasks + AC<br/>QC required/skip + reason"]
   PLAN --> QCQ{"QC required<br/>for any task?"}
   QCQ -->|Yes| MTP["Codex QC<br/>Prepare pre-Dev MTP<br/>traced to AC"]
   QCQ -->|No| REV["Independent Codex TL Reviewer<br/>Review Plan / AC / MTP if needed"]
@@ -75,12 +83,13 @@ flowchart TD
   FIX --> REV
   RV -->|Unresolved| ESC["ESCALATED<br/>human resolution"]
   RV -->|Yes| PIN["Pin immutable<br/>planning package version/hash"]
-  PIN --> APPROVE{"Owner approves<br/>entire package?"}
+  PIN --> TG["Telegram approval request (V1-12 target)<br/>Summary + source links + exact package version/hash"]
+  TG --> APPROVE{"Authenticated Owner approves<br/>this exact reviewed package?"}
   APPROVE -->|No| HOLD["STOP / return for revision"]
   APPROVE -->|Yes| READY(["Approved package<br/>tasks may be dispatched sequentially"])
 ```
 
-Owner **planning approval does not authorize automatic PR merges**. Changed approved content must be reviewed and approved again. Unresolved plan revisions escalate rather than looping indefinitely.
+**Telegram approval is V1-12 target behavior, not yet deployed.** The Owner reviews the full package via versioned document links; the signed/identity-gated decision refers to an immutable package hash. Owner **planning approval does not authorize automatic PR merges**. Changed approved content must be reviewed and approved again. Unresolved plan revisions escalate rather than looping indefinitely.
 
 ## 3. Execution — sequential atomic PR and exact-SHA gates
 
