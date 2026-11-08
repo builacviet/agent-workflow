@@ -28,7 +28,7 @@ If the task explicitly approves a different base, also record that ref and its v
 
 ## 2. Create or safely reuse one worktree
 
-Choose a task slug and use it consistently for the directory and branch. The Owner’s checkout ignores `/.worktrees/` through `.git/info/exclude`. In another checkout, verify that the directory is ignored and add `/.worktrees/` to the repository’s local exclude file if needed.
+Choose a task slug and use it consistently for the directory and branch. The repository's tracked root `.gitignore` contains `/.worktrees/`, so every checkout ignores task worktrees under its own `.worktrees/` directory. Check the rule using `git check-ignore -v`; an existing `.git/info/exclude` entry on the Owner's machine is optional and is not required for a fresh checkout.
 
 ```powershell
 $task = 'example-task'
