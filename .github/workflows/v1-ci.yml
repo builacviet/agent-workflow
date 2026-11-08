@@ -1,0 +1,56 @@
+name: V1 CI
+
+# A branch push runs against the actual commit SHA; pull_request also tests
+# the synthetic merge result. The future Controller CI adapter must verify
+# the exact PR head SHA and a successful named check, never a stale merge SHA.
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact triggering ref
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Record tested SHA
+        shell: bash
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Tested SHA: $(git rev-parse HEAD)"
+          if [[ "${{ github.event_name }}" == 'push' ]]; then
+            test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          else
+            echo "PR HEAD (separate from merge SHA): ${{ github.event.pull_request.head.sha }}"
+          fi
+
+      - name: Install project and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test,mcp]'
+          python -m pip check
+
+      - name: Compile Python source and tests
+        run: python -m compileall -q src tests
+
+      - name: Run pytest
+        run: python -m pytest -q
