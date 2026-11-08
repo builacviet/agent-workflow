@@ -1,10 +1,10 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
-from my_wfc.paths import database_path
+from agent_workflow.paths import database_path
 
 from mcp.server.fastmcp import Context
-from my_wfc.contracts import Submission
-from my_wfc.security import authorize_context
-from my_wfc.service import WorkflowService
+from agent_workflow.contracts import Submission
+from agent_workflow.security import authorize_context
+from agent_workflow.service import WorkflowService
 
 
 def default_service():

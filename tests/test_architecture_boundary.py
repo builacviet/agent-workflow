@@ -8,10 +8,10 @@ import subprocess
 
 import pytest
 
-from my_wfc.service import WorkflowService
-from my_wfc.github import WorkflowError
-from my_wfc.controller import DispatchLedger, run_once
-from my_wfc.coder_runtime import CoderRuntime
+from agent_workflow.service import WorkflowService
+from agent_workflow.github import WorkflowError
+from agent_workflow.controller import DispatchLedger, run_once
+from agent_workflow.coder_runtime import CoderRuntime
 from test_my_wfc import spec, payload
 
 
@@ -47,12 +47,12 @@ def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
 
 
 def test_service_has_no_sql_or_external_adapter():
-    import my_wfc.service as service
+    import agent_workflow.service as service
 
     text = inspect.getsource(service)
     assert "sqlite3" not in text and ".execute(" not in text
     assert "verify_remote" not in text and "coder_worker" not in text
-    import my_wfc.controller as controller
+    import agent_workflow.controller as controller
 
     assert "GitHubApp" not in inspect.getsource(controller)
     assert not hasattr(CoderRuntime, "publish")
@@ -113,7 +113,7 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
         service.provision_task(spec() | {"title": "conflicting authorization"})
 
 
-@pytest.mark.parametrize("failure", [None, "test", "publish", "result"])
+@pytest.mark.parametrize("failure", [None, "test", "publish", "result", "pr_url"])
 def test_controller_only_launches_phases_and_receives_result(
     tmp_path, monkeypatch, failure
 ):
@@ -146,10 +146,12 @@ def test_controller_only_launches_phases_and_receives_result(
             result.update(
                 input_sha=data["input_sha"],
                 head_sha="b" * 40,
-                pr_url="https://github.com/builacviet/techlead-review-poc/pull/7",
+                pr_url="https://github.com/builacviet/agent-workflow/pull/7",
             )
             if failure == "result":
                 result["branch"] = "unexpected"
+            if failure == "pr_url":
+                result["pr_url"] = "https://github.com/builacviet/techlead-review-poc/pull/7"
             (stage / "result.json").write_text(json.dumps(result))
         return b"success"
 
@@ -216,7 +218,7 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
                 else {
                     "draft": True,
                     "user": {"login": BOT},
-                    "html_url": "https://github.com/builacviet/techlead-review-poc/pull/7",
+                    "html_url": "https://github.com/builacviet/agent-workflow/pull/7",
                 }
             )
 
@@ -288,7 +290,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
                 else {
                     "draft": True,
                     "user": {"login": BOT},
-                    "html_url": "https://github.com/builacviet/techlead-review-poc/pull/7",
+                    "html_url": "https://github.com/builacviet/agent-workflow/pull/7",
                 }
             )
 
@@ -324,7 +326,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
 
 
 def test_source_digest_frames_paths_and_contents(tmp_path):
-    from my_wfc.coder_runtime import source_digest
+    from agent_workflow.coder_runtime import source_digest
 
     left, right = tmp_path / "left", tmp_path / "right"
     left.mkdir()

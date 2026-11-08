@@ -6,17 +6,17 @@ This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI 
 
 ## Files and responsibilities
 
-- src/my_wfc/server.py: original endpoint and public connectivity tools; registers workflow adapters.
-- src/my_wfc/contracts.py: strict task, finding and submission schemas.
-- src/my_wfc/service.py: SQLite transactions, leases, authorization metadata checks, two-round transitions, context/history and results.
-- src/my_wfc/schema.sql: schema version 1; standard-library sqlite3; foreign keys and uniqueness constraints.
-- src/my_wfc/github.py: **historical pre-Phase-3.1 responsibility** for remote verification; the current WorkflowService is local-only, and Tech Lead verifies GitHub via plugin. Existing file presence does not authorize WFC network calls.
-- src/my_wfc/security.py: constant-time Bearer-header validation and configured operator identity.
-- src/my_wfc/tools.py: authenticated MCP adapter, injected SDK request context, lazy service initialization.
-- src/my_wfc/admin.py: local-only task authorization, historical import, disposable seed/reset. No remote provision/reset tools.
+- src/agent_workflow/server.py: original endpoint and public connectivity tools; registers workflow adapters.
+- src/agent_workflow/contracts.py: strict task, finding and submission schemas.
+- src/agent_workflow/service.py: SQLite transactions, leases, authorization metadata checks, two-round transitions, context/history and results.
+- src/agent_workflow/schema.sql: schema version 1; standard-library sqlite3; foreign keys and uniqueness constraints.
+- src/agent_workflow/github.py: **historical pre-Phase-3.1 responsibility** for remote verification; the current WorkflowService is local-only, and Tech Lead verifies GitHub via plugin. Existing file presence does not authorize WFC network calls.
+- src/agent_workflow/security.py: constant-time Bearer-header validation and configured operator identity.
+- src/agent_workflow/tools.py: authenticated MCP adapter, injected SDK request context, lazy service initialization.
+- src/agent_workflow/admin.py: local-only task authorization, historical import, disposable seed/reset. No remote provision/reset tools.
 - tests/test_my_wfc.py: deterministic unit/concurrency/transaction/security tests and real loopback HTTP/MCP test with mocked GitHub.
 - tests/live_my_wfc_smoke.py: actual server subprocess restart/reconnect check against seeded SQLite, without submitting verdicts.
-- src/my_wfc/resources/TASK-001-reference.md: copied real task document from the reference repository; not invented source contents.
+- src/agent_workflow/resources/TASK-001-reference.md: copied real task document from the reference repository; not invented source contents.
 - pyproject.toml: mcp optional extra pins SDK 1.30.0; test extra supplies pytest; package data includes SQL and historical reference.
 - .gitignore: excludes local environment, credentials, SQLite and backup files.
 - data/workflow.sqlite3: local persistent state; never include in source publication.
@@ -102,8 +102,8 @@ with the changes installed and `gh` read access to the repository:
 $env:WFC_POC_NO_AUTH = "1"
 $env:WFC_DB_PATH = (Join-Path (Get-Location) "data/workflow-poc-unauth.sqlite3")
 # A fresh, empty file should be used. Do NOT copy an existing real workflow.sqlite3.
-python -m my_wfc.admin seed-synthetic
-python -m my_wfc.server
+python -m agent_workflow.admin seed-synthetic
+python -m agent_workflow.server
 ```
 
 Keep the existing allowed-host/DNS-rebinding protection enabled; configure the
@@ -130,9 +130,9 @@ From the consolidated repository root:
 
 ```powershell
 .venv\Scripts\python.exe -m pip install -e '.[mcp,test]'
-.venv\Scripts\python.exe -m my_wfc.admin seed-history
-.venv\Scripts\python.exe -m my_wfc.admin seed-synthetic
-.venv\Scripts\python.exe -m my_wfc.server
+.venv\Scripts\python.exe -m agent_workflow.admin seed-history
+.venv\Scripts\python.exe -m agent_workflow.admin seed-synthetic
+.venv\Scripts\python.exe -m agent_workflow.server
 ```
 
 Editable/src installs use the checkout data/workflow.sqlite3 independent of working directory. Wheel installs without a checkout use ~/.my_wfc/data/workflow.sqlite3. An explicit WFC_DB_PATH must be absolute; blank behaves as unset. Optional WFC_DB_PATH selects an operator-controlled persistent file. Do not change it between restarts unless intentionally using a different POC database. Back up SQLite using its backup API or with the process stopped; do not delete the real DB to reset a fixture.
@@ -154,19 +154,19 @@ Stop only the local server process started for this project, restart the same co
 7. For a two-round local synthetic test, use the deterministic tests with mocked remote SHAs. For a live correction test, locally provision a new synthetic TaskSpec for a disposable authorized branch you explicitly create and push; do not use TASK-001 or pretend an arbitrary hash exists. No worktree/branch automation is provided.
 8. Check get_review_result and get_coder_assignment. Repeat the exact submission: no new round. Change its payload with the same token: reject. Stop/start the server and confirm history persists.
 
-Manual real-GitHub verification (read-only): `gh api repos/builacviet/techlead-review-poc/branches/task%2FTASK-001 --jq .commit.sha`; compare with ff1458fb98dec3a321ca9b96ed8723e40ba882a9. The synthetic fixture uses `branches/poc%2Freview-baseline` and 015ccc535b85ce1d0ad00da787b827970b9bf39a. `gh api repos/builacviet/techlead-review-poc/compare/015ccc535b85ce1d0ad00da787b827970b9bf39a...ff1458fb98dec3a321ca9b96ed8723e40ba882a9 --jq .status` must report ahead. For stale-head behavior on a separately authorized disposable branch, push a real new commit after claiming; submission must fail without changing completed rounds. Network/auth failure must also fail closed. Automated tests cover these failures without modifying remote branches.
+Manual real-GitHub verification (read-only): `gh api repos/builacviet/agent-workflow/branches/task%2FTASK-001 --jq .commit.sha`; compare with ff1458fb98dec3a321ca9b96ed8723e40ba882a9. The synthetic fixture uses `branches/poc%2Freview-baseline` and 015ccc535b85ce1d0ad00da787b827970b9bf39a. `gh api repos/builacviet/agent-workflow/compare/015ccc535b85ce1d0ad00da787b827970b9bf39a...ff1458fb98dec3a321ca9b96ed8723e40ba882a9 --jq .status` must report ahead. For stale-head behavior on a separately authorized disposable branch, push a real new commit after claiming; submission must fail without changing completed rounds. Network/auth failure must also fail closed. Automated tests cover these failures without modifying remote branches.
 
 ## Seed/reset and tests
 
 seed-history is repeatable and refuses to overwrite nonmatching real lifecycle state. Original review times and reviewer identities are null; imported_at explicitly records local import time. Historical High effort remains unverified. seed-synthetic is repeatable and uses a real verified baseline reference. Explicit reset-synthetic deletes ONLY POC-REVIEW-001 after checking its synthetic marker, then reseeds it; real TASK-001 history is untouched. Reset is destructive only to the explicitly disposable fixture, never the default startup operation.
 
 ```powershell
-.venv\Scripts\python.exe -m my_wfc.admin reset-synthetic
+.venv\Scripts\python.exe -m agent_workflow.admin reset-synthetic
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe tests/live_my_wfc_smoke.py
 ```
 
-Local authorization of a future task is `python -m my_wfc.admin provision --file authorized-task.json` with TaskSpec fields defined in contracts.py; transport cannot create/retarget authorizations. Review effort, task AC and repository identity are immutable once provisioned. The default allowed repository is builacviet/techlead-review-poc.
+Local authorization of a future task is `python -m agent_workflow.admin provision --file authorized-task.json` with TaskSpec fields defined in contracts.py; transport cannot create/retarget authorizations. Review effort, task AC and repository identity are immutable once provisioned. The default allowed repository is builacviet/agent-workflow.
 
 ## Remaining limits / Phase 3 points
 

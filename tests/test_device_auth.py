@@ -8,14 +8,14 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from my_wfc.coder_runtime import CoderRuntime
+from agent_workflow.coder_runtime import CoderRuntime
 
 
 @pytest.mark.parametrize(
     "mode", ["code", "test", "prepare", "publish", "probe"]
 )
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
-    import my_wfc.coder_runtime as module
+    import agent_workflow.coder_runtime as module
 
     profile = tmp_path / "profile.json"
     profile.write_text("{}")

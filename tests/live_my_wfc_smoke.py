@@ -50,7 +50,7 @@ def main():
             port = sock.getsockname()[1]
         token = secrets.token_urlsafe(32)
         env = {**os.environ, "WFC_AUTH_TOKEN": token, "WFC_REVIEWER_ID": "local-smoke-test"}
-        process = subprocess.Popen([sys.executable, "-c", f"from my_wfc import server; server.mcp.settings.port={port}; server.mcp.run(transport='streamable-http')"],
+        process = subprocess.Popen([sys.executable, "-c", f"from agent_workflow import server; server.mcp.settings.port={port}; server.mcp.run(transport='streamable-http')"],
                                    cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 15

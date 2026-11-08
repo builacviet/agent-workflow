@@ -2,7 +2,7 @@
 
 from pathlib import Path, PurePosixPath
 import os, stat, subprocess
-from my_wfc.budget import check_deadline, operation_timeout
+from agent_workflow.budget import check_deadline, operation_timeout
 from coder_worker.github import WorkflowError
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}

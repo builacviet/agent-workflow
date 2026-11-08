@@ -13,7 +13,7 @@ Sources and governing handoff:
 - [Authorized CL-12.4 task](https://app.notion.com/p/410f92014abd8100ab84da07b4057f75), including its later Owner authorization.
 - [CL-10.1 approved audit](https://app.notion.com/p/410f92014abd8186b104d65641e0c9ca): operator-reported inventory and authority selection, not a new inspection by this Coder.
 - [Parent CL-12 Decision Set v0.2](https://app.notion.com/p/410f92014abd81cdbceded689b7d4945), particularly ADR-04/05/08.
-- [CL-12.3 PR #9 and full Coder handoff](https://github.com/builacviet/techlead-review-poc/pull/9), merged at this base; `docs/adr/CL-12-module-boundaries.md` and `docs/adr/CL-12-current-state.md`.
+- [CL-12.3 PR #9 and full Coder handoff](https://github.com/builacviet/agent-workflow/pull/9), merged at this base; `docs/adr/CL-12-module-boundaries.md` and `docs/adr/CL-12-current-state.md`.
 - `AGENTS.md`, `docs/architecture.md`, `docs/review-policy.md`, `docs/handoff.md`, `docs/tasks/CL-12.md`; relevant source/schema/config and existing tests.
 
 Only `docs/adr/CL-12-persistence.md` changes. Historical Proposed/locked notices

@@ -4,8 +4,8 @@ from contextlib import contextmanager, AbstractContextManager
 from pathlib import Path
 import sqlite3
 from typing import Protocol
-from my_wfc.budget import check_deadline, operation_timeout
-from my_wfc.github import WorkflowError
+from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.github import WorkflowError
 
 
 class WorkflowUnit(Protocol):

@@ -15,10 +15,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from my_wfc.coder_runtime import CoderRuntime, safe_path
+from agent_workflow.coder_runtime import CoderRuntime, safe_path
 from coder_worker.repository import git
-from my_wfc.github import WorkflowError
-from my_wfc.service import WorkflowService
+from agent_workflow.github import WorkflowError
+from agent_workflow.service import WorkflowService
 
 
 def main() -> None:

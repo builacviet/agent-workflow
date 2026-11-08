@@ -3,10 +3,13 @@
 import time
 import uuid
 from typing import Callable
-from my_wfc.github import WorkflowError, validate_sha
-from my_wfc.service import WorkflowService
-
-REPOSITORY = "builacviet/techlead-review-poc"
+from agent_workflow.github import (
+    REPOSITORY,
+    WorkflowError,
+    canonical_repository,
+    validate_sha,
+)
+from agent_workflow.service import WorkflowService
 
 
 class DispatchLedger:
@@ -40,7 +43,7 @@ class DispatchLedger:
                 task = dict(row)
                 if (
                     task["task_id"] not in task_ids
-                    or task["repository"] != REPOSITORY
+                    or canonical_repository(task["repository"]) != REPOSITORY
                 ):
                     continue
                 sha = task["current_head_sha"] or task["base_sha"]

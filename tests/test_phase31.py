@@ -7,11 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from coder_worker.app_auth import AppVerifier, BOT, GitHubApp, REPOSITORY
-from my_wfc.coder_runtime import safe_path, validate_config
+from agent_workflow.coder_runtime import safe_path, validate_config
 from coder_worker.repository import changes
-from my_wfc.controller import DispatchLedger, run_once
-from my_wfc.github import WorkflowError
-from my_wfc.service import WorkflowService
+from agent_workflow.controller import DispatchLedger, run_once
+from agent_workflow.github import LEGACY_REPOSITORY, WorkflowError
+from agent_workflow.service import WorkflowService, encode
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -89,6 +89,38 @@ def test_success_handoff_and_idempotency(state):
     assert not run_once(state, ledger, {"P31"}, execute)
     assert state.get_review_context("P31")["status"] == "READY_IN_REVIEW"
     assert state.get_review_context("P31")["completed_review_rounds"] == 0
+
+
+def test_pre_rename_task_can_dispatch_and_handoff_without_rewriting_repository(state):
+    with state.repository.read() as db:
+        spec = json.loads(state.task(db, "P31")["metadata"])
+    legacy_spec = spec | {"repository": LEGACY_REPOSITORY}
+    with state.repository.raw_transaction() as db:
+        db.execute(
+            "UPDATE tasks SET repository=?, metadata=? WHERE task_id=?",
+            (LEGACY_REPOSITORY, encode(legacy_spec), "P31"),
+        )
+
+    state.provision_task(spec)
+
+    def execute(claim, context):
+        assert context["repository"] == REPOSITORY
+        state.register_task_handoff(
+            "P31", LEGACY_REPOSITORY, "codex/test", BASE, HEAD,
+            "docs/handoff.md", "synthetic tests",
+        )
+        return HEAD
+
+    assert run_once(state, DispatchLedger(state), {"P31"}, execute)
+    assert state.list_review_queue()[0]["repository"] == REPOSITORY
+    context = state.get_review_context("P31")
+    assert context["github_references"]["complete_diff"] == (
+        f"https://github.com/{REPOSITORY}/compare/{BASE}...{HEAD}"
+    )
+    with state.repository.read() as db:
+        task = state.task(db, "P31")
+    assert task["repository"] == LEGACY_REPOSITORY
+    assert task["metadata"] == encode(legacy_spec)
 
 
 def test_runtime_exception_blocks_slot_and_sanitizes_ledger(state):
@@ -252,7 +284,7 @@ def test_jwt_cache_refresh_scope_and_identity(app):
     assert client.token() == "synthetic-only"
     assert len(transport.calls) == 3
     assert transport.calls[-1][2] == {
-        "repositories": ["techlead-review-poc"],
+        "repositories": ["agent-workflow"],
         "permissions": {"contents": "write", "pull_requests": "write"},
     }
     assert client.identity() == (
@@ -279,7 +311,8 @@ def test_app_identity_and_stale_sha_fail_closed(app):
         client.token()
     transport.slug = "builacviet-wfc-coder"
     verifier = AppVerifier(client)
-    verifier(REPOSITORY, "codex/test", BASE, HEAD)
+    verifier(LEGACY_REPOSITORY, "codex/test", BASE, HEAD)
+    assert transport.calls[-2][1] == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
     with pytest.raises(WorkflowError):
         verifier(REPOSITORY, "codex/test", BASE, BASE)
     with pytest.raises(WorkflowError):
@@ -341,7 +374,7 @@ def test_snapshot_real_baseline_includes_safe_templates(tmp_path):
 
 
 def test_controller_process_lock_excludes_reconciliation(tmp_path):
-    from my_wfc.controller import process_lock
+    from agent_workflow.controller import process_lock
 
     lock = tmp_path / "controller.lock"
     with process_lock(lock):
@@ -414,7 +447,9 @@ def config(tmp_path):
     }
 
 
-def test_valid_config_and_profile_digest(config):
+@pytest.mark.parametrize("repository", [REPOSITORY, LEGACY_REPOSITORY])
+def test_valid_config_and_profile_digest(config, repository):
+    config["repository"] = repository
     validate_config(config)
     config["seccomp_sha256"] = "0" * 64
     with pytest.raises(WorkflowError, match="digest"):
@@ -424,6 +459,7 @@ def test_valid_config_and_profile_digest(config):
 @pytest.mark.parametrize(
     "key,value",
     [
+        ("repository", "other/agent-workflow"),
         ("codex_auth_volume", "workflow-console-v2-codex-auth-20261029"),
         ("scratch", "relative"),
         ("image", "bad image"),
@@ -500,15 +536,15 @@ def test_documented_shared_database_configuration(config, tmp_path):
     ["agent_workflow_v2", "workflow_console_v2", "workflow-console-v2"],
 )
 def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
-    from my_wfc.coder_runtime import independent_path
+    from agent_workflow.coder_runtime import independent_path
 
     with pytest.raises(WorkflowError, match="v2 paths"):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
 
 
 def test_cleanup_remains_available_after_deadline(monkeypatch, state):
-    import my_wfc.budget as budget
-    import my_wfc.coder_runtime as runtime
+    import agent_workflow.budget as budget
+    import agent_workflow.coder_runtime as runtime
 
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])
@@ -526,7 +562,7 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state):
 
 
 def test_expired_completion_never_marks_dispatch_done(state, monkeypatch):
-    import my_wfc.budget as budget
+    import agent_workflow.budget as budget
 
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])
@@ -550,7 +586,7 @@ def test_expired_completion_never_marks_dispatch_done(state, monkeypatch):
 
 
 def test_wall_clock_rollback_does_not_extend_budget(monkeypatch):
-    import my_wfc.budget as budget
+    import agent_workflow.budget as budget
 
     wall, monotonic = [1000], [500]
     monkeypatch.setattr(budget.time, "time", lambda: wall[0])

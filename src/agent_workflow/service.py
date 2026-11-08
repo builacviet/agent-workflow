@@ -4,9 +4,14 @@ import json
 import time
 import uuid
 from urllib.parse import quote
-from my_wfc.repository import WorkflowRepository, SQLiteWorkflowRepository
-from my_wfc.contracts import Submission, TaskSpec
-from my_wfc.github import WorkflowError, validate_sha
+from agent_workflow.repository import WorkflowRepository, SQLiteWorkflowRepository
+from agent_workflow.contracts import Submission, TaskSpec
+from agent_workflow.github import (
+    REPOSITORY,
+    WorkflowError,
+    canonical_repository,
+    validate_sha,
+)
 
 
 def encode(value):
@@ -30,9 +35,10 @@ class WorkflowService:
         self.db_path = str(db_path)
         self.clock = clock
         self.lease_seconds = lease_seconds
-        self.allowed = set(
-            allowed_repositories or {"builacviet/techlead-review-poc"}
-        )
+        self.allowed = {
+            canonical_repository(name)
+            for name in (allowed_repositories or {REPOSITORY})
+        }
         self.effort_verifier = effort_verifier
         self.efforts = efforts
         self.repository = repository if repository is not None else SQLiteWorkflowRepository(db_path)
@@ -64,6 +70,7 @@ class WorkflowService:
     def provision_task(self, spec: dict):
         """Local operator-only authorization entry point; deliberately not an MCP tool."""
         spec = TaskSpec.model_validate(spec).model_dump()
+        spec["repository"] = canonical_repository(spec["repository"])
         if (
             spec["repository"] not in self.allowed
             or spec["requested_effort"] not in self.efforts
@@ -85,7 +92,11 @@ class WorkflowService:
         with self.transaction() as db:
             existing = db.find_authorization((spec["task_id"],))
             if existing:
-                if existing["metadata"] != encode(spec):
+                stored_spec = json.loads(existing["metadata"])
+                stored_spec["repository"] = canonical_repository(
+                    stored_spec["repository"]
+                )
+                if encode(stored_spec) != encode(spec):
                     raise WorkflowError(
                         "task authorization conflicts with stored metadata"
                     )
@@ -128,8 +139,8 @@ class WorkflowService:
         with self.transaction() as db:
             task = self.task(db, task_id)
             spec = json.loads(task["metadata"])
-            if (repository, branch, base_sha) != (
-                task["repository"],
+            if (canonical_repository(repository), branch, base_sha) != (
+                canonical_repository(task["repository"]),
                 task["branch"],
                 task["base_sha"],
             ):
@@ -194,7 +205,7 @@ class WorkflowService:
                 {
                     "task_id": t["task_id"],
                     "title": json.loads(t["metadata"])["title"],
-                    "repository": t["repository"],
+                    "repository": canonical_repository(t["repository"]),
                     "branch": t["branch"],
                     "head_sha": t["current_head_sha"],
                     "requested_effort": t["requested_effort"],
@@ -252,6 +263,7 @@ class WorkflowService:
             result = {
                 **spec,
                 **task,
+                "repository": canonical_repository(task["repository"]),
                 "review_round": min(task["completed_review_rounds"] + 1, 2),
                 "rounds_remaining": 2 - task["completed_review_rounds"],
                 "previous_reviews": history,
@@ -263,7 +275,7 @@ class WorkflowService:
             result["previous_verdict"] = (
                 previous["verdict"] if previous else None
             )
-            root = f"https://github.com/{task['repository']}"
+            root = f"https://github.com/{result['repository']}"
             head = task["current_head_sha"]
             result["github_references"] = {
                 "complete_diff": f"{root}/compare/{task['base_sha']}...{head}"

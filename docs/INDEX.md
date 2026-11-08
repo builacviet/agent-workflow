@@ -1,6 +1,6 @@
 # Documentation map — agent fast start
 
-**Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled for merged baseline: 2026-11-07, after DOC-02 [PR #16](https://github.com/builacviet/techlead-review-poc/pull/16) (merge `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`). Later documentation proposals are not assumed merged.
+**Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled for merged baseline: 2026-11-07, after DOC-02 [PR #16](https://github.com/builacviet/agent-workflow/pull/16) (merge `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`). Later documentation proposals are not assumed merged.
 
 ## First read — every agent
 
@@ -17,7 +17,7 @@
 | **TARGET (Owner-selected development design)** | [CL-12 consolidated ADR](adr/CL-12-architecture.md), with [Executor security](adr/CL-12-executor-security.md) and [deployment](adr/CL-12-deployment.md) | Rootless Podman Linux-host Executor, authenticated typed IPC, ephemeral Prepare/Coder/Test/Publish, GHCR digest cache and staged observability. **Not implemented or production-approved by merging an ADR** |
 | **EVIDENCE / HISTORY** | [ADR inventory](adr/CL-12-current-state.md), [historical handoffs](history/handoff-log.md), [old workflow notes](poc-workflow.md), reviewed PRs | Dated snapshots, decisions, limitations; not automatically today's running state |
 
-**As of 2026-11-07:** CL-12.5 [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11), CL-12.6 [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12) and CL-12.7 [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) are **merged as documentation**. Controller→Executor IPC transport and crash/job idempotency are *pending implementation/test*, not settled runtime facts. P1 [PR #14](https://github.com/builacviet/techlead-review-poc/pull/14) is a 2026-11-06 **BLOCKED read-only preflight**; later WSL2 P2/P3 are limited feasibility reports, with P3 source evidence review outstanding. Before making a time-sensitive claim, re-check GitHub and the active Notion status.
+**As of 2026-11-07:** CL-12.5 [PR #11](https://github.com/builacviet/agent-workflow/pull/11), CL-12.6 [PR #12](https://github.com/builacviet/agent-workflow/pull/12) and CL-12.7 [PR #13](https://github.com/builacviet/agent-workflow/pull/13) are **merged as documentation**. Controller→Executor IPC transport and crash/job idempotency are *pending implementation/test*, not settled runtime facts. P1 [PR #14](https://github.com/builacviet/agent-workflow/pull/14) is a 2026-11-06 **BLOCKED read-only preflight**; later WSL2 P2/P3 are limited feasibility reports, with P3 source evidence review outstanding. Before making a time-sensitive claim, re-check GitHub and the active Notion status.
 
 ## Read by task type (pick a route, not the whole tree)
 
