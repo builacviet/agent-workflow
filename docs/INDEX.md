@@ -30,6 +30,7 @@
 | SQLite/schema/migration | [CL-12 persistence ADR](adr/CL-12-persistence.md), [consolidated ADR](adr/CL-12-architecture.md) relevant sections, live source/tests; do not infer migration is deployed |
 | Executor / worker security / Podman | [CL-12 consolidated ADR](adr/CL-12-architecture.md), [Executor security](adr/CL-12-executor-security.md), [deployment](adr/CL-12-deployment.md), applicable approved task and negative-test plan |
 | CI images / GHCR / telemetry | [Deployment ADR §§9–10](adr/CL-12-deployment.md), [consolidated ADR](adr/CL-12-architecture.md); future implementation requires explicit authorization |
+| Manual local development / Codex task setup | [Local worktree guide](guides/local-worktrees.md) for branch, base, path and handoff checks |
 | Tech Lead review or Coder handoff | [Review policy](review-policy.md), [short handoff template](templates/handoff.md), exact PR diff/AC and actual test results; history only if comparison matters |
 | Architecture change / cross-module refactor | [Consolidated ADR](adr/CL-12-architecture.md), [module boundaries](adr/CL-12-module-boundaries.md), [current-state inventory](adr/CL-12-current-state.md) only where needed |
 | Deployment / migration operations | [Current Phase 3.1 runbook](phase-3.1.md), [Docker MCP POC](docker-mcp.md) as applicable, then target [deployment ADR](adr/CL-12-deployment.md) **as proposal**, not run instructions |

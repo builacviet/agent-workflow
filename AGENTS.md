@@ -4,11 +4,18 @@
 
 ## Scope, code and security invariants
 
-- Work only on the Owner/Tech Lead-authorized task and changed-path allowlist. Record exact base SHA, target branch, worktree and head SHA; never edit unrelated projects, credentials, DBs, containers, volumes, tunnels or environments without an explicit task-specific permission. Prefer a dedicated branch/worktree; do not force-push or merge without Owner authorization.
+- Work only on the Owner/Tech Lead-authorized task and changed-path allowlist. Record exact base SHA, target branch, worktree and head SHA; never edit unrelated projects, credentials, DBs, containers, volumes, tunnels or environments without an explicit task-specific permission. Do not force-push or merge without Owner authorization.
 - Target Python 3.11+, type hints, PEP 8, small functions and explicit errors. Preserve order-service `Decimal` rules: finite/nonnegative amounts, never implicit float conversions. Keep `order_service` and the WFC package independently importable; no casual cross-package dependency or unrequested framework rewrite.
 - Require deterministic pytest coverage for behavior changes, invalid input and regression. At implementation handoff, run `python -m pytest -q` where possible and record the **actual** environment, command, exit code, skipped count and limitations. Never invent tests, CI checks, Linux security evidence or model effort.
 - Use principle of least privilege. **CURRENT Phase 3.1 exception:** the trusted host Controller invokes the host Docker CLI directly and therefore has broad engine authority; this is an existing, unverified runtime risk, **not** proof that the TARGET boundary is in place. **TARGET/new changes:** do not delegate a generic Docker/Podman engine socket/API to MCP, Controller, Codex, Worker or monitoring; require the separately approved typed/authenticated Executor boundary. Do not leak PEM/tokens, GitHub auth, WFC DB or arbitrary host paths into untrusted stages. Avoid unauthorized installs, engine commands, external effects or implicit DB migration.
 - Read [`docs/architecture.md`](docs/architecture.md) for **as-built** code and [CL-12 architecture ADR](docs/adr/CL-12-architecture.md) for **target development architecture** only when relevant. In particular, Linux-host Rootless Podman Executor, GHCR and Grafana are **planned**, not proof of an active deployment.
+
+## Manual local worktrees
+
+- Keep the primary `main` checkout clean and update it only by fast-forward from `origin/main`. Verify `origin`, fetch, and record the `origin/main` SHA before creating a branch. Use and record the exact alternate base only when explicitly approved.
+- Use one worktree per task under the primary checkout’s ignored `.worktrees/<task>` on `codex/<task>`. Reuse it only when its branch and base match and its state is clean or explicitly reconciled. Never delete or reset someone else’s worktree.
+- Before editing, check `git worktree list` and `git status`, confirm the actual path and branch even in Codex automatic Worktree mode, and read `AGENTS.md` in that worktree. Use disposable test configuration and state. Never copy active databases or credentials.
+- At handoff, report the exact worktree path, branch, base and head SHAs, test results, and PR URL. Push the task branch and open a Draft PR when requested. Only the Owner decides whether to merge. See the [local worktree guide](docs/guides/local-worktrees.md) for the Owner’s Windows setup and commands.
 
 ## Role, review and handoff contract
 
