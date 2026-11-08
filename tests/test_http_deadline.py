@@ -13,9 +13,10 @@ import pytest
 
 from coder_worker import app_auth
 from agent_workflow.budget import cleanup_budget, dispatch_budget
-from agent_workflow.controller import DispatchLedger, run_once
-from agent_workflow.github import WorkflowError
-from agent_workflow.service import WorkflowService
+from agent_workflow.orchestration.controller import run_once
+from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.service import WorkflowService
 
 
 @pytest.fixture

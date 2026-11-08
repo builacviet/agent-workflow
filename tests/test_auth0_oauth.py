@@ -7,7 +7,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from agent_workflow.auth0_oauth import Auth0TokenVerifier, load_auth0_config
+from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier, load_auth0_config
 
 
 @pytest.fixture
@@ -131,14 +131,14 @@ def test_jwks_unavailable_fails_closed(jwt_case):
 
 
 def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config):
-    from agent_workflow.security import authorize_context
+    from agent_workflow.mcp.security import authorize_context
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     with pytest.raises(PermissionError, match="OAuth"):
         authorize_context(None)
 
 
 def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
-    from agent_workflow.server import create_mcp_server
+    from agent_workflow.mcp.server import create_mcp_server
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.delenv("WFC_AUTH0_ISSUER", raising=False)
     monkeypatch.delenv("WFC_AUTH0_ALLOWED_SUB", raising=False)
@@ -148,7 +148,7 @@ def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
 
 
 def test_auth0_transport_advertises_protected_resource(monkeypatch):
-    from agent_workflow.server import create_mcp_server
+    from agent_workflow.mcp.server import create_mcp_server
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")

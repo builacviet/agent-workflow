@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent_workflow.budget import check_deadline, operation_timeout
-from agent_workflow.github import REPOSITORY
+from agent_workflow.integrations.github import REPOSITORY
 from coder_worker.github import GitHubVerifier, WorkflowError
 
 BOT = "builacviet-wfc-coder[bot]"

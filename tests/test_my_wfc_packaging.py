@@ -29,14 +29,38 @@ def test_database_override_must_be_stable(monkeypatch, tmp_path):
 
 def test_packaged_reference_and_schema_available():
     from importlib.resources import files
+
     assert len(historical_spec()["acceptance_criteria"]) == 5
-    assert "CREATE TABLE IF NOT EXISTS tasks" in files("agent_workflow").joinpath("schema.sql").read_text()
+    schema = files("agent_workflow.storage").joinpath("schema.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS tasks" in schema
 
 
 def test_installed_default_preserves_legacy_state_path(monkeypatch, tmp_path):
     monkeypatch.delenv("WFC_DB_PATH", raising=False)
     monkeypatch.setattr(paths, "__file__", str(tmp_path / "agent_workflow" / "paths.py"))
     assert database_path() == Path.home() / ".my_wfc/data/workflow.sqlite3"
+
+
+@pytest.mark.parametrize(
+    ("module", "package"),
+    [
+        ("contracts", "domain"),
+        ("service", "domain"),
+        ("dispatch_repository", "storage"),
+        ("repository", "storage"),
+        ("controller", "orchestration"),
+        ("coder_runtime", "runners"),
+        ("github", "integrations"),
+        ("auth0_oauth", "mcp"),
+        ("security", "mcp"),
+        ("server", "mcp"),
+        ("tools", "mcp"),
+    ],
+)
+def test_flat_imports_resolve_to_the_same_module(module, package):
+    original = importlib.import_module(f"agent_workflow.{module}")
+    implementation = importlib.import_module(f"agent_workflow.{package}.{module}")
+    assert original is implementation
 
 
 @pytest.mark.parametrize("module", ["admin", "controller", "server"])
