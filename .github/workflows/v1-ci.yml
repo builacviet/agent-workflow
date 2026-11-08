@@ -25,10 +25,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout exact triggering ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -51,6 +53,14 @@ jobs:
 
       - name: Compile Python source and tests
         run: python -m compileall -q src tests
+
+      # The Compose parser test requires filenames declared by env_file,
+      # but these are empty stubs; no production credentials are needed.
+      - name: Prepare inert Compose env files (parse-only)
+        run: |
+          mkdir -p .runtime
+          : > .runtime/controller-mcp.env
+          : > .runtime/ngrok.env
 
       - name: Run pytest
         run: python -m pytest -q
