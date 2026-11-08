@@ -12,9 +12,10 @@
 | CI check name/event/tested SHA/conclusion and trusted provenance | `<exact HEAD push check + optional PR merge check>` |
 | Independent TL code verdict and reviewed SHA | `<reference, verified matches HEAD>` |
 | QC role/session, environment/image, isolation, test budget | `<trusted run configuration>` |
-| Test harness/script version/hash, command allowlist and fixture ID | `<runner-captured artifacts, no hidden production state>` |
+| QC execution attempt ID and stable evidence-review key | `<trusted ID; does not change on corrected report revisions>` |
+| **Per-attempt** harness/script SHA-256 and approved commands | `<pinned hash for each execution/run attempt>` |
+| Fixture ID, tested snapshot digest and artifact-manifest SHA-256 | `<externally verified; no production state>` |
 | Execution timestamp, runner/operator and artifact storage/digests | `<observed; redact tokens and personal secrets>` |
-| Independent TL QC verdict / Owner merge decision | `PENDING` until independently recorded outside this report |
 
 ## 2. Per-test results and defects
 
@@ -33,7 +34,11 @@
 - Trusted Worker/Controller validates actual changed paths against the approved allowlist; QC/Reviewer do not self-assert a clean diff. Snapshots without Git metadata require an externally supplied tested snapshot manifest/digest.
 - Re-query or trusted re-attestation of the current PR HEAD is required before accepting QC evidence and again before Owner merge reconciliation. Any HEAD or package/MTP mismatch makes old case results stale.
 
-## 4. Execution summary (populate only after actual run)
+## 4. Freeze and independently review
+
+**Freeze the report at `QC_EVIDENCE_READY`.** A trusted Controller/operator records **`qc_report_sha256` of the finalized report bytes, per-attempt `harness_sha256`, and `artifact_manifest_sha256`** outside the report. A correction makes a **new frozen report version/hash** but remains within the **same QC execution attempt's two-submission evidence-review sequence**. Report revisions do not reset its counter. Any changed report/harness/artifact invalidates the earlier TL verdict. TL QC verdict and Owner merge decision are stored only in **separate external gate records**, never in this frozen report.
+
+## 5. Execution summary (populate only after actual run)
 
 | Item | Observed value |
 | --- | --- |
@@ -41,7 +46,7 @@
 | Bounded commands, exit codes, environment and sanitized artifact refs | `<actual>` |
 | Findings / remaining risk / scope and N/A decisions | `<ids, rationale>` |
 | QC handoff status | `QC_EVIDENCE_READY|BLOCKED`, not self-approval |
-| Independent TL QC review | `PENDING|QC_REVIEW_PASS|QC_CHANGES_REQUIRED|BLOCKED` |
-| Owner merge authorization | `PENDING` until independent Owner action |
+
+**Assertion integrity:** Verify each harness case actually asserts the frozen MTP expectation, including negative cases. A zero exit from skipped, tautological, weakened or vacuous assertions is insufficient for PASS. Preserve **per-run** script hash, command, run ID, tested HEAD and artifacts, including failed attempts. Independent TL checks hashes and assertions before accepting QC evidence.
 
 **No silent result conversion:** A QC execution with any unresolved required `FAIL`, `BLOCKED` or `NOT RUN` cannot receive a full `QC_REVIEW_PASS`. Refer to [QC contract](../roles/qc.md), [TL Reviewer](../roles/tl-reviewer.md) and [MTP template](master-test-plan.md).
