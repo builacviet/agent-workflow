@@ -1,0 +1,167 @@
+# Agent Workflow V1 — Visual Architecture & Workflow
+
+> **Design status:** V1 scope is Owner-approved ([PR #22](https://github.com/builacviet/agent-workflow/pull/22), [scope clarification PR #23](https://github.com/builacviet/agent-workflow/pull/23)). Diagrams show the **target V1 flow**, not evidence that all steps are deployed.
+>
+> **Target host:** Owner's **Ubuntu on WSL2 / Windows**. Linux/systemd/Docker access, credential readiness, WSL2 start/restart behavior and 24/7 availability remain to be verified in **V1-01**; systemd deployment is in **V1-13**.
+>
+> **Out of V1:** Executor, Podman, Controller-to-Executor IPC, epic/parallel branches, auto-merge.
+
+## 1. System architecture (target V1)
+
+```mermaid
+flowchart TB
+  OWNER["Owner<br/>Requirements + approval authority"]
+  PLANNER["ChatGPT<br/>TL Planner"]
+  PKG["Reviewed Planning Package<br/>Plan + atomic Tasks + AC + QC policy<br/>conditional QC Master Test Plan<br/>immutable version/hash"]
+  PC["Windows PC<br/>Primary Git checkout + manual worktrees"]
+
+  subgraph UB["Ubuntu WSL2 — proposed Controller host"]
+    CT["Trusted Controller<br/>systemd target (V1-13)"]
+    DB[("SQLite / WFC<br/>state and gate evidence")]
+    MCP["Existing MCP /mcp<br/>9 compatible tools"]
+    HOOK["Trusted GitHub Webhook receiver<br/>HMAC verified + durable event<br/>target V1-03, not deployed"]
+    DC["Docker CLI<br/>trusted host invocation"]
+    ENG["Docker Engine<br/>availability to verify (V1-01)"]
+
+    subgraph JOBS["Isolated workflow stages (Docker)"]
+      DEV["Codex CLI<br/>Dev"]
+      QC["Codex CLI<br/>QC — pre-Dev MTP + post-review tests"]
+      REVIEW["Codex CLI<br/>Independent TL Reviewer"]
+      WORKER["Trusted Worker<br/>Prepare / Publish + GitHub App"]
+    end
+  end
+
+  subgraph SERVICES["External systems"]
+    GH["GitHub<br/>Task branch / Draft PR / merge"]
+    CI["GitHub Actions<br/>exact-HEAD CI"]
+    TELE["Telegram (V1-12 target)<br/>Planning-package summary + document links<br/>Approve / Reject exact version/hash"]
+  end
+
+  OWNER <-->|"Discuss requirements / revise draft Plan"| PLANNER
+  PLANNER -->|"Plan / Tasks / AC / QC policy"| PKG
+  QC -->|"Prepare Master Test Plan if QC required"| PKG
+  REVIEW -->|"Independent Plan + AC + MTP review"| PKG
+  PKG -->|"Reviewed package version/hash"| CT
+  PC -.->|"Manual repo maintenance"| GH
+  CT <-->|"Workflow state"| DB
+  MCP <-->|"Authenticated WFC calls"| DB
+  MCP -.->|"Future read-only: latest rejection feedback<br/>requires new approved compatible MCP API"| PLANNER
+  CT -->|"Controlled stages"| DC
+  DC --> ENG
+  ENG --> DEV
+  ENG --> QC
+  ENG --> REVIEW
+  ENG --> WORKER
+  WORKER -->|"Commit / push / Draft PR"| GH
+  GH -->|"PR checks"| CI
+  GH -->|"Signed CI completion event"| HOOK
+  HOOK -->|"Notify pending CI task"| CT
+  CT <-->|"Re-query exact HEAD/checks and reconcile"| GH
+  CT -->|"Send package links + approval request"| TELE
+  TELE <-->|"Owner checks summary, Approve / Reject"| OWNER
+  TELE -->|"Authenticated decision for exact version/hash"| CT
+  OWNER -.->|"Separately approve and perform PR merge"| GH
+```
+
+**Planning approval channel (target V1-12, NOT deployed):** The Owner and ChatGPT TL Planner discuss drafts directly. If a task requires QC, Codex QC prepares an **AC-traceable pre-Dev Master Test Plan**; independent Codex TL Reviewer reviews the whole package. Only a pinned **reviewed package version/hash** may be presented via Telegram for an Owner-identity-gated **Approve / Reject**. Telegram provides a concise summary and links to the full versioned Plan/Tasks/AC/MTP (for example, Notion/GitHub); it is not the source of the plan itself. Controller must verify the decision and exact package identity before dispatch. Planning approval never automatically approves any subsequent PR merge.
+
+**Webhook signal:** GitHub emits a signed `workflow_run.completed` notification; the receiver validates and durably records it. Controller must re-query GitHub's **current PR HEAD** and named exact-HEAD checks before advancing. After WSL2 sleep/restart, reconcile in-flight CI tasks to recover missed notifications; do not poll every 60 seconds as the primary mechanism. Webhook/adapter are **not yet implemented**.
+
+**Trust boundary:** Only the **trusted Controller** invokes the existing Docker CLI, and only the **trusted publishing Worker** uses GitHub App credentials. Untrusted Codex stages do not receive GitHub secrets, WFC database, arbitrary host paths or Docker engine access. The host Docker authority is broad and remains an acknowledged risk, **not** proof of production isolation. Diagram edges are design intent, not verified installed integrations.
+
+## 2. Planning — one Owner approval for a complete package
+
+```mermaid
+flowchart TD
+  START([Planning starts]) --> DISCUSS["Owner ↔ ChatGPT TL Planner<br/>Discuss requirements and iterate draft"]
+  DISCUSS --> PLAN["ChatGPT TL Planner<br/>Plan + atomic tasks + AC<br/>QC required/skip + reason"]
+  PLAN --> QCQ{"QC required<br/>for any task?"}
+  QCQ -->|Yes| MTP["Codex QC<br/>Prepare pre-Dev MTP<br/>traced to AC"]
+  QCQ -->|No| REV["Independent Codex TL Reviewer<br/>Review Plan / AC / MTP if needed"]
+  MTP --> REV
+  REV --> RV{"Review accepted?"}
+  RV -->|No: revise/version| FIX["Artifact author repairs<br/>deficient Plan / AC / MTP"]
+  FIX --> REV
+  RV -->|Unresolved| ESC["ESCALATED<br/>human resolution"]
+  RV -->|Yes| PIN["Pin immutable<br/>planning package version/hash"]
+  PIN --> TG["Telegram approval request (V1-12 target)<br/>Summary + source links + exact package version/hash"]
+  TG --> APPROVE{"Authenticated Owner approves<br/>this exact reviewed package?"}
+  APPROVE -->|Reject| REJECT["Persist reject reason + package ID/version/hash<br/>NO dispatch; invalidate approval request"]
+  REJECT --> REOPEN["Owner returns to same ChatGPT Planning chat"]
+  REOPEN --> DISCUSS
+  APPROVE -->|Approve| READY(["Approved package<br/>tasks may be dispatched sequentially"])
+```
+
+**Telegram approval is V1-12 target behavior, not yet deployed.** The Owner reviews the full package via versioned document links; the authenticated decision refers to an immutable package hash. A Reject **persists the reason, blocks dispatch and returns to the same planning conversation**. The Owner must explicitly ask ChatGPT to resume; the system cannot force a new message into an existing ChatGPT session. Owner **planning approval does not authorize automatic PR merges**. Changed approved content must be reviewed and approved again. Unresolved plan revisions escalate rather than looping indefinitely.
+
+## 3. Owner Reject → resume the same ChatGPT planning conversation (target V1-12)
+
+```mermaid
+flowchart TD
+  R["Telegram: Owner Reject<br/>one immutable package version/hash + reason"] --> STORE["Trusted Controller verifies Owner identity<br/>durably records Reject and blocks dispatch"]
+  STORE --> RETURN["Owner returns to the SAME ChatGPT Planning chat<br/>and asks to continue the rejected package"]
+  RETURN --> ACCESS{"Authenticated read-only<br/>planning-feedback API available?"}
+  ACCESS -->|Yes| READ["ChatGPT queries WFC/MCP<br/>package ID, version, hash, latest Reject + reason"]
+  ACCESS -->|No / unavailable| COPY["STOP automatic retrieval<br/>Ask Owner to paste rejection details<br/>Do not guess feedback or status"]
+  READ --> VALID{"Correct package<br/>and latest rejected version?"}
+  VALID -->|No / ambiguous| COPY
+  VALID -->|Yes| DISCUSS["Owner ↔ ChatGPT TL Planner<br/>Discuss changes and compare versions"]
+  COPY --> DISCUSS
+  DISCUSS --> REVISE["Prepare new version/hash<br/>Plan + Tasks + AC + QC policy"]
+  REVISE --> MTP{"Does QC require<br/>a new or updated MTP?"}
+  MTP -->|Yes| QC["Codex QC updates pre-Dev MTP"]
+  MTP -->|No| REVIEW["Independent Codex TL Reviewer<br/>reviews NEW package"]
+  QC --> REVIEW
+  REVIEW --> RES{"Reviewed and accepted?"}
+  RES -->|No| DISCUSS
+  RES -->|Yes| TELE["Telegram: new approval request<br/>for exact NEW package version/hash"]
+  TELE --> OWNER{"Owner approves new package?"}
+  OWNER -->|Reject| R
+  OWNER -->|Approve| START(["Controller may dispatch first atomic task"])
+```
+
+**Conversation resume contract (target, not implemented):** The Owner returns to the **original ChatGPT Planning conversation** and types a short resume instruction. ChatGPT should identify the currently discussed package from that conversation, then use an **authenticated read-only WFC/MCP interface** to fetch the latest rejection and provenance (package ID, version/hash, Owner decision, reason and timestamp). If there are multiple candidates or the read fails, fail closed and ask the Owner for the exact package/feedback. **The nine existing MCP tools do not currently expose planning rejection feedback**: a compatible, separately approved read-only extension is required; do not pretend that memory or Notion alone proves the authoritative WFC decision.
+
+A rejection never authorizes Dev work, is **not a code-review round**, and does not mutate a previously pinned package. The revised package receives a new version/hash and appropriate QC MTP updates, independent review and fresh Owner approval. The Owner can view diff from rejected version; old Telegram buttons and approvals must be rejected as stale.
+
+**Owner integration test plan:** [V1-12 Owner Reject → ChatGPT round-trip UAT](tasks/V1-12-owner-reject-uat.md). This is a future acceptance test, **not evidence that Telegram→WFC→ChatGPT retrieval currently works**.
+
+## 4. Execution — sequential atomic PR and exact-SHA gates
+
+```mermaid
+flowchart TD
+  READY(["Approved package + next atomic task"]) --> DEV["Codex Dev<br/>Scoped change"]
+  DEV --> PR["Trusted Worker<br/>Commit / push / Draft PR to main"]
+  PR --> CI["GitHub Actions<br/>CI on exact latest PR HEAD"]
+  CI --> CIPASS{"Exact-HEAD CI<br/>passed?"}
+  CIPASS -->|Failed checks| FIXCI["Dev fixes failing checks<br/>new PR HEAD"]
+  FIXCI --> PR
+  CIPASS -->|Pending / stale / unknown| BLOCKED["BLOCKED<br/>missing or uncertain evidence<br/>stop and reconcile"]
+  CIPASS -->|Yes| TL["Independent Codex TL Reviewer<br/>Code diff + AC + security"]
+  TL --> TLPASS{"Code accepted?"}
+  TLPASS -->|No, first round| REWORK["Dev corrections<br/>new PR HEAD invalidates evidence"]
+  REWORK --> PR
+  TLPASS -->|No, second round| ESC["ESCALATED<br/>no silent third round"]
+  TLPASS -->|Yes| QCQ{"Task QC policy?"}
+  QCQ -->|required| TEST["Codex QC executes<br/>preapproved MTP on reviewed HEAD"]
+  TEST --> QCRESULT["Independent TL Reviewer<br/>checks QC artifacts"]
+  QCRESULT --> QCPASS{"QC evidence accepted<br/>for exact HEAD?"}
+  QCPASS -->|No| HOLD["HOLD<br/>resolve QC findings or escalate<br/>without bypassing code gate"]
+  QCPASS -->|Uncertain evidence| BLOCKED
+  QCPASS -->|Yes| OWNER
+  QCQ -->|skip| OWNER{"Owner explicitly approves<br/>merge for this PR + HEAD?"}
+  OWNER -->|No| WAIT["WAIT<br/>no auto merge"]
+  OWNER -->|Yes| MERGE["Owner performs merge<br/>on GitHub"]
+  MERGE --> VERIFY{"Controller verified<br/>PR merged to main?"}
+  VERIFY -->|No / uncertain| BLOCKED
+  VERIFY -->|Yes, record merge SHA| NEXT(["Next atomic task"])
+```
+
+**Failure semantics:** Infrastructure uncertainty is **BLOCKED** and does not consume a code-review round. Two **failed code reviews** mean **ESCALATED**. A changed PR HEAD invalidates earlier CI/review/QC approvals; fresh checks and applicable review are required. QC failures do not silently authorize a third code-review round. No parallel task dispatch or automatic merge.
+
+## 5. Where to read next
+
+- [V1 Scope & Gate Contract](v1-scope-and-gates.md): authoritative detailed rules.
+- [Current Phase 3.1 architecture](architecture.md) and [runbook](phase-3.1.md): what is presently implemented, **not** proof of WSL2 deployment.
+- [Notion V1-01 readiness task](https://app.notion.com/412f92014abd812486e2f8a7e3145850): verify the Ubuntu WSL2 environment and startup availability.
+- [Notion V1 backlog](https://app.notion.com/p/ad495e0645a74aebb326d29c1818ede7): execution order and Owner gates.
