@@ -4,6 +4,8 @@
 
 **V1 delivery route (Owner-approved in PR #22):** [V1 scope and gate contract](v1-scope-and-gates.md) is the implementation scope authority for V1. It takes precedence over CL-12/M01 *target implementation decisions* for V1 only; it does **not** imply that V1 runtime gates are already implemented. Executor/Podman are not part of V1.
 
+**Start with diagrams:** [V1 architecture + planning/execution Mermaid flows](v1-visual-flows.md). These are design diagrams, not deployed-runtime evidence. Intended Controller host: **Ubuntu on WSL2**, subject to V1-01 readiness checks.
+
 ## First read — every agent
 
 1. [`AGENTS.md`](../AGENTS.md): mandatory scope, safety, roles, review rules.
