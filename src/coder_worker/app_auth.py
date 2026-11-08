@@ -11,11 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from my_wfc.budget import check_deadline, operation_timeout
+from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.github import REPOSITORY
 from coder_worker.github import GitHubVerifier, WorkflowError
 
 BOT = "builacviet-wfc-coder[bot]"
-REPOSITORY = "builacviet/techlead-review-poc"
 
 
 def _http_worker_command() -> list[str]:

@@ -9,7 +9,7 @@ No resources from `agent_workflow_v2` / Workflow Console v2 are used or modified
 ## Before running
 
 - Requires Docker Engine / Docker Desktop with Compose v2.
-- Stop only the previous `python -m my_wfc.server` process bound to local
+- Stop only the previous `python -m agent_workflow.server` process bound to local
   port 8000. Do not stop other Docker Compose projects.
 - **Stop the ngrok agent running directly on the host before starting the ngrok
   container**. The same reserved public domain cannot be claimed by two agents.
@@ -26,7 +26,7 @@ Copy-Item .runtime/ngrok.env.example .runtime/ngrok.env
 
 Set `NGROK_AUTHTOKEN` in `.runtime/ngrok.env` without posting it in chat or Git.
 Set `GH_TOKEN` in `.runtime/mcp.env` to an appropriately scoped **read-only**
-GitHub token for the private `builacviet/techlead-review-poc` repo. The existing
+GitHub token for the private `builacviet/agent-workflow` repo. The existing
 `my_wfc.github.GitHubVerifier` invokes `gh api`, so Docker does not inherit
 Windows `gh auth login`. Never mount the host's global gh credential store.
 
@@ -81,7 +81,7 @@ docker compose build mcp
 docker compose up -d mcp
 docker compose ps
 # Optional: a fresh synthetic fixture. Requires GH_TOKEN read access.
-docker compose exec mcp python -m my_wfc.admin seed-synthetic
+docker compose exec mcp python -m agent_workflow.admin seed-synthetic
 ```
 
 Confirm the local MCP transport and healthcheck first. If the Python source

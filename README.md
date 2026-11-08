@@ -1,11 +1,11 @@
-# Tech Lead Review POC
+# Agent Workflow
 
 **Agent onboarding:** Start with [AGENTS.md](AGENTS.md) and the [documentation map](docs/INDEX.md), then the current approved task and only its relevant source/tests. [CURRENT architecture](docs/architecture.md) and [TARGET CL-12 ADR](docs/adr/CL-12-architecture.md) are different; merged design decisions are **not** deployed features. For handoff use the [short template](docs/templates/handoff.md); the [historical log](docs/history/handoff-log.md) is not required startup context.
 
 Two independently importable Python packages share this repository:
 
 - `order_service`: small immutable in-memory order domain using Decimal. Application source and tests are unchanged from target main.
-- `my_wfc`: migrated FastMCP workflow engine with SQLite, authenticated workflow tools, leases, GitHub SHA checks and two-round review history. It does not import or call order_service.
+- `agent_workflow`: migrated FastMCP workflow engine with SQLite, authenticated workflow tools, leases, GitHub SHA checks and two-round review history. It does not import or call order_service.
 
 Requires Python 3.11+. From the checkout root:
 
@@ -13,10 +13,15 @@ Requires Python 3.11+. From the checkout root:
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e '.[mcp,test]'
 .venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\python.exe -m my_wfc.admin seed-history
-.venv\Scripts\python.exe -m my_wfc.admin seed-synthetic
-.venv\Scripts\python.exe -m my_wfc.server
+.venv\Scripts\python.exe -m agent_workflow.admin seed-history
+.venv\Scripts\python.exe -m agent_workflow.admin seed-synthetic
+.venv\Scripts\python.exe -m agent_workflow.server
 ```
+
+The legacy `python -m my_wfc.admin`, `my_wfc.controller` and `my_wfc.server`
+commands still work. Use `agent_workflow` for Python imports. Existing Controller
+config and task records may use the former repository slug as an alias. GitHub
+requests and review links use `builacviet/agent-workflow`.
 
 The `mcp` extra is optional: `pip install -e '.[test]'` suffices for the sample application and its tests (`python -m pytest tests/test_order_service.py -q`). Running the full suite requires both extras. There are no mandatory distribution runtime dependencies for the order package.
 

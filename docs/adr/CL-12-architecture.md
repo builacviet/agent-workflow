@@ -1,8 +1,8 @@
 # CL-12.7 — Consolidated architecture decision record and implementation handoff
 
-**Status: Owner-merged consolidated CL-12 architecture documentation** ([PR #13](https://github.com/builacviet/techlead-review-poc/pull/13), squash `5cae1207bc40f9c75185017ae9f7f630e9f9feb6` on 2026-11-07). **Separate parent CL-12 final sign-off, implementation task authority and production security approval are NOT established by this merge.** Updated: 2026-11-07. Task: https://app.notion.com/p/410f92014abd810284d7e98107016b61
+**Status: Owner-merged consolidated CL-12 architecture documentation** ([PR #13](https://github.com/builacviet/agent-workflow/pull/13), squash `5cae1207bc40f9c75185017ae9f7f630e9f9feb6` on 2026-11-07). **Separate parent CL-12 final sign-off, implementation task authority and production security approval are NOT established by this merge.** Updated: 2026-11-07. Task: https://app.notion.com/p/410f92014abd810284d7e98107016b61
 
-This document reconciles **CL-12.1–CL-12.6** against the actual merged architecture ADRs: [PR #11 — CL-12.5 security](https://github.com/builacviet/techlead-review-poc/pull/11), squash commit `e4ce254d24cd46d952ff5d814304c58fde3941b3`; and [PR #12 — CL-12.6 deployment](https://github.com/builacviet/techlead-review-poc/pull/12), squash commit `4d7aa10db7992a0735bf095771b258db4d9eb5e6`. The Owner selected **Rootless Podman for development**, **GHCR for image version/distribution**, and a **staged Executor observability approach**. This is a documentation-only PR and does not amend runtime behavior or retrospectively certify P2/P3 evidence.
+This document reconciles **CL-12.1–CL-12.6** against the actual merged architecture ADRs: [PR #11 — CL-12.5 security](https://github.com/builacviet/agent-workflow/pull/11), squash commit `e4ce254d24cd46d952ff5d814304c58fde3941b3`; and [PR #12 — CL-12.6 deployment](https://github.com/builacviet/agent-workflow/pull/12), squash commit `4d7aa10db7992a0735bf095771b258db4d9eb5e6`. The Owner selected **Rootless Podman for development**, **GHCR for image version/distribution**, and a **staged Executor observability approach**. This is a documentation-only PR and does not amend runtime behavior or retrospectively certify P2/P3 evidence.
 
 ## 1. Inputs, traceability and evidence
 
@@ -12,9 +12,9 @@ This document reconciles **CL-12.1–CL-12.6** against the actual merged archite
 | CL-12.2 | [Current 24-module inventory and trust boundaries](CL-12-current-state.md); PR #8 | Approved/merged |
 | CL-12.3 | [Target package/DI/DRY boundaries](CL-12-module-boundaries.md); PR #9 | Approved/merged |
 | CL-12.4 | [SQLite persistence, migration and recovery](CL-12-persistence.md); PR #10 | Approved/merged |
-| CL-12.5 | [Trusted Executor security ADR](CL-12-executor-security.md); [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11), squash `e4ce254d24cd46d952ff5d814304c58fde3941b3` | **Merged**: B3 Rootless Podman **development architecture**, security gates deferred |
-| CL-12.6 | [Linux deployment, workspaces and operations](CL-12-deployment.md); [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12), squash `4d7aa10db7992a0735bf095771b258db4d9eb5e6` | **Merged**: host Executor topology, GHCR/versioning, staged Grafana |
-| CL-12.7 | This consolidated ADR; [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) | **Owner-merged** as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`; separate parent CL-12 sign-off/implementation gates remain open |
+| CL-12.5 | [Trusted Executor security ADR](CL-12-executor-security.md); [PR #11](https://github.com/builacviet/agent-workflow/pull/11), squash `e4ce254d24cd46d952ff5d814304c58fde3941b3` | **Merged**: B3 Rootless Podman **development architecture**, security gates deferred |
+| CL-12.6 | [Linux deployment, workspaces and operations](CL-12-deployment.md); [PR #12](https://github.com/builacviet/agent-workflow/pull/12), squash `4d7aa10db7992a0735bf095771b258db4d9eb5e6` | **Merged**: host Executor topology, GHCR/versioning, staged Grafana |
+| CL-12.7 | This consolidated ADR; [PR #13](https://github.com/builacviet/agent-workflow/pull/13) | **Owner-merged** as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`; separate parent CL-12 sign-off/implementation gates remain open |
 
 Other governing sources: [parent CL-12 Notion](https://app.notion.com/p/410f92014abd81cdbceded689b7d4945), [CL-10.1 DB inventory](https://app.notion.com/p/410f92014abd8186b104d65641e0c9ca), `AGENTS.md`, `docs/architecture.md`, `docs/review-policy.md`, `docs/handoff.md`. Historical Notion or draft descriptions naming a selected dedicated rootless Docker daemon are **superseded for this development phase** by PR #11 and #12.
 
@@ -70,7 +70,7 @@ ChatGPT / authorized Owner
 | **ADR-07 Workspaces/stages** | Executor owns Linux-host-real workspace ID mapping, immutable source/result handoff, per-stage containers and minimum credentials | Prepare/publish GitHub App only, code model auth only, test none; no .git/PEM/DB/other-project access or world-writable staging |
 | **ADR-08 Operations/release** | **GHCR** versioned immutable OCI Worker image digest, pre-pull into Executor rootless Podman store and stage `--pull=never`; fail-closed BLOCKED recovery, deliberate startup and rollback; journald/metrics first, staged **Grafana + Prometheus + Loki + Alloy** | Source SHA ↔ image digest ↔ policy version recorded; no per-stage image pull, automatic retry after ambiguous publish, broad monitoring socket or production deployment without tests |
 
-**Selection status:** ADR-01–08 form the Owner-merged **development design baseline** via [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13). The PR #13 review/merge gate is complete; **separate parent CL-12 final sign-off is not evidenced by that merge**. Runtime implementation, Executor security validation and production sign-off remain distinct, not granted by documentation approval.
+**Selection status:** ADR-01–08 form the Owner-merged **development design baseline** via [PR #13](https://github.com/builacviet/agent-workflow/pull/13). The PR #13 review/merge gate is complete; **separate parent CL-12 final sign-off is not evidenced by that merge**. Runtime implementation, Executor security validation and production sign-off remain distinct, not granted by documentation approval.
 
 ## 4. Image release, monitoring, and stage lifecycle decisions
 
@@ -143,9 +143,9 @@ Every task follows branch/worktree + approved changed paths + tests/negative che
 
 ## 9. Owner review checklist and non-authorization
 
-- [x] CL-12.5 [PR #11](https://github.com/builacviet/techlead-review-poc/pull/11) merged, conditional B3 Rootless Podman development decision recorded.
-- [x] CL-12.6 [PR #12](https://github.com/builacviet/techlead-review-poc/pull/12) merged, Linux deployment + GHCR + monitoring design recorded.
-- [x] CL-12.7 [PR #13](https://github.com/builacviet/techlead-review-poc/pull/13) Owner-reviewed/merged at exact head `57965bef2de386cf42096a12a9f2d629cb4949b3` as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`.
+- [x] CL-12.5 [PR #11](https://github.com/builacviet/agent-workflow/pull/11) merged, conditional B3 Rootless Podman development decision recorded.
+- [x] CL-12.6 [PR #12](https://github.com/builacviet/agent-workflow/pull/12) merged, Linux deployment + GHCR + monitoring design recorded.
+- [x] CL-12.7 [PR #13](https://github.com/builacviet/agent-workflow/pull/13) Owner-reviewed/merged at exact head `57965bef2de386cf42096a12a9f2d629cb4949b3` as `5cae1207bc40f9c75185017ae9f7f630e9f9feb6`.
 - [ ] Explicit **parent CL-12 final architecture sign-off**, if required by the project gate, is **not inferred from individual PR merges**.
 - [ ] P3 original REPORT/JSON independently inspected if P3 evidence is to be formally accepted; otherwise preserve clearly as reported, not verified.
 - [ ] New atomic implementation tasks, exact source/config allowlist and Owner approval granted separately before any Executor code, GHCR CI or Grafana installation.

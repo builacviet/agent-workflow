@@ -12,10 +12,10 @@ from types import SimpleNamespace
 import pytest
 
 from coder_worker import app_auth
-from my_wfc.budget import cleanup_budget, dispatch_budget
-from my_wfc.controller import DispatchLedger, run_once
-from my_wfc.github import WorkflowError
-from my_wfc.service import WorkflowService
+from agent_workflow.budget import cleanup_budget, dispatch_budget
+from agent_workflow.controller import DispatchLedger, run_once
+from agent_workflow.github import WorkflowError
+from agent_workflow.service import WorkflowService
 
 
 @pytest.fixture

@@ -7,7 +7,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from my_wfc.auth0_oauth import Auth0TokenVerifier, load_auth0_config
+from agent_workflow.auth0_oauth import Auth0TokenVerifier, load_auth0_config
 
 
 @pytest.fixture
@@ -131,14 +131,14 @@ def test_jwks_unavailable_fails_closed(jwt_case):
 
 
 def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config):
-    from my_wfc.security import authorize_context
+    from agent_workflow.security import authorize_context
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     with pytest.raises(PermissionError, match="OAuth"):
         authorize_context(None)
 
 
 def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
-    from my_wfc.server import create_mcp_server
+    from agent_workflow.server import create_mcp_server
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.delenv("WFC_AUTH0_ISSUER", raising=False)
     monkeypatch.delenv("WFC_AUTH0_ALLOWED_SUB", raising=False)
@@ -148,7 +148,7 @@ def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
 
 
 def test_auth0_transport_advertises_protected_resource(monkeypatch):
-    from my_wfc.server import create_mcp_server
+    from agent_workflow.server import create_mcp_server
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
@@ -165,7 +165,7 @@ def test_auth0_transport_advertises_protected_resource(monkeypatch):
 def test_oauth_diagnostics_disabled_by_default(jwt_case, monkeypatch, caplog):
     verifier, sign, _ = jwt_case
     monkeypatch.delenv("WFC_AUTH0_DIAGNOSTICS", raising=False)
-    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    caplog.set_level("WARNING", logger="agent_workflow.auth0_oauth")
     assert asyncio.run(verifier.verify_token(sign(sub="auth0|other"))) is None
     assert not [r for r in caplog.records if "auth0_oauth_validation" in r.message]
 
@@ -173,7 +173,7 @@ def test_oauth_diagnostics_disabled_by_default(jwt_case, monkeypatch, caplog):
 def test_oauth_diagnostics_report_only_fixed_codes(jwt_case, monkeypatch, caplog):
     verifier, sign, _ = jwt_case
     monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
-    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    caplog.set_level("WARNING", logger="agent_workflow.auth0_oauth")
     wrong_sub = sign(sub="auth0|someone-private")
     wrong_aud = sign(aud="https://internal.private.example/mcp")
     wrong_client = sign(azp="private-client-id")
@@ -196,7 +196,7 @@ def test_oauth_diagnostics_report_only_fixed_codes(jwt_case, monkeypatch, caplog
 def test_oauth_diagnostics_bounded(jwt_case, monkeypatch, caplog):
     verifier, sign, _ = jwt_case
     monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
-    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    caplog.set_level("WARNING", logger="agent_workflow.auth0_oauth")
     invalid = sign(sub="auth0|other")
     for _ in range(70):
         assert asyncio.run(verifier.verify_token(invalid)) is None
@@ -251,7 +251,7 @@ def test_client_mismatch_distinguishes_expected_cimd_url_safely(
         scope=verifier.config.scope,
     )
     monkeypatch.setenv("WFC_AUTH0_DIAGNOSTICS", "1")
-    caplog.set_level("WARNING", logger="my_wfc.auth0_oauth")
+    caplog.set_level("WARNING", logger="agent_workflow.auth0_oauth")
     assert asyncio.run(verifier.verify_token(sign())) is None
     messages = [r.message for r in caplog.records]
     assert any("code=client_mismatch_cimd_url" in msg for msg in messages)

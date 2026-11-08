@@ -1,5 +1,5 @@
 {
-  "repository": "builacviet/techlead-review-poc",
+  "repository": "builacviet/agent-workflow",
   "database": "D:/WORK/Project/techlead-review-poc-phase31/data/controller/workflow.sqlite3",
   "app_id": 1,
   "installation_id": 1,

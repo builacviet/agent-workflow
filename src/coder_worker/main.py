@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from coder_worker.app_auth import GitHubApp, AppVerifier, REPOSITORY, BOT
 from coder_worker.repository import snapshot, changes, writable, git
 from coder_worker.github import WorkflowError, validate_sha
-from my_wfc.budget import dispatch_budget, operation_timeout, check_deadline
+from agent_workflow.budget import dispatch_budget, operation_timeout, check_deadline
 
 ROOT = Path("/workspace")
 

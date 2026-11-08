@@ -9,6 +9,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /app/pyproject.toml
+COPY src/agent_workflow /app/src/agent_workflow
 COPY src/my_wfc /app/src/my_wfc
 COPY src/order_service /app/src/order_service
 RUN python -m pip install --no-cache-dir ".[mcp]" \
@@ -19,4 +20,4 @@ RUN python -m pip install --no-cache-dir ".[mcp]" \
 ENV HOME=/home/appuser
 USER appuser
 EXPOSE 8000
-CMD ["python", "-m", "my_wfc.server"]
+CMD ["python", "-m", "agent_workflow.server"]

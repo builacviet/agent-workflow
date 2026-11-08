@@ -12,10 +12,9 @@ import time
 import tempfile
 from pathlib import Path, PurePosixPath
 
-REPOSITORY = "builacviet/techlead-review-poc"
-from my_wfc.budget import check_deadline, cleanup_budget, operation_timeout
-from my_wfc.github import WorkflowError
-from my_wfc.service import WorkflowService
+from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
+from agent_workflow.github import REPOSITORY, WorkflowError, canonical_repository
+from agent_workflow.service import WorkflowService
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -75,7 +74,10 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
 
 
 def validate_config(config: dict) -> None:
-    if config.get("repository") != REPOSITORY or not config.get("tasks"):
+    if (
+        canonical_repository(config.get("repository", "")) != REPOSITORY
+        or not config.get("tasks")
+    ):
         raise WorkflowError("explicit repository and task allowlist required")
     for key in ("database", "pem", "scratch"):
         path = Path(config[key])
@@ -370,13 +372,13 @@ class CoderRuntime:
             if not isinstance(result, dict) or not required.issubset(result):
                 raise WorkflowError("incomplete worker result")
             if not isinstance(result["pr_url"], str) or not re.fullmatch(
-                r"https://github.com/builacviet/techlead-review-poc/pull/[1-9][0-9]*",
+                rf"https://github\.com/{re.escape(REPOSITORY)}/pull/[1-9][0-9]*",
                 result["pr_url"],
             ):
                 raise WorkflowError(
                     "worker PR reference differs from repository"
                 )
-            from my_wfc.github import validate_sha
+            from agent_workflow.github import validate_sha
 
             validate_sha(result["head_sha"])
             for field in ("task_id", "repository", "branch", "base_sha"):
