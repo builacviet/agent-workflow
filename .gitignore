@@ -26,3 +26,6 @@ logs/
 
 # Local GitHub App private keys and other runtime-only secrets.
 .secret/
+
+# Local task worktrees in the primary checkout.
+/.worktrees/
