@@ -7,11 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from coder_worker.app_auth import AppVerifier, BOT, GitHubApp, REPOSITORY
-from agent_workflow.coder_runtime import safe_path, validate_config
+from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from coder_worker.repository import changes
-from agent_workflow.controller import DispatchLedger, run_once
-from agent_workflow.github import LEGACY_REPOSITORY, WorkflowError
-from agent_workflow.service import WorkflowService, encode
+from agent_workflow.orchestration.controller import run_once
+from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
+from agent_workflow.domain.service import WorkflowService, encode
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -374,7 +375,7 @@ def test_snapshot_real_baseline_includes_safe_templates(tmp_path):
 
 
 def test_controller_process_lock_excludes_reconciliation(tmp_path):
-    from agent_workflow.controller import process_lock
+    from agent_workflow.orchestration.controller import process_lock
 
     lock = tmp_path / "controller.lock"
     with process_lock(lock):
@@ -536,7 +537,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     ["agent_workflow_v2", "workflow_console_v2", "workflow-console-v2"],
 )
 def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
-    from agent_workflow.coder_runtime import independent_path
+    from agent_workflow.runners.coder_runtime import independent_path
 
     with pytest.raises(WorkflowError, match="v2 paths"):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
@@ -544,7 +545,7 @@ def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
 
 def test_cleanup_remains_available_after_deadline(monkeypatch, state):
     import agent_workflow.budget as budget
-    import agent_workflow.coder_runtime as runtime
+    import agent_workflow.runners.coder_runtime as runtime
 
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])

@@ -21,4 +21,5 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.setuptools.package-data]
-agent_workflow = ["schema.sql", "resources/*.md"]
+agent_workflow = ["resources/*.md"]
+"agent_workflow.storage" = ["schema.sql"]

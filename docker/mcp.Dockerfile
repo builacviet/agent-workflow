@@ -20,4 +20,4 @@ RUN python -m pip install --no-cache-dir ".[mcp]" \
 ENV HOME=/home/appuser
 USER appuser
 EXPOSE 8000
-CMD ["python", "-m", "agent_workflow.server"]
+CMD ["python", "-m", "agent_workflow.mcp.server"]

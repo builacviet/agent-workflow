@@ -15,10 +15,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_workflow.coder_runtime import CoderRuntime, safe_path
+from agent_workflow.runners.coder_runtime import CoderRuntime, safe_path
 from coder_worker.repository import git
-from agent_workflow.github import WorkflowError
-from agent_workflow.service import WorkflowService
+from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.service import WorkflowService
 
 
 def main() -> None:

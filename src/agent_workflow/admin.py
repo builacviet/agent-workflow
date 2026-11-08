@@ -4,9 +4,8 @@ import json
 from pathlib import Path
 from importlib.resources import files
 
-from agent_workflow.github import REPOSITORY as REPO, WorkflowError
-from agent_workflow.service import encode
-from agent_workflow.tools import default_service
+from agent_workflow.integrations.github import REPOSITORY as REPO, WorkflowError
+from agent_workflow.domain.service import default_service, encode
 
 BASE = "015ccc535b85ce1d0ad00da787b827970b9bf39a"
 ROUND1 = "6352c8ff5ea83450a93cd1077d6447170c9dedaa"

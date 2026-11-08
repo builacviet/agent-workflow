@@ -7,9 +7,9 @@ from starlette.requests import Request
 
 from agent_workflow.admin import BASE, ROUND1, ROUND2, REPO, import_history, seed_synthetic, reset_synthetic
 from coder_worker.github import GitHubVerifier
-from agent_workflow.github import WorkflowError
-from agent_workflow.security import authorize_request
-from agent_workflow.service import WorkflowService
+from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.mcp.security import authorize_request
+from agent_workflow.domain.service import WorkflowService
 
 HEAD = "a" * 40
 NEXT = "b" * 40
@@ -61,7 +61,7 @@ def payload(claim, verdict="CHANGES_REQUESTED", **overrides):
 
 
 def test_ping_and_info_preserved():
-    from agent_workflow.server import ping, get_server_info, mcp
+    from agent_workflow.mcp.server import ping, get_server_info, mcp
     assert ping() == "pong"
     assert get_server_info()["name"] == "Workflow MCP Lab"
     assert mcp.settings.host == "127.0.0.1"
@@ -347,18 +347,13 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
     from mcp import ClientSession
     import httpx
     from mcp.client.streamable_http import streamable_http_client
-    from mcp.server.fastmcp import FastMCP
-    from agent_workflow.tools import register_tools
+    from agent_workflow.mcp.server import mcp as server_mcp
 
     engine, _, _ = env
     ready(engine)
     monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
     monkeypatch.setenv("WFC_REVIEWER_ID", "http-test-reviewer")
-    server_mcp = FastMCP("HTTP test")
-
-    from agent_workflow.server import ping
-    server_mcp.tool()(ping)
-    register_tools(server_mcp, lambda: engine)
+    monkeypatch.setenv("WFC_DB_PATH", engine.db_path)
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -379,6 +374,8 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
                     await session.initialize()
                     result = await session.call_tool("ping", {})
                     assert not result.isError and result.content[0].text == "pong"
+                    info = await session.call_tool("get_server_info", {})
+                    assert not info.isError
                     mutation_args = {
                         "claim_review": {"task_id": "TEST", "expected_head_sha": HEAD},
                         "register_task_handoff": dict(task_id="TEST", repository=REPO, branch="task/test", base_sha=BASE, new_head_sha=HEAD, handoff_file_path="docs/handoff.md", test_summary="x"),
@@ -392,7 +389,18 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools = await session.list_tools()
-                    assert len([t for t in tools.tools if t.name in {"list_review_queue", "get_review_context", "claim_review", "submit_review", "get_review_result", "register_task_handoff", "get_coder_assignment"}]) == 7
+                    assert len(tools.tools) == 9
+                    assert {tool.name for tool in tools.tools} == {
+                        "ping",
+                        "get_server_info",
+                        "list_review_queue",
+                        "get_review_context",
+                        "claim_review",
+                        "submit_review",
+                        "get_review_result",
+                        "register_task_handoff",
+                        "get_coder_assignment",
+                    }
                     queue = await session.call_tool("list_review_queue", {"requested_effort": "medium"})
                     assert not queue.isError
                     claimed = await session.call_tool("claim_review", {"task_id": "TEST", "expected_head_sha": HEAD})
@@ -432,7 +440,7 @@ def test_concurrent_submissions_increment_exactly_once(env):
 
 def test_old_synthetic_metadata_is_not_silently_retargeted(env):
     from agent_workflow.admin import BASE, REPO, import_history, reset_synthetic, seed_synthetic
-    from agent_workflow.contracts import TaskSpec
+    from agent_workflow.domain.contracts import TaskSpec
 
     service, remote, _ = env
     import_history(service)
@@ -456,7 +464,7 @@ def test_old_synthetic_metadata_is_not_silently_retargeted(env):
 
 
 def test_server_docker_bind_and_public_hostname_are_explicit(monkeypatch):
-    from agent_workflow.server import server_bind_host, server_allowed_hosts
+    from agent_workflow.mcp.server import server_bind_host, server_allowed_hosts
     monkeypatch.delenv("WFC_MCP_HOST", raising=False)
     monkeypatch.delenv("WFC_PUBLIC_HOST", raising=False)
     assert server_bind_host() == "127.0.0.1"

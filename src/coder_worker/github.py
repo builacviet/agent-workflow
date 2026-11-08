@@ -5,7 +5,7 @@ import subprocess
 from urllib.parse import quote
 
 
-from agent_workflow.github import WorkflowError, canonical_repository, validate_sha
+from agent_workflow.integrations.github import WorkflowError, canonical_repository, validate_sha
 
 
 class GitHubVerifier:

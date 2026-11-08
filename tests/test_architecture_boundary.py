@@ -8,10 +8,11 @@ import subprocess
 
 import pytest
 
-from agent_workflow.service import WorkflowService
-from agent_workflow.github import WorkflowError
-from agent_workflow.controller import DispatchLedger, run_once
-from agent_workflow.coder_runtime import CoderRuntime
+from agent_workflow.domain.service import WorkflowService
+from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.orchestration.controller import run_once
+from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.runners.coder_runtime import CoderRuntime
 from test_my_wfc import spec, payload
 
 
@@ -47,12 +48,12 @@ def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
 
 
 def test_service_has_no_sql_or_external_adapter():
-    import agent_workflow.service as service
+    import agent_workflow.domain.service as service
 
     text = inspect.getsource(service)
     assert "sqlite3" not in text and ".execute(" not in text
     assert "verify_remote" not in text and "coder_worker" not in text
-    import agent_workflow.controller as controller
+    import agent_workflow.orchestration.controller as controller
 
     assert "GitHubApp" not in inspect.getsource(controller)
     assert not hasattr(CoderRuntime, "publish")
@@ -326,7 +327,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
 
 
 def test_source_digest_frames_paths_and_contents(tmp_path):
-    from agent_workflow.coder_runtime import source_digest
+    from agent_workflow.runners.coder_runtime import source_digest
 
     left, right = tmp_path / "left", tmp_path / "right"
     left.mkdir()
