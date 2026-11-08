@@ -18,6 +18,7 @@ flowchart TB
     CT["Trusted Controller<br/>systemd target (V1-13)"]
     DB[("SQLite / WFC<br/>state and gate evidence")]
     MCP["Existing MCP /mcp<br/>9 compatible tools"]
+    HOOK["Trusted GitHub Webhook receiver<br/>HMAC verified + durable event<br/>target V1-03, not deployed"]
     DC["Docker CLI<br/>trusted host invocation"]
     ENG["Docker Engine<br/>availability to verify (V1-01)"]
 
@@ -48,11 +49,15 @@ flowchart TB
   ENG --> WORKER
   WORKER -->|"Commit / push / Draft PR"| GH
   GH -->|"PR checks"| CI
-  CT <-->|"Read evidence / reconcile"| GH
+  GH -->|"Signed CI completion event"| HOOK
+  HOOK -->|"Notify pending CI task"| CT
+  CT <-->|"Re-query exact HEAD/checks and reconcile"| GH
   CT -->|"Notify + request approval"| TELE
   TELE -->|"Owner-identity-gated decision"| CT
   OWNER -.->|"Approve and perform merge"| GH
 ```
+
+**Webhook signal:** GitHub emits a signed `workflow_run.completed` notification; the receiver validates and durably records it. Controller must re-query GitHub's **current PR HEAD** and named exact-HEAD checks before advancing. After WSL2 sleep/restart, reconcile in-flight CI tasks to recover missed notifications; do not poll every 60 seconds as the primary mechanism. Webhook/adapter are **not yet implemented**.
 
 **Trust boundary:** Only the **trusted Controller** invokes the existing Docker CLI, and only the **trusted publishing Worker** uses GitHub App credentials. Untrusted Codex stages do not receive GitHub secrets, WFC database, arbitrary host paths or Docker engine access. The host Docker authority is broad and remains an acknowledged risk, **not** proof of production isolation. Diagram edges are design intent, not verified installed integrations.
 
