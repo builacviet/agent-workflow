@@ -1,74 +1,66 @@
 # Master Test Plan — <task ID> (template)
 
-**PRE-DEV TEST DESIGN ONLY.** Do not report test PASS before executing approved tests on a reviewed exact HEAD. QC authors; **independent TL Reviewer** reviews; Owner approves the **full versioned Planning Package**, including MTP, before Dev starts.
+**PRE-DEV TEST DESIGN ONLY.** This file contains **no execution result, approval record or content hash of itself**. QC authors it before Dev; independent TL Reviewer reviews it; Owner approves its exact immutable bytes as part of the complete Planning Package. Post-code results belong **only** in the separate [MTP Execution Report](mtp-execution-report.md).
 
-## 1. Identity and gate references
+## 1. Frozen design identity (no self-reference)
 
 | Item | Value |
 | --- | --- |
-| Planning package ID / version / hash / status | `<id / draft version / hash / DRAFT|APPROVED>` |
-| Task ID / AC source and revision | `<id / exact Notion URL or task file revision>` |
-| QC policy | `required` (if `skip`, explain reason instead of authoring MTP) |
-| MTP ID / version / immutable content hash | `<id / version / hash pending approval>` |
-| Approved changed-path scope / prohibited effects | `<allowlist / denylist>` |
-| Test environment / fixtures / run budget | `<disposable, synthetic, timeouts, tool and network allowlist>` |
-| QC author / independent TL reviewer | `<identity / pending>` |
-| TL MTP verdict / evidence | `PENDING / PLAN_REVIEW_PASS / CHANGES_REQUESTED / BLOCKED` |
-| Owner package approval ID / version / hash | `PENDING — not authorized for Dev` |
-| Post-code PR / **current reviewed HEAD SHA** | `NOT APPLICABLE before Dev` |
+| Planning package ID / proposed version | `<id / version>` — package manifest hash is recorded **outside this file** |
+| Atomic task ID and AC source/revision | `<id / exact approved source reference>` |
+| QC policy | `required` (if `skip`, document Owner-approved reason instead of creating MTP) |
+| MTP ID and version | `<id / version>` — **no MTP content-hash field here** |
+| Changed-path scope / prohibited effects | `<approved allowlist and denylist>` |
+| Test environment, bounded resources and fixtures | `<synthetic/disposable, tool and network boundaries, max time>` |
+| QC author/session identifier | `<non-secret identity and session ID>` |
+| Risks, dependencies and clarification requests | `<blocking questions or none>` |
 
-## 2. Acceptance Criteria traceability (required for every AC)
+**Freeze/approval protocol:** Once the proposed MTP and package are complete, a trusted Controller (when implemented) computes **SHA-256 of the exact raw UTF-8 bytes of this finalized file**, and a separately defined immutable Planning Package manifest binds that hash to the Plan/AC/task artifacts. **Neither resulting hash is inserted into a file included in its own hash.** In manual bootstrap, the Owner/operator computes and records the file SHA-256 and package-manifest hash *outside* these approved files; the independent reviewer checks the submitted bytes; Owner approval records their exact identities. This is a design/operating procedure for V1-02, **not a claim that a Controller hash registry exists today**. Changing any approved byte requires a new version/hash, review and Owner decision under [change control](../conventions/engineering-standards.md).
 
-| AC ID | Intended observable behavior | Test case IDs | Positive/negative/boundary/security/regression | Coverage gaps and risk |
+## 2. Acceptance Criteria traceability
+
+| AC ID | Observable requirement | Test case IDs | Positive/negative/edge/security coverage | Gaps, risk or N/A reason |
 | --- | --- | --- | --- | --- |
-| AC-01 | `<specific assertion>` | TC-01, TC-02 | `<types>` | `<none or reason>` |
+| AC-01 | `<assertable behavior>` | `TC-01, TC-02` | `<scenarios>` | `<none or open question>` |
 
-No AC without a test or explicit gap; unresolved critical gaps block package review.
+All approved ACs must appear. A critical gap/ambiguous expected result makes this **draft BLOCKED** until clarified.
 
-## 3. Repeat for every test case
+## 3. Test case (repeat per case; keep low-risk cases concise)
 
-### TC-01 — <behavior and expected result>
+### TC-01 — <specific expected behavior>
 
-- **Mapped AC / type / priority:** `AC-01 / positive|negative|boundary|integration|security|regression|smoke / P0..P2`
-- **Purpose and threat/failure condition:** `<what this detects>`
-- **Fixtures & preconditions:** `<synthetic data, pinned image, isolated workspace, allowed credentials only>`
-- **Environment and command:** `<reproducible steps, bounded runtime, no production side effects>`
-- **Steps:** `<exact setup, inputs, operation and cleanup>`
-- **Expected behavior:** `<concrete assertions, exit code, fail-closed outcome for invalid inputs>`
-- **Evidence to retain:** `<command, sanitized logs, test report file, SHA, result and timestamp>`
-- **PRE-DEV result:** `NOT RUN — test design only`
-- **POST-CODE result:** `NOT RUN|PASS|FAIL|BLOCKED`; `<tested current reviewed HEAD; actual evidence reference>`
-- **Defect / dependency / uncertainty:** `<link, owner, severity>`
+- **AC, type and risk:** `AC-01 / positive|negative|boundary|integration|security|regression / P0..P2`
+- **Setup, synthetic fixtures and environment:** `<minimal reproducible preconditions; isolation>`
+- **Steps / harness contract:** `<inputs/actions; stable test ID, expected interface, command if known>`
+- **Expected assertions and error behavior:** `<specific observable result / fail-closed status>`
+- **Evidence required at post-code execution:** `<runner exit, bounded sanitized output, artifact digest and tested HEAD>`
+- **Cleanup and safety constraints:** `<only disposable state; no production effects>`
 
-## 4. Security and negative-test coverage
+The AC/test semantics and expected results **must be specified before Dev**. A test command may be unknown before implementation; record the **test ID, exact behavior, input fixtures and required harness contract** now. Post-code independently implemented harnesses/commands are versioned and hashed as **execution artifacts** and must not silently modify expected MTP behavior. If implementation requires material test-plan changes, stop and request a revised MTP/package through Owner approval.
 
-- [ ] Missing/invalid/unsupported role, model and effort fail closed with no silent fallback.
-- [ ] Caller cannot select its own role or increase tool/host/secret permissions.
-- [ ] Dev/QC/TL have separate prompts, contexts, filesystem mounts and ephemeral workspaces.
-- [ ] Untrusted roles cannot read GitHub App PEM, worker tokens, live WFC SQLite, Controller Docker socket or production network resources.
-- [ ] Wrong package ID/version/hash, unapproved MTP, stale PR HEAD or missing/failing CI blocks progression.
-- [ ] Failed tests preserve reproducible evidence; operational uncertainty is BLOCKED, not PASS.
-- [ ] Repeatable positive, negative, edge and regression paths for each relevant AC; mark N/A with reason.
-- [ ] No auto-merge, approval impersonation, direct production writes, or hidden test-data mutation.
+## 4. Universal and conditional safety coverage
 
-## 5. Gate order and final execution report
+**Universal (for every applicable task):**
+- [ ] AC mapping includes positive/negative and boundary/error coverage proportionate to risk.
+- [ ] Test fixture and environment are reproducible and isolated; expected results are independently observable.
+- [ ] Untrusted inputs and unsafe external effects are restricted; logs/evidence do not expose secrets.
+- [ ] Package/MTP identities and, during post-code QC, current PR HEAD are verified externally.
+- [ ] Skipped or untestable cases carry `N/A + reason` or an explicit BLOCKED finding, never fabricated PASS.
 
-1. **QC PRE-DEV:** author draft MTP; all cases `NOT RUN`.
-2. **Independent TL planning review:** review Plan/AC/MTP; version fixes if necessary.
-3. **Owner planning gate:** explicitly approve complete immutable package version/hash.
-4. **Dev → Worker → CI → independent TL code review:** exact PR HEAD, CI PASS, code review PASS; code review max two failed rounds.
-5. **QC POST-CODE:** run approved MTP on exactly reviewed HEAD; evidence case-by-case; TL validates QC evidence.
-6. **Owner per-PR merge gate:** Owner approves actual merge, Controller later independently verifies GitHub merge.
+**Conditional for auth/agent/Controller/CI tasks; mark N/A with reason elsewhere:**
+- [ ] Unknown role, missing/unsupported model or effort, and privilege escalation fail closed.
+- [ ] Role prompts, mounts, source contexts and secrets remain isolated.
+- [ ] Wrong approved package hash or stale/failed/missing exact-HEAD CI cannot advance a gate.
+- [ ] Duplicate/reordered events, retry, timeouts, release and recovery remain safe.
+- [ ] No credential, active DB, Docker socket or auto-merge authority enters an untrusted role.
 
-| Execution summary (fill **only** after actual run) | Value |
-| --- | --- |
-| Approved package/MTP version + hashes | `NOT RUN` |
-| PR URL / current exact SHA | `NOT RUN` |
-| Exact-SHA CI named check and conclusion | `NOT RUN` |
-| Independent TL code review round/verdict | `NOT RUN` |
-| Total / PASS / FAIL / BLOCKED / NOT RUN test cases | `<counts from actual execution>` |
-| Executed commands, safe logs, environment and exit codes | `NOT RUN` |
-| QC handoff / independent TL QC verdict | `PENDING / PENDING` |
-| Owner merge decision / merge SHA | `PENDING / NOT MERGED` |
+## 5. Gate order (reference only; authoritative contract is V1 scope)
 
-**Failure policy:** missing approvals, outdated hash/SHA, unsafe fixtures, missing CI, uncertain external effects or insufficient traceability ⇒ `BLOCKED` with owner and reason. Never mark tests PASS from design alone. See [QC role contract](../roles/qc.md) and [V1 gate contract](../v1-scope-and-gates.md).
+1. QC creates/finalizes this **design-only** document.
+2. Independent TL reviews proposed Plan/AC/MTP, including exact bytes and coverage.
+3. Owner approves an immutable Planning Package ID/version/hash with a referenced MTP SHA-256.
+4. Dev → trusted Worker publishes Draft PR → named GitHub CI PASS on **current PR HEAD** → independent TL code review PASS.
+5. QC executes this frozen MTP against reviewed HEAD in an isolated environment, recording actual results in the **separate** [MTP Execution Report](mtp-execution-report.md) with runner evidence.
+6. Independent TL reviews QC execution evidence; Owner alone approves/merges PR. Changes in code HEAD or approved package/MTP invalidate dependent evidence.
+
+**Failure policy:** Ambiguous AC, missing approvals, stale hashes/SHA, incomplete critical test coverage or uncertain external effects ⇒ `BLOCKED` with an explicit clarification/findings owner. No MTP case is `PASS` during pre-Dev authoring. Refer to [QC role](../roles/qc.md), [V1 gates](../v1-scope-and-gates.md) and [change-control rules](../conventions/engineering-standards.md).
