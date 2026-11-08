@@ -41,6 +41,8 @@ Until V1-02 implements automated role isolation, manual QC is **procedural, Owne
 
 A defect report must identify `defect_id, severity, task/AC/test, exact tested SHA, reproduction, fixture, expected/observed, bounded redacted evidence, impact, owner, required_verification`. Preserve flaky test attempts and runner artifacts; an intermittent or unavailable required case is `BLOCKED`, never silently PASS. Material changes to an approved MTP/AC require the [versioned Owner approval flow](../conventions/engineering-standards.md).
 
+## Handoff format
+
 `role, phase, task_id, package_id/version/hash, ac_to_test_ids, mtp_id/version/hash, risk, findings, status, evidence, limitations`. For PRE-DEV: verdict `READY_FOR_INDEPENDENT_MTP_REVIEW|BLOCKED`, all execution statuses `NOT RUN`. For POST-CODE also require `pr_url, current_head_sha, ci_evidence, tl_code_verdict` and each case `PASS|FAIL|BLOCKED|NOT RUN`; verdict `QC_EVIDENCE_READY|BLOCKED` is **not independent approval**.
 
-A QC failure is an actionable test finding; operational uncertainty is `BLOCKED`. QC itself never increments the independent TL's **two failed code-review rounds**. See [V1 gates](../v1-scope-and-gates.md) and [TL reviewer](tl-reviewer.md).
+An evidenced QC FAIL returns actionable findings to Dev, within the **Owner-approved maximum of two QC repair-and-retest cycles**. Each new HEAD requires fresh CI, independent TL code review and QC execution against the same frozen MTP; if legacy WFC cannot safely review a changed HEAD after code approval, stop as `BLOCKED` and ask Owner rather than bypassing state. The two QC cycles are **separate from and never reset** the existing two formal TL code-review submissions. Operational uncertainty is `BLOCKED`, not an automatic retry. See [canonical rework limits](../conventions/engineering-standards.md). See [V1 gates](../v1-scope-and-gates.md) and [TL reviewer](tl-reviewer.md).
