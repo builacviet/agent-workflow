@@ -2,7 +2,7 @@
 
 **Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled for merged baseline: 2026-11-07, after DOC-02 [PR #16](https://github.com/builacviet/agent-workflow/pull/16) (merge `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`). Later documentation proposals are not assumed merged.
 
-**V1 delivery route (Owner approval pending):** [V1 scope and gate contract](v1-scope-and-gates.md) is the proposed implementation authority for V1 after the V1-00 Owner-approved merge. It takes precedence over CL-12/M01 *target implementation decisions* for V1 only; do not infer that V1 runtime gates are already implemented.
+**V1 delivery route (Owner-approved in PR #22):** [V1 scope and gate contract](v1-scope-and-gates.md) is the implementation scope authority for V1. It takes precedence over CL-12/M01 *target implementation decisions* for V1 only; it does **not** imply that V1 runtime gates are already implemented. Executor/Podman are not part of V1.
 
 ## First read — every agent
 

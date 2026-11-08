@@ -1,6 +1,6 @@
 # Agent Workflow V1 — Scope and Gate Contract
 
-> **Status:** Proposed for Owner approval in V1-00. This document becomes the **V1 delivery scope authority only after its Draft PR is approved and merged by the Owner**. Its existence does not grant deployment or task-execution approval.
+> **Status:** **Owner-approved V1 delivery scope** via [merged PR #22](https://github.com/builacviet/agent-workflow/pull/22) (merge `86c47481e0af6fc66c30d9e1cd70882e06ced678`). This contract does not by itself grant deployment, credential access, or task-execution approval.
 >
 > **Baseline:** `main` at `4a23d5dfac28c1f8ee71187fe00cac06e880d4d1` (following PR #21). [V1-00 acceptance criteria and planning draft](https://app.notion.com/p/412f92014abd81528012fd5ea320cde3).
 
@@ -12,7 +12,7 @@ V1 delivers the smallest sequential, approval-gated workflow using the existing 
 - **Deployment intent:** Keep the host Controller and Docker-CLI architecture; run the Controller under Linux systemd via the separately authorized V1 operations work. Current host engine authority is broad and risky; neither systemd operation nor production hardening is proven by this document.
 - **Compatibility:** Preserve Streamable HTTP `/mcp` and the **nine existing MCP tools**, including names, signatures, response contracts and authentication behavior. New functionality may only be added compatibly through separately approved tasks.
 - **Out of scope:** new Executor service, Podman/Controller-to-Executor IPC, GHCR or Grafana rollout, epic branches, concurrent/parallel task execution, auto-merge, new orchestration framework, recurring ChatGPT scheduler, and guaranteed ChatGPT-native mobile approval/notification.
-- **Architecture override:** For **Owner-approved V1 delivery only**, this contract takes precedence over CL-12/M01 **target implementation** recommendations where they conflict with the above V1 scope. CL-12/M01 ADRs and their historical evidence remain intact and are not rewritten, revoked as history, or evidence of deployed runtime. Current source/tests and verified deployment evidence still govern **as-built** claims; security and least-privilege constraints remain applicable.
+- **Architecture override:** For **V1 delivery only**, this contract takes precedence over CL-12/M01 **target implementation** recommendations where they conflict with the above V1 scope. CL-12/M01 ADRs and their historical evidence remain intact and are not rewritten, revoked as history, or evidence of deployed runtime. Current source/tests and verified deployment evidence still govern **as-built** claims; security and least-privilege constraints remain applicable.
 
 ## 2. Planning gates — once per approved package
 
