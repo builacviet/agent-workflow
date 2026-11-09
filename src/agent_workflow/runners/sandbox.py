@@ -548,12 +548,22 @@ class SandboxManager:
                 try:
                     _docker(["rm", "-f", identifier])
                 except WorkflowError:
-                    # The watchdog and Controller can both list this ID before
-                    # either removes it. Confirm absence with a fresh owned scan.
-                    if identifier in self._owned(dispatch_id, name_pattern):
+                    # A concurrent removal can still be visible when rm fails.
+                    if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
                         raise
             if self._owned(dispatch_id, name_pattern):
                 raise WorkflowError("sandbox termination not confirmed")
+
+    def _wait_for_removal(
+        self, dispatch_id: str, name_pattern: str, identifier: str
+    ) -> bool:
+        try:
+            with dispatch_budget(time.time() + 3):
+                while identifier in self._owned(dispatch_id, name_pattern):
+                    time.sleep(operation_timeout(0.1))
+                return True
+        except TimeoutError:
+            return False
 
     def _owned(self, dispatch_id: str, name_pattern: str) -> list[str]:
         raw = _docker([

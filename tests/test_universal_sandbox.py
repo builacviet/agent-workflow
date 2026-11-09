@@ -102,9 +102,10 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
     dispatch = "a" * 32
     calls = []
     owned = None
+    removal_pending = False
 
     def docker(args):
-        nonlocal owned
+        nonlocal owned, removal_pending
         # Cleanup must still be possible after the execution deadline.
         if outcome in {"timeout", "watchdog-race", "rm-failure"}:
             budget.check_deadline()
@@ -136,12 +137,19 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
                 assert args == ["rm", "-f", identifier]
                 if outcome in {"watchdog-race", "rm-failure"}:
                     if outcome == "watchdog-race":
-                        # The watchdog removed the exact owned ID after our list.
-                        owned = None
+                        # Docker still lists the ID while the watchdog removes it.
+                        removal_pending = True
                     return coder_runtime.docker_command(["docker", *args])
                 owned = None
                 return b""
         raise AssertionError(args)
+
+    def wait_for_docker(_seconds):
+        nonlocal owned
+        if outcome == "rm-failure":
+            raise TimeoutError("fixture cleanup verification budget expired")
+        assert removal_pending
+        owned = None
 
     def failed_rm(args, **kwargs):
         assert args == ["docker", "rm", "-f", identifier]
@@ -161,6 +169,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(coder_runtime, "run_container", attach)
     monkeypatch.setattr(coder_runtime.subprocess, "run", failed_rm)
+    monkeypatch.setattr(sandbox.time, "sleep", wait_for_docker)
     monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
 
     def run():
@@ -194,7 +203,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         "info", "image", "create", "container", "info", "container", "rm", "container"
     ]
     if outcome == "watchdog-race":
-        expected.append("container")
+        expected.extend(["container", "container"])
     assert [args[0] for args in calls] == expected
     assert calls[3][1] == "inspect"
     create = calls[2]
