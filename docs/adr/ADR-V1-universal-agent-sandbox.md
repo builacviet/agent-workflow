@@ -16,6 +16,100 @@ Composition: `Controller → trusted RolePolicy & TaskContext → RuntimeRegistr
 
 No arbitrary plugin auto-install or unsigned configuration/skill/hooks loaded from an agent-controlled checkout. New CLI installation is not automatically enabled: `register → capability validation → conformance → trusted enable`. CLI-specific image is permitted; one universal image is not required.
 
+## Architecture diagrams (PROPOSED, not implemented)
+
+These Mermaid diagrams render in GitHub. They show the target V1 foundation **after implementation and validation**, not an already verified deployment. The trusted host Controller still calls the existing Docker CLI; no new Executor or parallel production dispatch is introduced.
+
+### A. Components and plugin boundaries
+
+```mermaid
+flowchart TB
+    Owner["Owner-approved task and role policy"] --> Controller["Trusted Host Controller"]
+    Controller --> Context["Task context + immutable input verifier"]
+    Controller --> Registry["Allowlisted RuntimeRegistry"]
+    Registry --> Codex["Codex plugin — implement V1"]
+    Registry -. "later, separately approved" .-> Claude["Claude Code plugin"]
+    Registry -. "later, separately approved" .-> OpenCode["OpenCode plugin"]
+    Registry -. "later, separately approved" .-> AGY["Antigravity plugin"]
+    Codex --> Launch["LaunchSpecV1 — declarative only"]
+    Claude -.-> Launch
+    OpenCode -.-> Launch
+    AGY -.-> Launch
+    Context --> Policy["SandboxPolicyV1 — trusted"]
+    Launch --> Check{"Policy and capabilities satisfied?"}
+    Policy --> Check
+    Check -- "no" --> Blocked["BLOCKED — no launch"]
+    Check -- "yes" --> Backend["DockerSandboxBackend on trusted host"]
+    subgraph Worker["Ephemeral Docker worker — one CLI execution"]
+        CLI["Selected CLI runtime"]
+        Native["Native CLI sandbox if supported"]
+        Tools["Agent-controlled tools: shell / edit / test"]
+        Workspace["Scoped task snapshot"]
+        CLI --> Native
+        Native --> Tools
+        Tools --> Workspace
+    end
+    Backend --> CLI
+    Backend --> Observe["Independent sandbox observation"]
+    CLI --> Raw["Raw CLI events and result"]
+    Observe --> Normalize["Trusted result normalization"]
+    Raw --> Normalize
+    Normalize --> Gates["Existing CI / QC / TL / Owner gates"]
+```
+
+**Boundary:** A runtime plugin chooses its compatible invocation format, but **cannot create Docker grants or override the trusted SandboxPolicy**. Native CLI sandbox differs by vendor and is defense in depth. Dashed plugins are **future targets**, not installed/supported V1 implementations. The dotted plugin-to-LaunchSpec lines are future adapter paths, not execution in parallel.
+
+### B. Execution and evidence flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Trusted Controller
+    participant R as RuntimeRegistry + Plugin
+    participant V as Policy / Context Validator
+    participant D as Docker Sandbox Backend
+    participant W as Ephemeral CLI Worker
+    participant O as Independent Observer
+    C->>V: Validate role, phase, task, complete context bytes
+    V-->>C: Immutable input reference + approved policy
+    C->>R: Select pinned runtime and model capability
+    R-->>C: Declarative LaunchSpecV1
+    C->>V: Check launch spec against sandbox policy
+    alt Unsupported capability or stale bytes
+        V-->>C: BLOCKED (no execution)
+    else Supported and verified
+        C->>D: Start owned attempt with validated launch
+        D->>W: Run CLI in restricted container
+        W->>W: Agent tool calls under effective sandbox
+        W-->>D: Raw output / exit / runtime metadata
+        D-->>O: Engine identity / cleanup / observed effects
+        O-->>C: Independently observed execution facts
+        D-->>C: Raw CLI result
+        C->>C: Normalize WorkerResult and provenance
+        C-->>C: Keep CI / QC / TL / Owner gates independent
+    end
+```
+
+**Unresolved V1-02 P0 proofs:** (1) agent tool can perform a benign action but **cannot read/export same-role authentication**; (2) actual CLI consumes the exact **verified context bytes after the last check**, not a changed path; (3) model/effort evidence must distinguish requested/thread/turn settings from independently proven provider-effective inference. Until proven, these claims remain `BLOCKED` or `UNVERIFIED`, never passed merely from diagrams, mocks or CI.
+
+### C. Two coding subagents without overlapping files
+
+```mermaid
+flowchart TB
+    Base["Shared pinned main base"] --> Lead["Codex Lead — freeze the shared LaunchSpec/Policy contract"]
+    Lead --> A["Subagent A: V1-02A Sandbox Core"]
+    Lead --> B["Subagent B: V1-02B Runtime Plugins"]
+    A --> Wa["Separate worktree A / sandbox owned files and tests"]
+    B --> Wb["Separate worktree B / plugin owned files and tests"]
+    Wa --> Integrate["Lead-owned integration worktree"]
+    Wb --> Integrate
+    Integrate --> Tests["Unit + regression + applicable sandbox conformance"]
+    Tests --> Draft["Draft implementation PR / exact HEAD review"]
+    Docs["TL Planner docs-only PR #30"] -. "architecture reference only" .-> Lead
+```
+
+Two subagents parallelize **development worktrees only**. V1 production Controller dispatch stays sequential per [scope and gate contract](../v1-scope-and-gates.md). Integration and any edits to existing shared runner/Controller files are **Lead-owned**.
+
 ## Minimal common interfaces (design contract, not existing source)
 
 **SandboxPolicy v1** (trusted input): `policy_version`, `role`, `phase`, `task_id`, `attempt_id`, `source_snapshot_id`, `allowed_read_roots`, `allowed_write_roots`, `workspace_root`, `network_mode` (`none` or explicitly constrained approved egress), `process_limits` (duration, memory, CPU, PID), `credential_mode`, `required_capabilities`, `backend_id`, and immutable image identifier. Unknown fields/values, wider agent-supplied grants, ambiguous paths, unsupported backend capabilities: **fail closed**.
