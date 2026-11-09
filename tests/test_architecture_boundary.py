@@ -14,6 +14,7 @@ from agent_workflow.orchestration.controller import run_once
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from test_my_wfc import spec, payload
+from test_runtime_plugins import FakePlugin
 
 
 def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
@@ -114,9 +115,20 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
         service.provision_task(spec() | {"title": "conflicting authorization"})
 
 
-@pytest.mark.parametrize("failure", [None, "test", "publish", "result", "pr_url"])
+@pytest.mark.parametrize(
+    ("failure", "runtime_name"),
+    [
+        (None, "codex"),
+        ("test", "codex"),
+        ("publish", "codex"),
+        ("result", "codex"),
+        ("pr_url", "codex"),
+        (None, "fake"),
+        ("unsupported runtime", "unregistered"),
+    ],
+)
 def test_controller_only_launches_phases_and_receives_result(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, runtime_name
 ):
     service = WorkflowService(tmp_path / "state.db")
     service.provision_task(spec())
@@ -126,12 +138,31 @@ def test_controller_only_launches_phases_and_receives_result(
         "write_paths": ["src", "docs"],
     }
     runtime = CoderRuntime(
-        {"tasks": {"TEST": task}, "app_id": 1, "installation_id": 2}, service
+        {
+            "tasks": {"TEST": task},
+            "app_id": 1,
+            "installation_id": 2,
+            "model": "fixture-model",
+            "runtime": runtime_name,
+            "provider": "openai" if runtime_name == "codex" else "fixture",
+            "effort": "medium" if runtime_name == "fake" else None,
+            "runtime_image": "synthetic-image",
+        },
+        service,
+        plugins=(FakePlugin(),),
     )
+    if runtime_name == "codex":
+        # Exercise backwards compatibility with existing operator configs.
+        runtime.config.pop("runtime")
+        runtime.config.pop("provider")
     calls = []
     monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("stop"))
 
-    def docker(claim, stage, mode, prompt=""):
+    def docker(claim, stage, mode, prompt="", *, code_plan=None):
+        if mode == "code":
+            assert runtime_name == "codex"
+            assert code_plan.command == ("code",)
+            assert code_plan.env == (("WFC_CODEX_MODEL", "fixture-model"),)
         calls.append(mode)
         if mode == failure:
             raise WorkflowError("phase failed")
@@ -156,8 +187,25 @@ def test_controller_only_launches_phases_and_receives_result(
             (stage / "result.json").write_text(json.dumps(result))
         return b"success"
 
+    def sandbox_run(policy, **invocation):
+        assert runtime_name == "fake"
+        assert policy.network == "none"
+        assert invocation["workspace"].name == "source"
+        assert invocation["image"] == "synthetic-image"
+        assert invocation["command"] == ("fake-exec", "fixture-model", "medium")
+        assert invocation["env"] == ()
+        calls.append("code")
+        return b"fixture"
+
     monkeypatch.setattr(runtime, "docker", docker)
+    monkeypatch.setattr(runtime.sandbox, "run", sandbox_run)
     ledger = DispatchLedger(service)
+    if failure == "unsupported runtime":
+        with pytest.raises(WorkflowError, match="unsupported runtime"):
+            run_once(service, ledger, {"TEST"}, runtime.execute)
+        assert ledger.claim({"TEST"}, 60) is None
+        assert calls == []
+        return
     if failure:
         with pytest.raises(WorkflowError):
             run_once(service, ledger, {"TEST"}, runtime.execute)

@@ -38,9 +38,16 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
-    CoderRuntime(config, None).docker(
-        {"dispatch_id": "a" * 32, "deadline": time.time() + 60}, tmp_path, mode
+    runtime = CoderRuntime(config, None)
+    claim = {
+        "dispatch_id": "a" * 32,
+        "input_sha": "b" * 40,
+        "deadline": time.time() + 60,
+    }
+    code_plan = (
+        runtime.registry.plan(runtime._code_request(claim)) if mode == "code" else None
     )
+    runtime.docker(claim, tmp_path, mode, code_plan=code_plan)
     text = " ".join(calls[0])
     assert ("src=techlead-review-poc_codex_auth" in text) == (mode == "code")
     assert bool(commands) == (mode == "code")

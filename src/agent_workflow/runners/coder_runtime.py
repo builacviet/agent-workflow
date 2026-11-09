@@ -1,4 +1,4 @@
-"""Docker-only Controller adapter; no Git/GitHub operations or credentials."""
+"""Trusted Docker phase orchestration and worker handoff validation."""
 
 from __future__ import annotations
 
@@ -10,11 +10,25 @@ import stat
 import subprocess
 import time
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, canonical_repository
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.runners.runtime_plugins import (
+    AgentRuntimePlugin,
+    CodexCLIPlugin,
+    RuntimePlan,
+    RuntimeRegistry,
+    RuntimeRequest,
+    RuntimeSpec,
+)
+from agent_workflow.runners.sandbox import (
+    SandboxManager,
+    SandboxPolicy,
+    docker_security_args,
+)
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -84,21 +98,22 @@ def validate_config(config: dict) -> None:
         if not path.is_absolute():
             raise WorkflowError("absolute operator paths required")
         independent_path(path, directory=key == "scratch")
-    profile = Path(config["seccomp_profile"])
-    if (
-        not profile.is_absolute()
-        or not profile.is_file()
-        or profile.is_symlink()
-    ):
-        raise WorkflowError("absolute independent seccomp profile required")
-    independent_path(profile)
-    if (
-        hashlib.sha256(profile.read_bytes()).hexdigest()
-        != config["seccomp_sha256"]
-    ):
-        raise WorkflowError("seccomp profile digest mismatch")
-    if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
-        raise WorkflowError("dedicated POC Codex auth volume required")
+    if config.get("runtime", "codex") == "codex":
+        profile = Path(config["seccomp_profile"])
+        if (
+            not profile.is_absolute()
+            or not profile.is_file()
+            or profile.is_symlink()
+        ):
+            raise WorkflowError("absolute independent seccomp profile required")
+        independent_path(profile)
+        if (
+            hashlib.sha256(profile.read_bytes()).hexdigest()
+            != config["seccomp_sha256"]
+        ):
+            raise WorkflowError("seccomp profile digest mismatch")
+        if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
+            raise WorkflowError("dedicated POC Codex auth volume required")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", config["image"]):
         raise WorkflowError("invalid runtime image")
     if not isinstance(config.get("model"), str) or not config["model"].strip():
@@ -200,8 +215,68 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
 
 
 class CoderRuntime:
-    def __init__(self, config: dict, service: WorkflowService) -> None:
+    def __init__(
+        self,
+        config: dict,
+        service: WorkflowService,
+        *,
+        plugins: Iterable[AgentRuntimePlugin] = (),
+    ) -> None:
         self.config, self.service = config, service
+        self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
+        self.sandbox = SandboxManager()
+
+    def _code_request(self, claim: dict) -> RuntimeRequest:
+        runtime = self.config.get("runtime", "codex")
+        provider = self.config.get(
+            "provider", "openai" if runtime == "codex" else ""
+        )
+        return RuntimeRequest(
+            spec=RuntimeSpec(
+                runtime, provider, self.config["model"], self.config.get("effort")
+            ),
+            role="dev",
+            phase="code",
+            dispatch_id=claim["dispatch_id"],
+            input_sha=claim["input_sha"],
+            required_capabilities=frozenset({"workspace-write"}),
+        )
+
+    def _run_code(
+        self,
+        claim: dict,
+        source: Path,
+        request: RuntimeRequest,
+        plan: RuntimePlan,
+        prompt: str,
+    ) -> bytes:
+        if request.spec.runtime == "codex":
+            # Existing Codex device-login profile. Only the registered built-in
+            # can use this exact entrypoint and the trusted operator auth volume.
+            return self.docker(claim, source, "code", prompt, code_plan=plan)
+        return self.sandbox.run(
+            SandboxPolicy(timeout_seconds=self._remaining_seconds(claim)),
+            dispatch_id=claim["dispatch_id"],
+            workspace=source,
+            image=self.config["runtime_image"],
+            command=plan.command,
+            env=plan.env,
+            stdin=prompt,
+        )
+
+    @staticmethod
+    def _remaining_seconds(claim: dict) -> int:
+        remaining = int(claim["deadline"] - time.time())
+        if remaining <= 0:
+            raise WorkflowError("dispatch deadline exceeded")
+        remaining = int(operation_timeout(remaining))
+        if remaining <= 0:
+            raise WorkflowError("dispatch deadline exceeded")
+        return remaining
+
+    def reconcile(self, dispatch_id: str) -> None:
+        self.sandbox.stop(dispatch_id)
+        self.stop(dispatch_id)
 
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
@@ -235,7 +310,13 @@ class CoderRuntime:
                     raise WorkflowError("runtime termination not confirmed")
 
     def docker(
-        self, claim: dict, stage: Path, mode: str, prompt: str = ""
+        self,
+        claim: dict,
+        stage: Path,
+        mode: str,
+        prompt: str = "",
+        *,
+        code_plan: RuntimePlan | None = None,
     ) -> bytes:
         name = f"my-wfc-{claim['dispatch_id']}-{mode}"
         args = [
@@ -245,17 +326,7 @@ class CoderRuntime:
             name,
             "--label",
             "my-wfc.phase=3.1",
-            "--read-only",
-            "--user",
-            "10001:10001",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges:true",
-            "--pids-limit=256",
-            "--memory=2g",
-            "--cpus=2",
-            "--log-driver=none",
-            "--tmpfs",
-            "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+            *docker_security_args(SandboxPolicy()),
             "--mount",
             f"type=bind,src={stage},dst=/workspace",
             "-i",
@@ -279,7 +350,14 @@ class CoderRuntime:
                 "--mount",
                 f"type=bind,src={key},dst=/run/.secret/coder-app.pem,readonly",
             ]
+        command = (mode,)
         if mode == "code":
+            if (
+                code_plan is None
+                or code_plan.command != command
+                or code_plan.env != (("WFC_CODEX_MODEL", self.config["model"]),)
+            ):
+                raise WorkflowError("legacy Codex profile requires the Codex code plan")
             volume = self.config.get("codex_auth_volume")
             if volume != "techlead-review-poc_codex_auth":
                 raise WorkflowError("dedicated POC Codex auth volume required")
@@ -287,27 +365,26 @@ class CoderRuntime:
             args += [
                 "--mount",
                 f"type=volume,src={volume},dst=/home/coder/.codex",
-                "--env",
-                "WFC_CODEX_MODEL=" + self.config["model"],
             ]
+            for name, value in code_plan.env:
+                args += ["--env", f"{name}={value}"]
         elif mode not in {"prepare", "publish"}:
             args += ["--network=none"]
 
-        remaining = int(claim["deadline"] - time.time())
-        if remaining <= 0:
-            raise WorkflowError("dispatch deadline exceeded")
-        remaining = int(operation_timeout(remaining))
-        if remaining <= 0:
-            raise WorkflowError("dispatch deadline exceeded")
+        remaining = self._remaining_seconds(claim)
         args += [
             "--env",
             "WFC_RUNTIME_SECONDS=" + str(remaining),
             self.config["image"],
-            mode,
+            *command,
         ]
         return run_container(args, prompt, remaining)
 
     def execute(self, claim: dict, context: dict) -> str:
+        request = self._code_request(claim)
+        plan = self.registry.plan(request)
+        if request.spec.runtime != "codex" and not self.config.get("runtime_image"):
+            raise WorkflowError("explicit sandbox image required for runtime plugin")
         task = self.config["tasks"][context["task_id"]]
         stage = (
             Path(task["worktree"])
@@ -344,7 +421,8 @@ class CoderRuntime:
                 "Implement only this authorized task; do not commit/push/approve.\n"
                 + json.dumps(context)
             )
-            self.docker(claim, source, "code", prompt)
+            output = self._run_code(claim, source, request, plan, prompt)
+            self.registry.result(request, output)
             self.stop(claim["dispatch_id"])
             tested_digest = source_digest(source)
             self.docker(claim, source, "test")

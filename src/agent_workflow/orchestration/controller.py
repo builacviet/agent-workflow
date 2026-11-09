@@ -109,7 +109,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
             raise WorkflowError(
                 "operator must reconcile Git/PR/handoff first; use --reconciled"
             )
-        runtime.stop(args.acknowledge)
+        runtime.reconcile(args.acknowledge)
         ledger.acknowledge(args.acknowledge)
         return
     while True:
