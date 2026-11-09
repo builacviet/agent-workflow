@@ -224,12 +224,18 @@ class CoderRuntime:
     ) -> None:
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
-        self.sandbox = SandboxManager()
+        database = config.get("database")
+        fence_dir = (
+            Path(str(Path(database).resolve()) + ".sandbox-fences")
+            if database is not None
+            else None
+        )
+        self.sandbox = SandboxManager(fence_dir=fence_dir)
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
         runtime = self.config.get("runtime", "codex")
         provider = self.config.get(
-            "provider", "openai" if runtime == "codex" else ""
+            "provider", CodexCLIPlugin.default_provider if runtime == "codex" else ""
         )
         return RuntimeRequest(
             spec=RuntimeSpec(
@@ -249,20 +255,26 @@ class CoderRuntime:
         request: RuntimeRequest,
         plan: RuntimePlan,
         prompt: str,
-    ) -> bytes:
-        if request.spec.runtime == "codex":
-            # Existing Codex device-login profile. Only the registered built-in
-            # can use this exact entrypoint and the trusted operator auth volume.
-            return self.docker(claim, source, "code", prompt, code_plan=plan)
-        return self.sandbox.run(
+        approved_image_id: str | None,
+    ) -> None:
+        if approved_image_id is None:
+            # Only the built-in Codex device-login profile is exempt from
+            # strict sandbox image approval.
+            output = self.docker(claim, source, "code", prompt, code_plan=plan)
+            self.registry.result(request, output)
+            return
+
+        launch = self.sandbox.run(
             SandboxPolicy(timeout_seconds=self._remaining_seconds(claim)),
             dispatch_id=claim["dispatch_id"],
             workspace=source,
             image=self.config["runtime_image"],
+            approved_image_id=approved_image_id,
             command=plan.command,
             env=plan.env,
             stdin=prompt,
         )
+        self.registry.result(request, launch.output, observed_image_id=launch.image_id)
 
     @staticmethod
     def _remaining_seconds(claim: dict) -> int:
@@ -383,7 +395,8 @@ class CoderRuntime:
     def execute(self, claim: dict, context: dict) -> str:
         request = self._code_request(claim)
         plan = self.registry.plan(request)
-        if request.spec.runtime != "codex" and not self.config.get("runtime_image"):
+        approved_image_id = self.registry.approved_image_id(request)
+        if approved_image_id is not None and not self.config.get("runtime_image"):
             raise WorkflowError("explicit sandbox image required for runtime plugin")
         task = self.config["tasks"][context["task_id"]]
         stage = (
@@ -421,8 +434,7 @@ class CoderRuntime:
                 "Implement only this authorized task; do not commit/push/approve.\n"
                 + json.dumps(context)
             )
-            output = self._run_code(claim, source, request, plan, prompt)
-            self.registry.result(request, output)
+            self._run_code(claim, source, request, plan, prompt, approved_image_id)
             self.stop(claim["dispatch_id"])
             tested_digest = source_digest(source)
             self.docker(claim, source, "test")

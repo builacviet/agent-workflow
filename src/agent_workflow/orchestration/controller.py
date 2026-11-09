@@ -109,6 +109,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
             raise WorkflowError(
                 "operator must reconcile Git/PR/handoff first; use --reconciled"
             )
+        # Keep the ledger slot held until Docker settlement is established.
         runtime.reconcile(args.acknowledge)
         ledger.acknowledge(args.acknowledge)
         return

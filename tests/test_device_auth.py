@@ -23,7 +23,7 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
     pem.write_text("synthetic")
     config = {
         "image": "fixture",
-        "model": "fixture-model",
+        "model": "gpt-6-luna",
         "pem": str(pem),
         "codex_auth_volume": "techlead-review-poc_codex_auth",
         "seccomp_profile": str(profile),
