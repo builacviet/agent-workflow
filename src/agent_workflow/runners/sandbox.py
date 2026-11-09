@@ -545,7 +545,13 @@ class SandboxManager:
         with cleanup_budget():
             identifiers = self._owned(dispatch_id, name_pattern)
             for identifier in identifiers:
-                _docker(["rm", "-f", identifier])
+                try:
+                    _docker(["rm", "-f", identifier])
+                except WorkflowError:
+                    # The watchdog and Controller can both list this ID before
+                    # either removes it. Confirm absence with a fresh owned scan.
+                    if identifier in self._owned(dispatch_id, name_pattern):
+                        raise
             if self._owned(dispatch_id, name_pattern):
                 raise WorkflowError("sandbox termination not confirmed")
 

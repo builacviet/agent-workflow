@@ -192,15 +192,36 @@ def source_digest(root: Path) -> str:
 def docker_command(args: list[str]) -> bytes:
     if not args or args[0] != "docker":
         raise WorkflowError("Controller may only launch Docker")
+    # Use fixed operation names only. Arguments and subprocess output can
+    # contain host paths, environment values or untrusted content.
+    operation = "command"
+    for prefix, name in (
+        (["info"], "info"),
+        (["image", "inspect"], "image inspect"),
+        (["create"], "create"),
+        (["container", "inspect"], "container inspect"),
+        (["container", "ls"], "container ls"),
+        (["rm"], "rm"),
+        (["volume", "inspect"], "volume inspect"),
+    ):
+        if args[1:1 + len(prefix)] == prefix:
+            operation = name
+            break
+
+    timeout = operation_timeout(30)
     try:
         return subprocess.run(
-            args,
-            capture_output=True,
-            check=True,
-            timeout=operation_timeout(30),
+            args, capture_output=True, check=True, timeout=timeout
         ).stdout
-    except (OSError, subprocess.SubprocessError):
-        raise WorkflowError("Docker command failed") from None
+    except subprocess.TimeoutExpired:
+        check_deadline()
+        raise WorkflowError(f"Docker {operation} timed out") from None
+    except subprocess.CalledProcessError as error:
+        raise WorkflowError(
+            f"Docker {operation} failed (exit {error.returncode})"
+        ) from None
+    except OSError:
+        raise WorkflowError(f"could not launch Docker {operation}") from None
 
 
 def run_container(args: list[str], prompt: str, remaining: int) -> bytes:

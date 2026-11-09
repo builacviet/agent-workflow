@@ -94,7 +94,9 @@ def test_workspace_hardlink_is_rejected(tmp_path):
         sandbox._workspace_bind(workspace, True)
 
 
-@pytest.mark.parametrize("outcome", ["success", "timeout", "image-mismatch"])
+@pytest.mark.parametrize(
+    "outcome", ["success", "timeout", "watchdog-race", "rm-failure", "image-mismatch"]
+)
 def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
     identifier = "b" * 64
     dispatch = "a" * 32
@@ -103,10 +105,8 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
 
     def docker(args):
         nonlocal owned
-        # All Docker operations must be possible after an execution deadline.
-        # Regresses S08: an expired budget used to mask the original timeout
-        # with a generic Docker command failed error on host reconciliation.
-        if outcome == "timeout":
+        # Cleanup must still be possible after the execution deadline.
+        if outcome in {"timeout", "watchdog-race", "rm-failure"}:
             budget.check_deadline()
         calls.append(args)
         match args[0]:
@@ -134,24 +134,35 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
                 return b""
             case "rm":
                 assert args == ["rm", "-f", identifier]
+                if outcome in {"watchdog-race", "rm-failure"}:
+                    if outcome == "watchdog-race":
+                        # The watchdog removed the exact owned ID after our list.
+                        owned = None
+                    return coder_runtime.docker_command(["docker", *args])
                 owned = None
                 return b""
         raise AssertionError(args)
+
+    def failed_rm(args, **kwargs):
+        assert args == ["docker", "rm", "-f", identifier]
+        raise subprocess.CalledProcessError(1, args, stderr=b"private Docker output")
 
     def attach(args, stdin, remaining):
         assert args == ["docker", "start", "-ai", identifier]
         assert stdin == "task input"
         assert 0 < remaining <= 10
         assert outcome != "image-mismatch", "mismatched image must never start"
-        if outcome == "timeout":
+        if outcome in {"timeout", "watchdog-race", "rm-failure"}:
             # Simulate real expiration immediately before Controller cleanup.
             budget._BUDGET.set((0.0, 0.0))
-            raise TimeoutError("fixture timeout")
+            raise TimeoutError("fixture deadline exceeded")
         return b"fixture output"
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(coder_runtime, "run_container", attach)
+    monkeypatch.setattr(coder_runtime.subprocess, "run", failed_rm)
     monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
+
     def run():
         return SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(workspace_writable=False, timeout_seconds=10),
@@ -166,16 +177,25 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
 
     if outcome == "success":
         assert run() == SandboxRunResult(b"fixture output", _FIXTURE_PIN)
-    elif outcome == "timeout":
-        with pytest.raises(TimeoutError, match="fixture timeout"):
+    elif outcome in {"timeout", "watchdog-race"}:
+        with pytest.raises(TimeoutError, match="fixture deadline exceeded"):
             run()
+    elif outcome == "rm-failure":
+        with pytest.raises(WorkflowError, match=r"^Docker rm failed \(exit 1\)$"):
+            run()
+        assert owned is not None
+        assert (tmp_path / "fences" / f"{dispatch}.scope").exists()
+        return
     else:
         with pytest.raises(WorkflowError, match="container image differs from approved pin"):
             run()
 
-    assert [args[0] for args in calls] == [
+    expected = [
         "info", "image", "create", "container", "info", "container", "rm", "container"
     ]
+    if outcome == "watchdog-race":
+        expected.append("container")
+    assert [args[0] for args in calls] == expected
     assert calls[3][1] == "inspect"
     create = calls[2]
     assert "--network=none" in create
