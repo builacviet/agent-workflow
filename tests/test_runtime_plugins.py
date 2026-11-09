@@ -271,6 +271,7 @@ def test_reject_duplicate_and_unknown_interface_version():
         (("code",), (("OPENAI_API_KEY", "synthetic"),)),
         (("code",), (("WFC_CODEX_MODEL", "model\0extra"),)),
         (("code",), (("WFC_CODEX_MODEL", "first"), ("WFC_CODEX_MODEL", "second"))),
+        (("code",), (("WFC_PLUGIN_TOKEN", "synthetic"),)),
     ],
 )
 def test_invalid_runtime_plan_rejected(command, env):
@@ -282,7 +283,7 @@ def test_invalid_runtime_plan_rejected(command, env):
 def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
     class EnvPlugin(FakePlugin):
         def plan(self, request):
-            return RuntimePlan(("fake-exec",), (("WFC_PLUGIN_TOKEN", "synthetic"),))
+            return RuntimePlan(("fake-exec",), (("WFC_PLUGIN_OPTION", "synthetic"),))
 
     other = RuntimeRegistry((EnvPlugin(),))
     with pytest.raises(WorkflowError, match="environment is not explicitly approved"):

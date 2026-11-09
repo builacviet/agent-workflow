@@ -90,6 +90,7 @@ class RuntimeManifest:
             and all(
                 isinstance(key, str)
                 and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", key)
+                and not any(secret in key for secret in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"))
                 for key in self.approved_plan_env
             )
             and type(self.api_version) is int
@@ -126,6 +127,7 @@ class RuntimePlan:
                 and len(pair) == 2
                 and isinstance(pair[0], str)
                 and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", pair[0])
+                and not any(secret in pair[0] for secret in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"))
                 and _text(pair[1])
                 and pair[0] not in names
             ):
