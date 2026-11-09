@@ -316,12 +316,16 @@ class SandboxManager:
                 )
                 return SandboxRunResult(output, observed_image_id)
             finally:
-                self._assert_scope(scope, dispatch_id)
-                self._settle_create(
-                    dispatch_id, fence, self._name_pattern(prefix), scope
-                )
-                self._cleanup(dispatch_id, re.escape(name))
-                self._clear_scope(scope)
+                # Reconciliation must have its own budget: the execution
+                # deadline may already be exhausted (including on Windows).
+                # Preserve the original timeout unless real cleanup fails.
+                with cleanup_budget():
+                    self._assert_scope(scope, dispatch_id)
+                    self._settle_create(
+                        dispatch_id, fence, self._name_pattern(prefix), scope
+                    )
+                    self._cleanup(dispatch_id, re.escape(name))
+                    self._clear_scope(scope)
 
     def stop(self, dispatch_id: str) -> None:
         """Only the original Docker engine may settle an owned execution."""

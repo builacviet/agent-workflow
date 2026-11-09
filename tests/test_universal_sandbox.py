@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from agent_workflow import budget
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy, SandboxRunResult
@@ -102,6 +103,11 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
 
     def docker(args):
         nonlocal owned
+        # All Docker operations must be possible after an execution deadline.
+        # Regresses S08: an expired budget used to mask the original timeout
+        # with a generic Docker command failed error on host reconciliation.
+        if outcome == "timeout":
+            budget.check_deadline()
         calls.append(args)
         match args[0]:
             case "info":
@@ -138,6 +144,8 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         assert 0 < remaining <= 10
         assert outcome != "image-mismatch", "mismatched image must never start"
         if outcome == "timeout":
+            # Simulate real expiration immediately before Controller cleanup.
+            budget._BUDGET.set((0.0, 0.0))
             raise TimeoutError("fixture timeout")
         return b"fixture output"
 
