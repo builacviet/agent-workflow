@@ -1,20 +1,20 @@
 # Master Test Plan — V1-02 Role Profiles from Deployment Environment
 
-**PRE-DEV TEST DESIGN ONLY.** Draft design disposition: **BLOCKED** on the clarification requests in §2. All cases are **NOT RUN**. Post-code results belong in the separate [MTP Execution Report](../templates/mtp-execution-report.md).
+**PRE-DEV TEST DESIGN ONLY.** Draft design disposition: **READY_FOR_INDEPENDENT_MTP_REVIEW** against the TL Planner's proposed Plan/AC/DoD. Owner package approval and separate online execution authorization remain pending. All cases are **NOT RUN**. Post-code results belong in the separate [MTP Execution Report](../templates/mtp-execution-report.md).
 
 ## 1. Frozen design identity (no self-reference)
 
 | Item | Value |
 | --- | --- |
-| Planning package ID / proposed version | `V1-02 / draft v0` is a provisional reference to the Notion kickoff. Canonical lineage, package version and external manifest are pending TL Planner/Owner confirmation. |
-| Atomic task ID and AC source/revision | `V1-02`, [Notion task](https://app.notion.com/p/412f92014abd81e7b6b4d8d645553cde), snapshot last edited `2026-11-09T00:38:30.440Z`. The four top-level AC bullets are indexed below in source order. Kickoff proposals and historical notes are separately identified. |
+| Planning package ID / proposed version | `V1-02 / v1.0-draft` is the proposed package lineage/version. The external manifest and Owner approval are pending. |
+| Atomic task ID and AC source/revision | `V1-02`, [TL Planner Plan/AC/DoD v1.0-draft after Owner direction](https://app.notion.com/p/412f92014abd81e7b6b4d8d645553cde#:~:text=TL%20Planner%20Plan%2FAC%2FDoD%20v1.0-draft%20after%20Owner%20direction), Notion snapshot last edited `2026-11-09T01:32:04.316Z`. AC-01–05 below follow that section. [Planner handoff on PR #28](https://github.com/builacviet/agent-workflow/pull/28#issuecomment-6730108383). |
 | Repository / design baseline | `builacviet/agent-workflow`, `main@96f5d523814f94ebfec244c66e38d400e2144509` |
 | QC policy | `required` given the role-selection, authorization and credential boundaries |
-| MTP ID / version | `V1-02-MTP / 0.1-draft` |
-| Changed-path scope / prohibited effects | PRE-DEV write scope is this file. Dev allowlist and DoD are pending. Post-code QC writes only disposable harness/evidence and the separate execution report. No production config, live DB, tunnel, real App PEM/token access, generic Docker access for roles, or live workflow/merge mutations. |
-| Environment, bounds and fixtures | Offline credential-free sandbox by default. Target Ubuntu 24.04 on WSL2 and pinned Codex Docker image for operator-authorized smoke. Synthetic role markers, fresh workspaces and fake services as described below. Exact online timeout, output/token ceiling and egress policy pending G-04. |
+| MTP ID / version | `V1-02-MTP / 0.2-draft` |
+| Changed-path scope / prohibited effects | PRE-DEV write scope is this file. The linked draft defines the proposed DoD and candidate Dev paths. The exact Dev allowlist awaits package freeze. Post-code QC writes only disposable harness/evidence and the separate execution report. No production config, live DB, tunnel, real App PEM/token access, generic Docker access for roles, or live workflow/merge mutations. |
+| Environment, bounds and fixtures | Offline credential-free sandbox by default. Target Ubuntu 24.04 on WSL2 and pinned Codex Docker image for operator-authorized smoke. Synthetic role markers, fresh workspaces and fake services as described below. Draft smoke limits are 180 seconds and 64 KiB of sanitized retained output per role, one invocation per role, approved provider-only egress and no automatic retry. The execution authorization and operator inputs are pending. |
 | QC author/session identifier | `Codex QC / qc-predev-v1-02-mtp-20261109-01` (artifact-local author session label) |
-| Dependencies and risks | V1-01 feasibility, merged role contracts from PR #27, legacy Phase 3.1 boundaries, open P0 design gaps G-01, G-02, G-04, G-05 and P1 gaps G-03, G-06. See §2. |
+| Dependencies and risks | V1-01 feasibility, merged role contracts from PR #27, legacy Phase 3.1 boundaries, Owner direction on G-01, G-02, G-04 and G-05 for drafting, with remaining review and execution prerequisites in §2. |
 
 An independent trusted operator records the SHA-256 of the final raw UTF-8 MTP bytes and binds it to the frozen Plan, AC and task in the external package manifest. Package and MTP digests and Owner authorization are recorded externally. Byte changes after approval require a new version/hash and change control. [QC role](../roles/qc.md) · [Engineering standards](../conventions/engineering-standards.md)
 
@@ -22,13 +22,13 @@ An independent trusted operator records the SHA-256 of the final raw UTF-8 MTP b
 
 | AC ID | Observable requirement | Test case IDs | Coverage | Gap / risk |
 | --- | --- | --- | --- | --- |
-| AC-01 | Dev, QC and Independent TL Reviewer each resolve model and reasoning effort from deployment configuration. Invalid values cause explicit startup failure. | CFG-01–04 | Independent pair resolution, missing/invalid inputs, unsupported pairs and startup failure | G-01. P0 silent fallback or wrong role/model/effort. |
-| AC-02 | Trusted runner alone selects the role. Prompts, workspaces and permissions are isolated across roles. | CFG-04, ISO-01–04, PERM-01–03, SEC-01–02 | All ordered role pairs, same-role successive runs, untrusted selectors, write/authority denials, path/mount escape and injection | G-02/G-05. P0 cross-role data or privilege exposure. |
-| AC-03 | Share one Docker image where feasible and avoid three always-on role services. | IMG-01, LIFE-01 | Image identity and feasibility, lifecycle and uncertain stop | G-03. P1 image drift, lingering containers or unsupported claims about feasibility. |
-| AC-04 | Record at least one isolated headless invocation per role with model/effort and redacted logs. | LIFE-01, SMK-01–03, EVD-01–02 | Online role completion, independent metadata, redaction, timeout and evidence failure | G-04/G-05. P0 unverified execution or disclosure in evidence. |
-| V1 compatibility | Preserve existing Phase 3.1 Controller/Worker, MCP and WFC interfaces, GitHub App scope and CI/review boundaries. | REG-01–04 | Existing contracts, failure atomicity, stale inputs and no scope expansion | G-05/G-06. Existing tests and gate prerequisites apply. Future gate automation requires separately authorized scope. |
+| AC-01 | In explicit V1 role mode, trusted startup validates all three independent canonical deployment model/effort pairs before any role spawn. Launch binds the selected pair. Legacy mode is explicit. | CFG-01–04, SMK-01–03, REG-01 | Valid, absent, noncanonical, unsupported and conflicting config, inactive-role rejection, legacy isolation and effective CLI settings | P0 silent fallback or wrong model/effort. |
+| AC-02 | Trusted runner selects the role and phase manifest and enforces scoped prompts, mounts, tools, workspace, output and permissions. | CFG-04, ISO-01–04, PERM-01–03, SEC-01–02 | Six profiles, all ordered role pairs, successive runs, positive and denied capabilities, and injection | P0 cross-role data or privilege exposure. |
+| AC-03 | Prefer one immutable pinned image for three ephemeral roles and require an evidenced Owner decision for any exception. | IMG-01, LIFE-01 | Image identity, bounded lifecycle, cleanup and uncertain stop | G-03. P1 image drift or lingering services. |
+| AC-04 | Collect one distinct authorized, bounded online headless invocation per role, with trusted effective settings and sanitized evidence. | LIFE-01, SMK-01–03, EVD-01–02 | Three role launches, budget/egress enforcement, metadata, redaction and timeout handling | P0 unverified execution or disclosure. Operator inputs and execution authorization pending. |
+| AC-05 | Trusted launch preflight binds authorized task/package/base/head/snapshot and records safe evidence. Preserve legacy contracts and the separation of later gates. | ISO-04, PERM-03, EVD-02, REG-01–04 | Identity/hash mismatch, changed paths, stale inputs, CI provenance and compatibility | G-06. P0 stale or spoofed evidence. Later gate evidence is verified by an authorized operator while automation is undeployed. |
 
-The matrix uses the Notion AC section as the requirements source. Missing configuration, per-run mounts, pinned-image evidence, one online smoke per role and deterministic pytest are detailed in the kickoff draft. Proposed missing/wrong profile IDs, unknown capabilities, attestation and gate binding are tracked separately where their contract is open. The merged role contracts supply permission and safety invariants.
+The draft DoD is covered by startup and permission assertions (CFG/ISO/PERM/SEC), image and three-role smoke checks (IMG/LIFE/SMK/EVD), and exact-HEAD, changed-path and legacy compatibility checks (REG). The separate approval, code review, QC evidence review and merge gates remain prerequisites or follow-on decisions as applicable.
 
 ### As-built comparison at the design baseline
 
@@ -39,60 +39,71 @@ The matrix uses the Notion AC section as the requirements source. Missing config
 | AC-03 | [Dockerfile](../../docker/coder.Dockerfile) pins the base image and Codex CLI. The Phase 3.1 runner passes one configured image through the four stages. [Compose](../../compose.controller.yaml) defines MCP and an optional tunnel. | Inspect image identity and actual lifecycle for three ephemeral Codex roles. Existing four-stage behavior is a compatibility constraint. |
 | AC-04 | [V1-01 report](V1-01.md) records three separate headless `app-server` threads with candidate pairs, matched markers and reported thread settings. | Exercise the V1-02 trusted launch path on the reviewed implementation HEAD and independently capture effective settings and sanitized evidence. The readiness spike did not exercise V1-02 role enforcement. |
 
-### Clarification requests and risk assessment
+### Role and phase fixture matrix
 
-All requests concern `V1-02-MTP 0.1-draft`. TL Planner owns Plan/AC revisions, QC owns revised tests, and Owner decides the package scope and authorizes the execution environment.
+| Trusted profile | Allowed read fixture | Allowed write or output fixture | Denied example |
+| --- | --- | --- | --- |
+| `dev/code` | Approved task/AC and scoped source, tests and conventions | Allowlisted disposable source/test path. Trusted Worker receives the snapshot. | GitHub writes, out-of-scope source and Owner approval |
+| `qc/pre-dev` | Draft Plan/AC, template and conventions | Proposed MTP and safe design handoff | Dev source, git push and self-review |
+| `qc/post-code` | Frozen MTP, exact reviewed snapshot and read-only CI/TL evidence | Disposable harness, bounded logs and separate execution report | Source or frozen MTP edits, TL/Owner verdicts |
+| `tl-reviewer/plan` | Exact Plan/AC/MTP submitted for review | Controlled provenance-bound plan review output | Editing Plan/MTP or submitting a code/QC verdict |
+| `tl-reviewer/code` | Exact reviewed diff, current HEAD and CI evidence | Controlled provenance-bound code review output | Editing source, pushing and merging |
+| `tl-reviewer/qc` | Exact QC evidence and relevant frozen artifacts | Controlled provenance-bound QC evidence review output | Editing the report/harness or issuing Owner approval |
 
-| ID / AC or cases | Risk and evidence | Clarification and candidate options for review |
+Use synthetic gate-specific artifact markers for allowed reads and denied reads of other private contexts. For each reviewer phase, the controlled output sink receives a fixture labeled with its role, phase and input identity. Reject submissions to a different phase or with a spoofed identity. Across all profiles also deny access to other-role private prompts/workspaces/auth, live DB, host Docker and deployment assets. The fixture sink models the output boundary. Verdict persistence and authority to advance later gates are outside that boundary.
+
+### Decision register and remaining risks
+
+| Gap | Draft test design disposition | Remaining evidence or decision |
 | --- | --- | --- |
-| G-01 / AC-01, CFG-01–04 | **P0.** Notion gives example variable names and candidate pairs. Current startup validates one nonblank string. | Confirm canonical env keys, role IDs, valid model/effort source and combinations, case/whitespace policy, whether an invalid inactive role blocks all startup, and precedence against file/CLI settings. Candidate policies are a versioned supported-pair catalog or a trusted pinned capability snapshot. Confirm the startup diagnostic contract. |
-| G-02 / AC-02, ISO-01–04, PERM-01–03 | **P0.** Role docs describe boundaries. Runtime has a single Code context. | Provide a role × phase matrix for permitted reads, output paths, tools, egress, auth context and reviewer evidence submission. Confirm whether profile IDs and unknown capabilities are in scope. Provide approved paths and an observable enforcement point for each prohibition. Options include runner-owned fixtures representing the approved profile matrix or approved phase-specific capability manifests. |
-| G-03 / AC-03, IMG-01, LIFE-01 | **P1.** The AC qualifies image reuse with feasibility. | Define what evidence warrants an exception, who records that decision, and the cleanup/stop budget. Candidate acceptance is equal immutable image IDs for all roles or a documented, Owner-accepted exception while roles remain ephemeral. |
-| G-04 / AC-04, SMK-01–03, EVD-01–02 | **P0.** V1-01 reported thread settings for a feasibility probe. It gives no V1-02 launch or evidence contract. | Confirm authorized isolated auth mechanism, allowed online egress and budgets, CLI observation surface for effective role/model/effort, reroute policy and safe output schema. A trusted CLI event or separately trusted attestation could be acceptable if it binds to the invocation. Missing effective evidence blocks acceptance. |
-| G-05 / AC-02, AC-04, REG-04 | **P0.** Notion proposes self-approval and stale HEAD/MTP cases. Standards require provenance and external hashes. Legacy WFC has no planning/QC verdict and V1-03 owns the CI adapter. | Pin Plan/AC/DoD and exact Dev allowlist. Identify which package/HEAD binding and trusted evidence assertions V1-02 implements, and which remain manual or belong to later gates. Choose a documented operator preflight for undeployed gates or an explicitly scoped trusted seam. Keep role denial and provenance assertions in scope. |
-| G-06 / REG-02–04 | **P1.** V1-01 establishes scoped App permissions/CI read. V1-13 still tracks PEM ACL/host continuity. | Confirm regression suite, supported auth modes and synthetic integration evidence acceptable for this task. Confirm live production App write, host ACL and service continuity verification remain in their separately authorized scopes. |
+| G-01 / AC-01 | Owner direction gives a testable oracle: explicit mode, six canonical keys, all-pair validation and a pinned catalog. | Independent review of the oracle and legacy cutover. Operator supplies catalog revision and pinned CLI identity for execution. |
+| G-02 / AC-02 | Six role/phase profiles define positive and denied fixtures. Selection, permissions and output provenance are independently probed. | Implementation must expose independently observable effective mounts/capabilities and controlled output. Final allowlist is a package-freeze input. |
+| G-03 / AC-03 | P1 for independent review. Require a single immutable digest or an explicit Owner exception supported by reproducible incompatibility, actual digest and cleanup evidence. | Confirm cleanup deadline and operator reconciliation procedure. Unverified cleanup is BLOCKED. |
+| G-04 / AC-04 | Three distinct, bounded smokes have explicit settings, provenance and failure assertions. | Separate Owner execution authorization, approved auth provision, provider allowlist, pinned telemetry field mapping and redaction proof are execution prerequisites. A missing prerequisite blocks the affected smoke. |
+| G-05 / AC-05 | Test runtime launch preflight independently from manual checks for later gates. | Final Plan/AC/DoD and path allowlist, trusted identities/digests and external package manifest are package-freeze inputs. Later gates use authorized operator evidence while undeployed. |
+| G-06 / AC-05 | P1 for independent review. Deterministic regression covers Phase 3.1, nine MCP tools, WFC review and scoped App behavior with synthetic fixtures. | Confirm regression evidence and N/A boundaries. Production PEM ACL, systemd continuity and live App writes are outside this task. |
 
-Primary release risks are cross-role or host-secret exposure (P0, ISO/PERM/SEC), silent config fallback or unverifiable invocation (P0, CFG/SMK/EVD), and stale or untrusted evidence advancing a gate (P0, REG-04). Image drift, lifecycle and legacy compatibility are P1 risks, with a P0 failure if cleanup uncertainty allows a duplicate or unauthorized execution. P0 gaps prevent finalizing the design for Owner approval.
+Cross-role or host-secret exposure, silent config fallback, unverifiable invocation and stale evidence are P0 risks. Image drift and regression scope are P1 risks. Cleanup uncertainty that allows a duplicate or unauthorized execution is P0. Accepted direction supplies draft assertions for independent review. Final package decisions and actual run prerequisites remain pending. When a remaining input prevents a reproducible assertion or authorized execution, report BLOCKED with the affected AC/test and owner.
 
 ## 3. Test cases
 
-**Common harness and evidence.** Roles `D/Q/T` are Dev/QC/Independent TL Reviewer. Prepare role-specific synthetic prompt marker `PROMPT_<R>`, context marker `CTX_<R>`, private fixture file `private_<R>.txt`, disposable workspace `ws_<R>_<run>`, and per-run nonce. In offline config tests stub the capability catalog and spawn adapter: `fixture-a` supports `low`, `fixture-b` supports `medium`, `fixture-c` supports both. Assign `fixture-a/low`, `fixture-b/medium`, `fixture-c/low` to D/Q/T. These labels are test doubles and never sent to a provider. Use a fresh process and a clean environment per startup permutation. Compare exact allow/deny matrices and file digests using the independent harness. Set fake clock/budgets for timeout tests and use unique test-owned labels and disposable storage. Unit stubs prove input handling. Container isolation requires independent probes on the supported Docker host.
+**Common harness and evidence.** Roles `D/Q/T` are Dev/QC/Independent TL Reviewer. Prepare role-specific synthetic prompt marker `PROMPT_<R>`, context marker `CTX_<R>`, private fixture file `private_<R>.txt`, disposable workspace `ws_<R>_<run>`, and per-run nonce. In offline config tests stub the capability catalog and spawn adapter: `fixture-a` supports `low`, `fixture-b` supports `medium`, `fixture-c` supports both. Assign `fixture-a/low`, `fixture-b/medium`, `fixture-c/low` to D/Q/T. These labels are test doubles and never sent to a provider. Use a fresh process and a clean environment per startup permutation. In explicit V1 role mode use canonical role IDs `dev`, `qc`, `tl-reviewer` and key pairs `DEV_MODEL/DEV_EFFORT`, `QC_MODEL/QC_EFFORT`, `TL_REVIEWER_MODEL/TL_REVIEWER_EFFORT`. The offline catalog fixture represents an operator-pinned version derived from supported model/effort metadata of the pinned CLI. Record the fixture catalog identity and keep startup offline. Compare exact allow/deny matrices and file digests using the independent harness. Set fake clock/budgets for timeout tests and use unique test-owned labels and disposable storage. Unit stubs prove input handling. Container isolation requires independent probes on the supported Docker host.
 
 For every case, the trusted runner/operator collects test ID, matrix row, command/argv with values redacted as needed, exit status, bounded sanitized outputs, exact tested HEAD and tested snapshot digest, plus the case-specific evidence below. The separate execution report binds the frozen MTP digest and report/harness/artifact digests externally. `FAIL` means a reproduced mismatch to a frozen assertion. Unavailable authorization, platform, evidence or uncertain effects produce `BLOCKED` during execution. Remove only known test-owned artifacts after each case. If ownership or cleanup is uncertain, preserve sanitized diagnostics and stop for reconciliation. All cases below are **NOT RUN**.
 
 ### CFG-01 — Resolve three independent model/effort pairs
 **AC/type/risk/status** — AC-01, positive/integration, P0, **NOT RUN**.  
 **Setup and action** — Start the real trusted resolver with the offline catalog and all six inputs populated. Launch D/Q/T with a recording CLI stub. Rotate the valid pairs across roles, then change one role's pair while keeping the other two fixed.  
-**Assert/failure** — Each launch carries only the selected pair. The changed role changes at launch and the other pairs remain equal. Any default, bleed-through, unsupported fallback or discrepancy fails.  
+**Assert/failure** — Startup validates all three pairs even if only one role is selected for launch. Each launch carries only the selected pair. The changed role changes at launch and the other pairs remain equal. Any default, bleed-through, unsupported fallback or discrepancy fails.  
 **Evidence** — Input-label/role-to-argv matrix with launch counts and config source provenance.
 
 ### CFG-02 — Reject missing and blank configuration
 **AC/type/risk/status** — AC-01, negative/boundary, P0, **NOT RUN**.  
-**Setup and action** — Independently unset, empty and set whitespace-only for each of the six keys with the other five valid. Attempt startup and selected role launch. Include all six absent.  
-**Assert/failure** — For the affected role the trusted startup exits nonzero, gives a sanitized role/field diagnostic and emits no invocation or publish effect. Assert the approved startup scope for an invalid inactive role once G-01 resolves. A started invalid role or silent fallback fails.  
-**Evidence** — 19 input rows, startup statuses, diagnostic categories and zero affected-role launches.
+**Setup and action** — Independently unset, empty and set whitespace-only for each of the six keys with the other five valid. Include all six absent. Attempt startup with an invalid selected role and with a valid selected role while another role has invalid config.  
+**Assert/failure** — Trusted startup exits nonzero for every invalid environment, reports a sanitized role/field reason and emits zero role launches or publish effects, including when the invalid pair belongs to an inactive role.  
+**Evidence** — 19 base input vectors with applicable selected/inactive permutations, startup statuses, diagnostic categories and zero launches.
 
 ### CFG-03 — Reject invalid, unsupported and injection-shaped values
 **AC/type/risk/status** — AC-01, negative/security/boundary, P0, **NOT RUN**.  
-**Setup and action** — Per role inject unknown model `fixture-missing`, unknown effort `unsupported`, known incompatible pair `fixture-a/medium`, and a literal containing newline plus shell metacharacters in each field. Use approved policy vectors for case or surrounding spaces once G-01 resolves.  
+**Setup and action** — Per role inject unknown model `fixture-missing`, unknown effort `unsupported`, known incompatible pair `fixture-a/medium`, and a literal containing newline plus shell metacharacters in each field. Also substitute mixed-case noncanonical forms and leading/trailing whitespace in each field. Repeat with the malformed pair belonging to a role that was not selected.  
 **Assert/failure** — Invalid cases fail explicitly before launch. No shell command, provider request, partial state write or substitution to another model/effort. Diagnostics identify the field without echoing control characters or raw input.  
 **Evidence** — Startup/argv/effect trace with zero subprocess/provider operations for rejected configurations.
 
 ### CFG-04 — Keep untrusted overrides from changing the resolved pair
 **AC/type/risk/status** — AC-01/02, security, P0, **NOT RUN**.  
-**Setup and action** — Inject conflicting model/effort and escalation flags via assignment payload, prompt, workspace config and mock tool output. Put a distinct supported pair in trusted env. Exercise approved conflicting trusted sources after G-01.  
-**Assert/failure** — Untrusted sources cannot change effective launch settings or authorize fallback. A launch that proceeds uses the trusted pair and approved sandbox. Ambiguous trusted inputs follow the approved fail-closed policy.  
+**Setup and action** — Inject conflicting model/effort and escalation flags via assignment payload, prompt, workspace config and mock tool output. Put a distinct supported pair in trusted env. Supply conflicting trusted values via the supported trusted input sources. Repeat invalid V1 startup with otherwise valid legacy model config present. Separately select explicit legacy mode with that model and no V1 keys.  
+**Assert/failure** — Untrusted sources cannot change effective launch settings or authorize fallback. A launch that proceeds uses the trusted pair and approved sandbox. Conflicting trusted inputs or invalid V1 role config fail nonzero with zero launches. Explicit legacy mode uses its single-model path and does not start other role profiles.  
 **Evidence** — Per-source actual argv/config diff and side-effect trace.
 
 ### ISO-01 — Enforce trusted role selection
 **AC/type/risk/status** — AC-02, positive/negative/security, P0, **NOT RUN**.  
-**Setup and action** — Use the normal trusted launch entry for each role with conflicting caller role values in assignment, stdin and repo fixtures. Submit absent/unknown trusted role and an unauthorized selector. Include missing/wrong profile ID and unknown capability once G-02 confirms that interface.  
-**Assert/failure** — Valid launches use the trusted role and its authorized prompt and capabilities. Invalid trusted selections or unauthorized entry requests fail before model invocation. Any role switch, privilege increase or fallback launch fails.  
+**Setup and action** — Use the normal trusted launch entry for all six matrix profiles with conflicting caller role, phase, tool policy and mount values in assignment, stdin and repo fixtures. Submit absent/unknown/noncanonical trusted role, unknown or wrong phase, missing/wrong profile, undeclared capability and an unauthorized selector.  
+**Assert/failure** — Valid launches use the trusted immutable role/phase manifest and its authorized prompt and capabilities. Invalid trusted selections or unauthorized entry requests fail nonzero before role spawn or model invocation. Any role switch, privilege increase or fallback launch fails.  
 **Evidence** — Trusted selection/dispatch trace, prompt digest and denied-launch counts.
 
 ### ISO-02 — Prove prompt and workspace separation for every ordered role pair
 **AC/type/risk/status** — AC-02, integration/security, P0, **NOT RUN**.  
-**Setup and action** — Run all six ordered D/Q/T pairs with separate synthetic private markers, plus two successive runs of the same role. Inspect launch input and mount metadata outside the container. Inside each role probe a known own fixture and the other run's known private path and canary. Use synthetic authorized shared evidence as a read-positive control.  
+**Setup and action** — Run all six ordered D/Q/T pairs with separate synthetic private markers, plus two successive runs of the same role. Include every matrix profile and a same-role cross-phase probe to check phase-private context. Inspect launch input and mount metadata outside the container. Inside each role probe a known own fixture and the other run's known private path and canary. Use synthetic authorized shared evidence as a read-positive control.  
 **Assert/failure** — Only the own role prompt/context and approved shared artifacts are exposed. Foreign private bytes are unreachable and do not appear in argv, stdin, env or output. New run starts without prior run's private workspace state. An inaccessible probe mechanism yields BLOCKED, while actual cross-role access fails.  
 **Evidence** — Ordered-pair allow/deny results, mount/digest matrix and source provenance for positive controls.
 
@@ -103,26 +114,26 @@ For every case, the trusted runner/operator collects test ID, matrix row, comman
 **Evidence** — Valid/invalid path labels, read/write outcomes and before/after canary digests.
 
 ### ISO-04 — Treat artifacts and model output as untrusted inputs
-**AC/type/risk/status** — AC-02, security, P0, **NOT RUN**.  
+**AC/type/risk/status** — AC-02/05, security, P0, **NOT RUN**.  
 **Setup and action** — Put synthetic instructions to become Dev, bypass QC, approve the package, read another workspace or send a canary in a PR diff, test output and fake tool result. Replay a forged success record.  
 **Assert/failure** — No change in trusted role or permissions, no protected read/write/egress, no accepted forged result or gate advancement. Assess enforced effects rather than wording of the agent response.  
 **Evidence** — Denied operations, network sink counts and unchanged trusted state digest.
 
 ### PERM-01 — Apply least privilege for each role and phase
 **AC/type/risk/status** — AC-02, positive/negative/security, P0, **NOT RUN**.  
-**Setup and action** — Use approved fixture matrix from G-02. D writes one allowed source/test file and attempts adjacent out-of-scope writes and Git actions. PRE-DEV Q writes its proposed MTP only. POST-CODE Q writes isolated harness/evidence and attempts source and frozen MTP edits. T reads exact submitted evidence and attempts writes to source, MTP and review inputs.  
-**Assert/failure** — Only approved operations succeed. Forbidden writes are denied or rejected before promotion, per approved enforcement contract, with no outside or trusted-state mutation. All automated untrusted roles lack GitHub write, Owner approval and merge authority.  
+**Setup and action** — For each of the six matrix rows, read the allowed fixture and a denied private fixture, then exercise its allowed and denied writes or output. D also attempts adjacent out-of-scope and Git writes. Both QC phases attempt Dev writes. Post-code QC also attempts a frozen MTP edit. Each T phase emits one controlled output and attempts editing its reviewed target, writing to the wrong output channel and substituting a foreign input identity.  
+**Assert/failure** — Only the listed operations succeed. Workspace permissions enforce the phase profile and the trusted changed-path check rejects a forged snapshot containing out-of-allowlist edits. Reviewer outputs reach only their controlled sink with the correct provenance. Denied operations leave protected artifacts and trusted state unchanged. All automated untrusted roles lack GitHub write, Owner approval and merge authority.  
 **Evidence** — Per-role operation matrix and changed-path, capability and artifact digests.
 
 ### PERM-02 — Fail closed with missing required permissions or mounts
 **AC/type/risk/status** — AC-02, negative/reliability, P0, **NOT RUN**.  
-**Setup and action** — Remove one required read mount or allowed output capability per approved profile, then deny the required access. Include missing smoke auth via a fake auth broker. Run a matched valid fixture first.  
+**Setup and action** — Remove one required read mount or allowed output capability per matrix profile, then deny the required access. Include missing smoke auth via a fake auth broker. Run a matched valid fixture first.  
 **Assert/failure** — Safe explicit failure or BLOCKED outcome, no elevation/fallback, no published partial result and no successful handoff. A missing capability is not repaired by borrowing another role's mount or identity.  
 **Evidence** — Matrix of required capabilities, preflight/runtime errors and no successful output transition.
 
 ### PERM-03 — Keep review and Owner authority independent
-**AC/type/risk/status** — AC-02 and V1 gate policy, negative/security, P0, **NOT RUN**.  
-**Setup and action** — Against the approved local gate or operator preflight from G-05, submit a QC self-review, replay an author identity as T, forge Owner approval, and request dispatch/merge from each role. A distinct authorized read-only reviewer receives the approved evidence as a positive control.  
+**AC/type/risk/status** — AC-02/05, negative/security, P0, **NOT RUN**.  
+**Setup and action** — Against the trusted role output boundary and a disposable simulation of the manual operator gate, submit a QC self-review, replay an author identity as T, forge Owner approval, and request dispatch/merge from each role. A distinct authorized read-only reviewer receives the approved evidence as a positive control.  
 **Assert/failure** — Requests do not create valid verdict, Owner decision, dispatch or merge. Legacy WFC code verdict API is never used to approve planning or QC evidence. A manual preflight only verifies the procedural gate.  
 **Evidence** — Rejected operations, distinct nonsecret identities and unchanged synthetic gate state.
 
@@ -134,20 +145,20 @@ For every case, the trusted runner/operator collects test ID, matrix row, comman
 
 ### SEC-02 — Enforce the approved egress and subprocess boundary
 **AC/type/risk/status** — AC-02, security/integration, P0, **NOT RUN**.  
-**Setup and action** — Run each profile with fake network sinks for approved and denied destinations and a subprocess recorder. Try to pass a synthetic secret marker via denied tool/egress and inject shell metacharacters through untrusted data.  
-**Assert/failure** — Approved mock requests follow the role budget. Denied sinks see no request or marker, and argv remains data. No permissive retry or new credentials/mounts are granted when a request is denied.  
+**Setup and action** — Run each profile with fake network sinks for approved and denied destinations and a subprocess recorder. In the smoke profile, exercise an approved provider fixture, a non-provider sink and a redirect from the provider fixture to that denied sink. Test offline profiles with no network. Try to pass a synthetic secret marker via denied tool/egress and inject shell metacharacters through untrusted data.  
+**Assert/failure** — Only approved provider smoke traffic succeeds in the smoke profile. Denied sinks see no request or marker, including after redirects. Offline profiles emit no traffic and argv remains data. No permissive retry or new credentials/mounts are granted when a request is denied.  
 **Evidence** — Role-specific sink counts, sanitized argv trace and effective network policy. Real smoke egress is covered separately.
 
 ### IMG-01 — Reuse a pinned image across ephemeral role launches
 **AC/type/risk/status** — AC-03, positive/integration, P1, **NOT RUN**.  
 **Setup and action** — Inspect changed image/service declarations and launch D/Q/T sequentially in a disposable runtime. Observe resolved image ID/digest and CLI version, service/restart policy and owned containers before, during and after.  
-**Assert/failure** — The launches share immutable image identity and no role is declared or left running as an always-on service. A differing digest requires G-03's feasibility decision and evidence before acceptance. Existing MCP/optional tunnel are baseline infrastructure.  
+**Assert/failure** — The launches share immutable image identity and no role is declared or left running as an always-on service. A differing digest requires a separately documented Owner exception backed by reproducible incompatibility, actual digests and cleanup evidence before acceptance. Existing MCP/optional tunnel are baseline infrastructure.  
 **Evidence** — Image and CLI provenance matrix, declaration diff and labeled lifecycle inventory.
 
 ### LIFE-01 — Stop safely after role failure, timeout and ambiguous cleanup
 **AC/type/risk/status** — AC-03/04, boundary/reliability, P0, **NOT RUN**.  
-**Setup and action** — Use a deterministic clock and test-owned workload. Inject immediate exit, child timeout at the configured deadline, and a Docker adapter response where cleanup cannot be confirmed. Replay the same attempt request after uncertainty.  
-**Assert/failure** — Child exits and confirmed cleanup remove only owned disposable state. Uncertain cleanup blocks progress and repeat dispatch until reconciliation. A late response cannot produce success for the timed-out attempt.  
+**Setup and action** — Use a deterministic clock and test-owned workload. Exercise successful completion just below and at the 180-second smoke limit, runtime beyond the limit, immediate nonzero exit, and a Docker adapter response where cleanup cannot be confirmed. Keep the operator-specified cleanup deadline separate from the smoke runtime limit. Replay the same attempt request after uncertainty.  
+**Assert/failure** — Completion at or under the limit qualifies only with trusted exit and cleanup evidence. Over-limit invocations are stopped and do not count. Confirmed cleanup removes only owned disposable state. Uncertain cleanup blocks progress and repeat dispatch until reconciliation. A late response cannot produce success for the timed-out attempt.  
 **Evidence** — Timing/exit trace, labels, cleanup disposition, zero duplicate/publish effects. Confirm one real bounded cleanup in an approved isolated Docker session when available.
 
 ### SMK-01 — Dev completes one isolated online headless turn
@@ -158,64 +169,64 @@ For every case, the trusted runner/operator collects test ID, matrix row, comman
 
 ### SMK-02 — QC completes one isolated online headless turn
 **AC/type/risk/status** — AC-04, positive/integration, P0, **NOT RUN**.  
-**Setup and action** — Run the same protocol as Q with a fresh workspace and `V102_SMOKE_QC_<nonce>`. Use the QC phase approved in G-02/G-04.  
+**Setup and action** — Run the same protocol as Q with a fresh workspace and `V102_SMOKE_QC_<nonce>`. Use the QC phase recorded in the separate execution authorization.  
 **Assert/failure** — Protocol passes with QC's approved pair and only QC's expected marker. No source edits or review effects.  
 **Evidence** — QC-specific trusted invocation record and cleanup receipt.
 
 ### SMK-03 — Independent TL Reviewer completes one isolated online headless turn
 **AC/type/risk/status** — AC-04, positive/integration, P0, **NOT RUN**.  
-**Setup and action** — Run the protocol as T in its separate read-only role workspace with `V102_SMOKE_TL_<nonce>`.  
+**Setup and action** — Run the protocol as T in its separate workspace with read-only review inputs and the controlled output channel with `V102_SMOKE_TL_<nonce>`.  
 **Assert/failure** — Protocol passes with T's approved pair and only T's expected marker. No artifact edits or verdict submission.  
 **Evidence** — Reviewer-specific trusted invocation record and cleanup receipt.
 
-**Shared smoke protocol.** On reviewed implementation HEAD, a separately authorized operator selects one role via the normal trusted runner, with approved disposable authentication supplied out of band and an empty synthetic workspace. Credentials are neither read by QC nor copied into evidence. Start the pinned CLI headlessly, with a request for the role marker and no actions, bounded by the approved time, output, token and egress budgets. Observe provider completion, exact role marker, positive output usage where supported, exit zero and cleanup. Record role from the trusted launcher, requested and effective model/effort from trusted CLI/runtime telemetry, image ID, CLI version, invocation identity, snapshot digest, reviewed HEAD and redaction/cleanup results. Require the approved pair and invocation identity to match the record. Three distinct invocations are required even when pairs coincide. V1-01 examples are `gpt-6-luna/low` for Dev and QC and `gpt-6-luna/medium` for T. Verify selected pairs against the approved policy at execution. Missing auth, telemetry or budget authorization yields BLOCKED. Run no tools that touch real tasks, GitHub, WFC or Controller state.
+**Shared smoke protocol.** On reviewed implementation HEAD, a separately authorized operator selects one role via the normal trusted runner, with approved disposable authentication supplied out of band and an empty synthetic workspace. Credentials are neither read by QC nor copied into evidence. Start the pinned CLI headlessly, with a request for the role marker and no actions, with the role/phase named in the authorization, the 180-second runtime limit, at most 64 KiB of sanitized retained output, and provider-only egress verified by the operator. Make one invocation per role and disable automatic retry. Observe provider completion, exact role marker, positive output usage where supported, exit zero and cleanup. Record role from the trusted launcher, requested and effective model/effort from trusted CLI/runtime telemetry, phase, pinned image digest and CLI identity, invocation ID, runtime, exit, usage when available, reviewed HEAD, tested snapshot digest, artifact SHA-256 and redaction/cleanup results. Require the approved pair and invocation identity to match the record. Three distinct invocations are required even when pairs coincide. V1-01 examples are `gpt-6-luna/low` for Dev and QC and `gpt-6-luna/medium` for T. Verify selected pairs against the approved policy at execution. Missing authorization, effective telemetry, egress verification, redaction proof or cleanup receipt yields BLOCKED. A model-authored marker or configuration echo cannot attest effective settings. Run no tools that touch real tasks, GitHub, WFC or Controller state.
 
 ### EVD-01 — Redact before publishing evidence
 **AC/type/risk/status** — AC-04, security/negative, P0, **NOT RUN**.  
-**Setup and action** — Inject fake token/PEM/account canaries into stdout, stderr, structured events and startup/error/timeout paths. Include split chunks and escaped representations for supported formats. Capture both success and failure artifacts through the normal evidence path.  
-**Assert/failure** — No canary is visible in persisted/shareable evidence, summaries or exception text. Only approved safe fields remain available with enough provenance to verify the result. Reject unsafe or malformed capture rather than exporting raw logs.  
+**Setup and action** — Inject fake token/PEM/account canaries into stdout, stderr, structured events and startup/error/timeout paths. Include split chunks and escaped representations for supported formats. Feed 65,535, 65,536 and 65,537 sanitized UTF-8 bytes and capture both success and failure artifacts through the normal evidence path.  
+**Assert/failure** — No canary is visible in persisted/shareable evidence, summaries or exception text. Only approved safe fields remain available with enough provenance to verify the result. Retained sanitized output never exceeds 65,536 bytes. At overflow, safe truncation must preserve required proof or the result is BLOCKED. Reject unsafe or malformed capture.  
 **Evidence** — Per-channel redaction assertion, bounded sanitized excerpts and artifact digest. Keep only synthetic markers in the test oracle.
 
 ### EVD-02 — Reject incomplete, stale or spoofed smoke evidence
-**AC/type/risk/status** — AC-04, negative/boundary, P0, **NOT RUN**.  
-**Setup and action** — At the trusted verification seam replay a successful Dev record as QC, omit effective effort, switch model, alter invocation ID or snapshot SHA, supply a marker alone, inject nonzero exit/timeout and duplicate a valid record.  
+**AC/type/risk/status** — AC-04/05, negative/boundary, P0, **NOT RUN**.  
+**Setup and action** — At the trusted verification seam replay a successful Dev record as QC, omit effective effort, switch model, alter phase, invocation ID, reviewed HEAD or snapshot digest, swap the artifact behind its hash, supply a marker alone, omit redaction or cleanup proof, inject nonzero exit/timeout and duplicate a valid record.  
 **Assert/failure** — Only one qualifying record per role counts toward three-role coverage. Contradictory or nonzero results fail. Missing or uncertain provenance blocks acceptance. No fake or replayed evidence advances a gate.  
 **Evidence** — Verification reason matrix with per-role completion count and retained sanitized attempts.
 
 ### REG-01 — Preserve Phase 3.1 stage and recovery contracts
-**AC/type/risk/status** — V1 compatibility, regression/integration, P0, **NOT RUN**.  
-**Setup and action** — Run baseline `tests/test_architecture_boundary.py` and `tests/test_phase31.py` with fake adapters and disposable state. Drive success, stale assignment, source mutation during Test and an uncertain publish result through the Controller boundary.  
+**AC/type/risk/status** — AC-01/05, regression/integration, P0, **NOT RUN**.  
+**Setup and action** — Run baseline `tests/test_architecture_boundary.py` and `tests/test_phase31.py` with fake adapters and disposable state. In explicit legacy mode, drive success, stale assignment, source mutation during Test and an uncertain publish result through the Controller boundary.  
 **Assert/failure** — Prepare → Code → Test → Publish order and result identity persist. Test stays offline/credential-free. No publication of an untested or mutated snapshot, duplicate dispatch or success on uncertain outcome. Worker owns Git/App effects.  
 **Evidence** — Stage trace, snapshot hash before/after Test and ledger/outbound call trace.
 
 ### REG-02 — Preserve nine MCP tools and legacy review contracts
-**AC/type/risk/status** — V1 compatibility, regression/security, P0, **NOT RUN**.  
+**AC/type/risk/status** — AC-05, regression/security, P0, **NOT RUN**.  
 **Setup and action** — Compare exact base and reviewed HEAD through offline `/mcp` transport with ephemeral SQLite and mocked auth. Check `ping`, `get_server_info`, `list_review_queue`, `get_review_context`, `claim_review`, `submit_review`, `get_review_result`, `register_task_handoff`, `get_coder_assignment`. Exercise default Bearer public ping/info and protection of seven workflow tools, then Auth0 middleware protection for all `/mcp` using fake claims/keys. Verify the documented disposable-only POC bypass boundary without live endpoint access.  
 **Assert/failure** — Names, schemas, response shapes, auth behavior, SQLite schema/history and exact task/SHA rules match baseline. Two formal WFC submissions total including PASS, no extra handoff after APPROVED and no planning/QC verdict through legacy API.  
 **Evidence** — Baseline/target contract diff, synthetic auth result and round/state transition tables.
 
 ### REG-03 — Preserve Worker-only scoped App and Draft publishing
-**AC/type/risk/status** — V1 compatibility, regression/security, P0, **NOT RUN**.  
+**AC/type/risk/status** — AC-05, regression/security, P0, **NOT RUN**.  
 **Setup and action** — Reuse the fake GitHub App and disposable bare remote fixtures in `tests/test_phase31.py` and `tests/test_architecture_boundary.py`. Check wrong repository, stale SHA and unauthorized ref, then the allowed scoped publish path.  
 **Assert/failure** — App credentials stay Worker-only and repository-scoped. Only the permitted ordinary task-branch push and Draft PR path are observed. No forced push, main write, merge or automatic repeat after ambiguous publish.  
 **Evidence** — Sanitized mock scope and write-call matrix, disposable ref history and zero unauthorized effects.
 
 ### REG-04 — Require exact package/MTP/HEAD evidence and preserve CI gates
-**AC/type/risk/status** — V1 compatibility, regression/security, P0, **NOT RUN**.  
-**Setup and action** — Supply matching and mismatched package/MTP digest, exact current reviewed SHA versus old SHA, CI pending/failed/missing/ambiguous, synthetic PR merge SHA only, and same-SHA success after recorded failure without Owner acknowledgment. Exercise trusted seam if scoped, otherwise verify operator preflight under G-05. Run approved existing Python test suite offline against exact reviewed HEAD as a repository regression check.  
-**Assert/failure** — Only the approved frozen package and current HEAD with trusted successful named exact-HEAD push CI and independent TL verdict can enter QC. Missing/stale/ambiguous evidence is BLOCKED, a completed required failure follows separate CI repair policy, and no stale or synthetic-merge-only result clears the gate. Preserve legacy limits and avoid claims of automated V1-03/05/10 enforcement from a manual test.  
-**Evidence** — Manifest and tested digest, CI provenance including run/check IDs, event, attempt, tested SHA and history, TL verdict binding and offline pytest exit/skips. No production state changes.
+**AC/type/risk/status** — AC-05, regression/security, P0, **NOT RUN**.  
+**Setup and action** — (A) Drive the V1-02 trusted launch preflight with a synthetic independently approved package, frozen MTP, task ID, expected base/HEAD, exact snapshot digest and frozen path allowlist. Change one field at a time, including package ID/version/hash, MTP ID/version/hash when required, task, base, HEAD, snapshot or approval provenance. Inject missing inputs and an out-of-allowlist changed path. (B) Independently exercise the authorized manual operator gate with exact current reviewed HEAD and named CI, old SHA, CI pending/failed/missing/ambiguous, synthetic PR merge SHA only, and same-SHA success after recorded failure without Owner acknowledgment. Run approved Python regression tests offline against reviewed HEAD.  
+**Assert/failure** — (A) The matching approved fixture can reach the stub launcher and captures provenance. Missing, stale, mismatched or unapproved inputs yield an explicit rejection and zero role launches. A modified out-of-allowlist snapshot cannot be promoted. (B) Only trusted successful named exact-HEAD push CI and an independent TL code verdict for the approved package and current HEAD permit post-code QC. Missing/stale/ambiguous evidence is BLOCKED. A completed required failure follows separate CI repair policy. Later gate decisions use authorized operator evidence while automation is undeployed. Do not count this preflight as an Owner registry, V1-03 CI adapter, review verdict store or post-QC revalidation implementation.  
+**Evidence** — Separate trusted preflight and manual gate records, input permutation and launch-count matrix, manifest and changed-path/snapshot digests, CI run/check IDs, event, attempt, tested SHA and history, TL verdict binding and offline pytest exit/skips.
 
 ## 4. Universal and conditional safety coverage
 
-- AC matrix and per-case positive/negative/boundary assertions are recorded above. Open policy-dependent assertions remain BLOCKED for design approval. Synthetic fixtures and captured trusted effects are required even when agent output looks correct.
+- AC matrix and per-case positive/negative/boundary assertions are recorded above. Operator and package inputs listed in §2 must be available before applicable execution. Synthetic fixtures and captured trusted effects are required even when agent output looks correct.
 - Test private prompts, workspaces, capability leakage, prompt injection, unauthorized file access and outbound effects with canaries. Keep role probes free of operational secrets, Docker socket and active DB. Authorized operator-only smoke auth is handled out of band.
 - Verify package, MTP and reviewed HEAD before execution and again before handoff. Independent TL inspects each harness assertion against the frozen design. Include actual commands, environment, exit codes, skips, attempts, provenance and artifact digests. Missing or flaky evidence blocks a required case. Record each definite defect with severity, AC/test ID, expected and observed behavior, reproducer, safe evidence, impact, owner and required verification.
 - Duplicate/reordered operations and timeout/recovery are covered for role lifecycle, evidence and legacy stage transitions. N/A for parallel task throughput, live production deployment/continuity, PEM ACL remediation, new Executor/Podman, live GitHub App writes and future Controller gate automation. These require separate scope or authorization.
 
 ## 5. Gate order and completion criteria
 
-1. Independent TL Reviewer checks Plan/AC/MTP on the exact submitted draft revision and records findings against AC/test IDs. TL Planner resolves requirements. QC revises the MTP as needed. Maximum two formal Plan/MTP submissions over the same package lineage.
+1. A distinct Independent TL Reviewer checks Plan/AC/MTP on the exact submitted draft revision and records findings against AC/test IDs. TL Planner resolves requirements. QC revises the MTP as needed. Maximum two formal Plan/MTP submissions over the same package lineage.
 2. Resolve blocking clarifications and freeze the full package. Independent operator records the external digests. Owner explicitly approves that reviewed package/version/hash before Dev.
 3. Trusted Worker publishes the implementation Draft PR. Verify named exact-current-HEAD GitHub CI PASS and independent TL code review PASS before starting QC. Use trusted operator evidence until the applicable automated gates exist.
 4. QC executes against the reviewed snapshot in a separate disposable session. Record all results in the separate [MTP Execution Report](../templates/mtp-execution-report.md). Every required case must have independently evidenced PASS or explicit Owner-approved N/A to clear QC. Unresolved FAIL, BLOCKED, NOT RUN or stale evidence prevents clearance.
