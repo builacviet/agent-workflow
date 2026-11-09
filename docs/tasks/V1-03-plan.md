@@ -36,6 +36,19 @@ flowchart TD
 
 **Trust boundary:** webhook payload is a notification only. The trusted CI adapter must independently query the current PR HEAD and exact-SHA check/check run. A successful check on GitHub's synthetic PR merge SHA is **not** proof of success on branch HEAD.
 
+## Shared ngrok domain — Owner-approved V1-03B direction (2026-11-09)
+
+The Owner accepts reusing the **existing public ngrok hostname** for both the current MCP endpoint and the future GitHub webhook endpoint. This is **authorization to document the intended architecture only**; it does **not** authorize running a public listener, changing the current tunnel/GitHub App configuration, or production deployment.
+
+- Existing Compose `compose.yaml` and `compose.controller.yaml` direct the ngrok tunnel to `mcp:8000`; default configured hostname is `caddy-reopen-scotch.ngrok-free.dev`, controlled by `NGROK_DOMAIN`. The MCP route is already `https://<NGROK_DOMAIN>/mcp`.
+- **Target routes on the same HTTPS origin:** `/mcp` → existing MCP handler unchanged; `/webhooks/github` → a **separate trusted webhook receiver**. A minimal path router/reverse proxy (or equivalent ingress path-routing capability, selected in V1-03B) is required **before** enabling the second route because the current ngrok tunnel forwards all paths to MCP. Do not assume merely adding a URL in GitHub App creates the route.
+- **Isolation:** preserve the existing MCP OAuth/auth/Host protections and all nine tool contracts. The webhook route must **not** be an unauthenticated bypass into `/mcp`, Controller admin endpoints, Docker or worker APIs. Its dedicated trust mechanism is GitHub HMAC signature validation; it is not subject to browser/MCP OAuth credentials.
+- **Webhook verification:** `POST /webhooks/github` must validate raw request bytes using `X-Hub-Signature-256` (HMAC-SHA256 with a dedicated secret, constant-time compare), enforce method and bounded body size, `X-GitHub-Event`/action allowlist, repository and installation identity and duplicate/replayed `X-GitHub-Delivery` handling. Only acknowledge `2xx` after accepted event persistence; invalid signature/auth must be rejected, not enqueued. Do not log secrets, payload credentials or raw signature.
+- **Operational constraints:** no second ngrok tunnel/domain required by this design, **provided** chosen ingress permits secure path routing. Confirm the current ngrok account's tunnel routing compatibility and the active hostname before deployment. Avoid interrupting existing `/mcp`; no `docker compose down -v`, no reuse of public MCP login as webhook trust.
+- **Proof before live enablement:** tests demonstrate signed delivery reaches **only** receiver, unsigned/tampered payload is rejected, `/mcp` continues authenticated and unchanged, wrong path/method cannot invoke privileged routes, duplicates are idempotent, and network interruption triggers bounded in-flight CI reconciliation. Separate explicit Owner approval is still required for live HTTPS ingress changes, webhook secret provisioning, GitHub App subscription and deployment.
+
+**Event semantics unchanged:** GitHub emits a notification, not an authoritative CI decision. The verifier re-queries GitHub for the **current** PR HEAD and required exact-SHA checks. Old SHA evidence is marked stale and does not block waiting for the new HEAD or consume a repair/review round.
+
 ## Contract v1 (proposed, only source-of-truth candidate)
 
 CI evidence is an immutable record containing:
@@ -79,6 +92,7 @@ The record must bind to the exact **latest** PR head at decision time. Old SHA r
 - B4 — Integrate clear `BLOCKED` vs completed `FAILURE` vs `SUCCESS` state transitions and the two-repair-HEAD lifetime budget, independently of the two TL review rounds and QC repairs. No global polling on a 60-second timer.
 - B5 — Restart/reconnect reconciles only in-flight CI; tests cover lost/duplicate/out-of-order/stale events and fail-closed missing API evidence.
 - B6 — Preserve existing 9 MCP tools, single-slot Controller and no unapproved ingress or secrets; stage safe runbook for Owner approval before live event subscriptions.
+- B7 — Reuse the existing configured ngrok HTTPS hostname with **path-based routing**: authenticated existing `/mcp` and HMAC-authenticated `/webhooks/github` on separate handlers. Verify protected route isolation, raw-body signature enforcement, and zero existing MCP contract/auth regressions before any live route change. The existing tunnel currently targets only `mcp:8000`; a minimal ingress router is a prerequisite.
 
 ## Evidence-based negative tests
 
@@ -94,6 +108,8 @@ The record must bind to the exact **latest** PR head at decision time. Old SHA r
 | C08 | Spoofed webhook `success` while API has no evidence | BLOCKED |
 | C09 | Duplicate delivery ID, lost event, reverse event order | Idempotent, reconcile |
 | C10 | Third Dev repair HEAD for same task lifetime | Denied / Owner escalation |
+| C11 | Invalid/missing `X-Hub-Signature-256`, modified body, wrong method | Reject before persistence; no Controller action |
+| C12 | Valid signed webhook at `/webhooks/github`, existing `/mcp` request | Each reaches only its own handler; MCP auth and nine tools unchanged |
 
 ## Owner and review gates
 
