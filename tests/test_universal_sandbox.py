@@ -17,7 +17,19 @@ import pytest
 
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox
-from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy
+from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy, SandboxRunResult
+
+
+_FIXTURE_PIN = "sha256:" + "b" * 64
+_ENGINE_INFO = b'"linux" true true true true ["name=seccomp,profile=builtin"]'
+
+
+def _image_metadata(image_id):
+    return json.dumps([{
+        "Id": image_id,
+        "Os": "linux",
+        "Config": {},
+    }]).encode()
 
 
 @pytest.mark.parametrize(
@@ -47,11 +59,12 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(WorkflowError, match="cannot enforce"):
-        SandboxManager().run(
+        SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
             dispatch_id="a" * 32,
             workspace=tmp_path,
             image="sandbox-fixture",
+            approved_image_id=_FIXTURE_PIN,
             command=("python",),
         )
     assert [args[0] for args in calls] == ["info"]
@@ -80,7 +93,8 @@ def test_workspace_hardlink_is_rejected(tmp_path):
         sandbox._workspace_bind(workspace, True)
 
 
-def test_docker_argument_boundary_and_timeout_cleanup(monkeypatch, tmp_path):
+@pytest.mark.parametrize("outcome", ["success", "timeout", "image-mismatch"])
+def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
     identifier = "b" * 64
     dispatch = "a" * 32
     calls = []
@@ -91,16 +105,19 @@ def test_docker_argument_boundary_and_timeout_cleanup(monkeypatch, tmp_path):
         calls.append(args)
         match args[0]:
             case "info":
-                return b'"linux" true true true true ["name=seccomp,profile=builtin"]'
+                return _ENGINE_INFO
             case "image":
-                return json.dumps([{
-                    "Id": "sha256:" + identifier,
-                    "Os": "linux",
-                    "Config": {},
-                }]).encode()
+                return _image_metadata(_FIXTURE_PIN)
             case "create":
                 owned = args[args.index("--name") + 1]
                 return identifier.encode()
+            case "container" if args[1] == "inspect":
+                assert args[-1] == identifier
+                image_id = "sha256:" + "c" * 64 if outcome == "image-mismatch" else _FIXTURE_PIN
+                return " ".join(
+                    json.dumps(value)
+                    for value in (identifier, "/" + owned, image_id, dispatch)
+                ).encode()
             case "container":
                 if owned:
                     return json.dumps({
@@ -119,24 +136,38 @@ def test_docker_argument_boundary_and_timeout_cleanup(monkeypatch, tmp_path):
         assert args == ["docker", "start", "-ai", identifier]
         assert stdin == "task input"
         assert 0 < remaining <= 10
-        raise TimeoutError("fixture timeout")
+        assert outcome != "image-mismatch", "mismatched image must never start"
+        if outcome == "timeout":
+            raise TimeoutError("fixture timeout")
+        return b"fixture output"
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(coder_runtime, "run_container", attach)
-    with pytest.raises(TimeoutError, match="fixture timeout"):
-        SandboxManager().run(
+    def run():
+        return SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(workspace_writable=False, timeout_seconds=10),
             dispatch_id=dispatch,
             workspace=tmp_path,
             image="sandbox-fixture",
+            approved_image_id=_FIXTURE_PIN,
             command=("code", "--privileged"),
             stdin="task input",
             env=(("MODEL", "--network=host"),),
         )
 
+    if outcome == "success":
+        assert run() == SandboxRunResult(b"fixture output", _FIXTURE_PIN)
+    elif outcome == "timeout":
+        with pytest.raises(TimeoutError, match="fixture timeout"):
+            run()
+    else:
+        with pytest.raises(WorkflowError, match="container image differs from approved pin"):
+            run()
+
     assert [args[0] for args in calls] == [
-        "info", "image", "create", "container", "rm", "container"
+        "info", "image", "create", "container", "container", "rm", "container"
     ]
+    assert calls[3][1] == "inspect"
     create = calls[2]
     assert "--network=none" in create
     assert "--read-only" in create
@@ -152,6 +183,90 @@ def test_docker_argument_boundary_and_timeout_cleanup(monkeypatch, tmp_path):
     assert "MODEL=--network=host" in create
     assert create[-3:] == ["sha256:" + identifier, "code", "--privileged"]
     assert owned is None
+
+
+def test_retagged_image_does_not_create_container(monkeypatch, tmp_path):
+    calls = []
+
+    def docker(args):
+        calls.append(args)
+        if args[0] == "info":
+            return _ENGINE_INFO
+        assert args == ["image", "inspect", "fixture:approved"]
+        return _image_metadata("sha256:" + "c" * 64)
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(WorkflowError, match="image reference differs from approved pin"):
+        SandboxManager(tmp_path / "fences").run(
+            SandboxPolicy(),
+            dispatch_id="a" * 32,
+            workspace=tmp_path,
+            image="fixture:approved",
+            approved_image_id=_FIXTURE_PIN,
+            command=("code",),
+        )
+    assert [args[0] for args in calls] == ["info", "image"]
+
+
+def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_path):
+    dispatch = "a" * 32
+    identifier = "b" * 64
+    fences = tmp_path / "fences"
+    requested_name = None
+    present = False
+    removed = []
+
+    def docker(args):
+        nonlocal requested_name, present
+        match args[0]:
+            case "info":
+                return _ENGINE_INFO
+            case "image":
+                return _image_metadata(_FIXTURE_PIN)
+            case "create":
+                requested_name = args[args.index("--name") + 1]
+                assert (fences / dispatch).read_text() == requested_name
+                raise WorkflowError("create client timed out")
+            case "container":
+                assert args[1] == "ls"
+                if present:
+                    return json.dumps({
+                        "ID": identifier,
+                        "Names": requested_name,
+                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                    }).encode()
+                return b""
+            case "rm":
+                assert args == ["rm", "-f", identifier]
+                # Losing settlement evidence during removal must remain safe.
+                assert not (fences / dispatch).exists()
+                removed.append(identifier)
+                present = False
+                return b""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(WorkflowError, match="create remains uncertain"):
+        SandboxManager(fences).run(
+            SandboxPolicy(),
+            dispatch_id=dispatch,
+            workspace=tmp_path,
+            image="sandbox-fixture",
+            approved_image_id=_FIXTURE_PIN,
+            command=("code",),
+        )
+
+    fresh = SandboxManager(fences)
+    with pytest.raises(WorkflowError, match="create remains uncertain"):
+        fresh.stop(dispatch)
+    assert (fences / dispatch).read_text() == requested_name
+    assert not removed
+
+    present = True
+    fresh.stop(dispatch)
+    assert removed == [identifier]
+    assert not (fences / dispatch).exists()
+    fresh.stop(dispatch)
 
 
 def test_cleanup_rejects_unowned_id(monkeypatch):
@@ -180,17 +295,22 @@ def live_sandbox(tmp_path):
     workspace.mkdir()
     workspace.chmod(0o777)
     dispatch = uuid4().hex
-    manager = SandboxManager()
+    manager = SandboxManager(tmp_path / "fences")
+    # Opt-in fixtures supply a trusted image; freeze its current identity before use.
+    pin = sandbox._local_image(image)
 
     def run(script, *args, policy=None):
-        return manager.run(
+        result = manager.run(
             policy or SandboxPolicy(timeout_seconds=20),
             dispatch_id=dispatch,
             workspace=workspace,
             image=image,
+            approved_image_id=pin,
             command=("python", "-c", script, *args),
             phase="test",
         )
+        assert result.image_id == pin
+        return result.output
 
     return run, manager, dispatch, workspace, image
 

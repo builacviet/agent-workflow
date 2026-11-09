@@ -18,6 +18,7 @@ from agent_workflow.integrations.github import WorkflowError
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
 _DISPATCH_ID = re.compile(r"[0-9a-f]{32}")
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*")
 _PHASE = re.compile(r"[a-z][a-z0-9-]{0,19}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -111,7 +112,7 @@ def _local_image(image: str) -> str:
         identifier = metadata["Id"]
         if (
             metadata["Os"] == "linux"
-            and re.fullmatch(r"sha256:[0-9a-f]{64}", identifier)
+            and _IMAGE_ID.fullmatch(identifier)
             and not metadata["Config"].get("Volumes")
         ):
             return identifier
@@ -184,8 +185,27 @@ def _dispatch_prefix(dispatch_id: str) -> str:
     return f"my-wfc-sandbox-{dispatch_id}"
 
 
+@dataclass(frozen=True, slots=True)
+class SandboxRunResult:
+    output: bytes
+    image_id: str
+
+
+def _sync_directory(path: Path) -> None:
+    # Windows does not support opening directories with os.open.
+    if os.name != "nt":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 class SandboxManager:
     """Execute an offline workload and remove only its owned Docker resources."""
+
+    def __init__(self, fence_dir: Path | None = None) -> None:
+        self._fence_dir = fence_dir
 
     def run(
         self,
@@ -194,12 +214,13 @@ class SandboxManager:
         dispatch_id: str,
         workspace: Path,
         image: str,
+        approved_image_id: str,
         command: tuple[str, ...],
         stdin: str = "",
         phase: str = "code",
         env: tuple[tuple[str, str], ...] = (),
-    ) -> bytes:
-        """Append a trusted command to the image ENTRYPOINT and return bounded output."""
+    ) -> SandboxRunResult:
+        """Launch the pinned image and return bounded output with observed identity."""
         from agent_workflow.runners.coder_runtime import run_container
 
         security = docker_security_args(policy)
@@ -208,6 +229,13 @@ class SandboxManager:
             raise ValueError("invalid sandbox phase")
         if not isinstance(image, str) or not _IMAGE.fullmatch(image):
             raise ValueError("invalid sandbox image")
+        if not isinstance(approved_image_id, str) or not _IMAGE_ID.fullmatch(
+            approved_image_id
+        ):
+            raise WorkflowError("sandbox requires an approved immutable image ID")
+        fence = self._fence_path(dispatch_id)
+        if fence is None:
+            raise WorkflowError("sandbox requires a durable create fence")
         if (
             not isinstance(command, tuple)
             or not command
@@ -222,7 +250,8 @@ class SandboxManager:
         with dispatch_budget(deadline):
             mount = _workspace_bind(workspace, policy.workspace_writable)
             _require_engine()
-            image_id = _local_image(image)
+            if _local_image(image) != approved_image_id:
+                raise WorkflowError("sandbox image reference differs from approved pin")
             args = [
                 "create",
                 "--name",
@@ -240,25 +269,103 @@ class SandboxManager:
                 "-i",
                 *security,
                 *environment,
-                image_id,
+                approved_image_id,
                 *command,
             ]
+            self._record_create(fence, name)
             try:
                 identifier = _docker(args).decode("ascii", errors="replace").strip()
                 if not _CONTAINER_ID.fullmatch(identifier):
                     raise WorkflowError("Docker did not identify the sandbox container")
+                observed_image_id = self._inspect_image(identifier, name, dispatch_id)
+                self._clear_create(fence)
+                if observed_image_id != approved_image_id:
+                    raise WorkflowError("sandbox container image differs from approved pin")
                 remaining = math.ceil(operation_timeout(policy.timeout_seconds))
-                return run_container(
+                output = run_container(
                     ["docker", "start", "-ai", identifier], stdin, remaining
                 )
+                return SandboxRunResult(output, observed_image_id)
             finally:
+                self._settle_create(dispatch_id, fence, self._name_pattern(prefix))
                 self._cleanup(dispatch_id, re.escape(name))
 
     def stop(self, dispatch_id: str) -> None:
         """Reconcile a dispatch under the Controller's exclusive process lock."""
         prefix = _dispatch_prefix(dispatch_id)
-        pattern = rf"{re.escape(prefix)}-[a-z][a-z0-9-]{{0,19}}-[0-9a-f]{{32}}"
+        pattern = self._name_pattern(prefix)
+        self._settle_create(dispatch_id, self._fence_path(dispatch_id), pattern)
         self._cleanup(dispatch_id, pattern)
+
+    @staticmethod
+    def _name_pattern(prefix: str) -> str:
+        return rf"{re.escape(prefix)}-[a-z][a-z0-9-]{{0,19}}-[0-9a-f]{{32}}"
+
+    def _fence_path(self, dispatch_id: str) -> Path | None:
+        if self._fence_dir is None:
+            return None
+        return self._fence_dir / dispatch_id
+
+    @staticmethod
+    def _record_create(fence: Path, name: str) -> None:
+        fence.parent.mkdir(mode=0o700, exist_ok=True)
+        try:
+            with fence.open("x", encoding="ascii") as record:
+                record.write(name)
+                record.flush()
+                os.fsync(record.fileno())
+        except FileExistsError:
+            raise WorkflowError("a sandbox create is already pending") from None
+        _sync_directory(fence.parent)
+        _sync_directory(fence.parent.parent)
+
+    @staticmethod
+    def _clear_create(fence: Path) -> None:
+        fence.unlink()
+        _sync_directory(fence.parent)
+
+    def _settle_create(
+        self, dispatch_id: str, fence: Path | None, name_pattern: str
+    ) -> None:
+        if fence is None:
+            return
+        try:
+            name = fence.read_text(encoding="ascii")
+        except FileNotFoundError:
+            return
+        if not re.fullmatch(name_pattern, name):
+            raise WorkflowError("invalid sandbox create fence")
+        with cleanup_budget():
+            if len(self._owned(dispatch_id, re.escape(name))) != 1:
+                raise WorkflowError(
+                    "sandbox Docker create remains uncertain; dispatch stays blocked"
+                )
+        # The exact owned name is affirmative evidence this create settled.
+        # Clear intent before removal so a crash cannot lose that evidence.
+        self._clear_create(fence)
+
+    @staticmethod
+    def _inspect_image(identifier: str, name: str, dispatch_id: str) -> str:
+        raw = _docker([
+            "container", "inspect", "--format",
+            '{{json .Id}} {{json .Name}} {{json .Image}} '
+            '{{json (index .Config.Labels "' + _DISPATCH_LABEL + '")}}',
+            identifier,
+        ])
+        try:
+            container_id, container_name, image_id, label = (
+                json.loads(value) for value in raw.split(maxsplit=3)
+            )
+            if (
+                container_id == identifier
+                and container_name == "/" + name
+                and label == dispatch_id
+                and _IMAGE_ID.fullmatch(image_id)
+            ):
+                return image_id
+        except (TypeError, ValueError):
+            pass
+        raise WorkflowError("could not verify sandbox container identity")
 
     def _cleanup(self, dispatch_id: str, name_pattern: str) -> None:
         with cleanup_budget():
