@@ -143,6 +143,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(coder_runtime, "run_container", attach)
+    monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
     def run():
         return SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(workspace_writable=False, timeout_seconds=10),
@@ -527,3 +528,60 @@ def test_prepared_not_submitted_can_be_reconciled(monkeypatch, tmp_path):
     monkeypatch.setattr(sandbox, "_docker", lambda args: b"")
     manager.stop(dispatch)
     assert not fence.exists() and not scope.exists()
+
+
+
+def test_watchdog_deadline_enforced_after_controller_death(live_sandbox, tmp_path):
+    """Opt-in real Docker: killing Controller does not release a running container."""
+    import sys
+    import time
+
+    _, _, _, workspace, image = live_sandbox
+    dispatch = uuid4().hex
+    fences = tmp_path / "independent-fences"
+    pin = sandbox._local_image(image)
+    code = """\
+import sys
+from pathlib import Path
+from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy
+manager = SandboxManager(Path(sys.argv[1]))
+manager.run(
+    SandboxPolicy(timeout_seconds=8), dispatch_id=sys.argv[2],
+    workspace=Path(sys.argv[3]).resolve(), image=sys.argv[4],
+    approved_image_id=sys.argv[5],
+    command=("python", "-c", "from pathlib import Path; import time; "
+             "Path('child-started').touch(); time.sleep(60)"),
+)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", code, str(fences), dispatch, str(workspace), image, pin],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        started = workspace / "child-started"
+        deadline = time.monotonic() + 9
+        while not started.exists() and time.monotonic() < deadline:
+            assert child.poll() is None, "controller failed to launch workload"
+            time.sleep(0.15)
+        assert started.exists(), "workload failed to begin"
+        child.kill()
+        child.wait(timeout=5)
+        scope = fences / (dispatch + ".scope")
+        assert scope.exists(), "trusted launch scope must survive Controller death"
+        deadline = time.monotonic() + 13
+        while time.monotonic() < deadline:
+            found = subprocess.run(
+                ["docker", "container", "ls", "-aq", "--no-trunc", "--filter",
+                 f"label=org.agent-workflow.sandbox.dispatch={dispatch}"],
+                check=True, capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            if not found:
+                break
+            time.sleep(0.25)
+        assert not found, "independent watchdog did not terminate workload"
+        assert scope.exists(), "watchdog must not release Controller's durable fence"
+        SandboxManager(fences).stop(dispatch)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)

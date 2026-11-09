@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
+import sys
 import time
 from uuid import uuid4
 
@@ -305,6 +307,9 @@ class SandboxManager:
                 self._clear_create(fence)
                 if observed_image_id != approved_image_id:
                     raise WorkflowError("sandbox container image differs from approved pin")
+                # Independent trusted host watchdog must acknowledge readiness
+                # before the untrusted workload is allowed to start.
+                self._start_watchdog(scope, dispatch_id)
                 remaining = math.ceil(operation_timeout(policy.timeout_seconds))
                 output = run_container(
                     ["docker", "start", "-ai", identifier], stdin, remaining
@@ -361,6 +366,7 @@ class SandboxManager:
             or record.get("state") not in {"PREPARED", "SUBMITTED", "CREATED"}
             or not isinstance(record.get("name"), str)
             or not isinstance(record.get("deadline"), (int, float))
+            or not isinstance(record.get("monotonic_deadline"), (int, float))
         ):
             raise WorkflowError("invalid durable sandbox scope")
         return record
@@ -374,7 +380,9 @@ class SandboxManager:
         scope.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({
             "dispatch_id": dispatch_id, "name": name,
-            "daemon_id": daemon_id, "deadline": deadline, "state": "PREPARED",
+            "daemon_id": daemon_id, "deadline": deadline,
+            "monotonic_deadline": time.monotonic() + max(0., deadline - time.time()),
+            "state": "PREPARED",
         }, sort_keys=True)
         try:
             with scope.open("x", encoding="ascii") as handle:
@@ -409,7 +417,56 @@ class SandboxManager:
     @staticmethod
     def _clear_scope(scope: Path) -> None:
         scope.unlink()
+        scope.with_name(scope.name + ".ready").unlink(missing_ok=True)
         _sync_directory(scope.parent)
+
+    @staticmethod
+    def _start_watchdog(scope: Path, dispatch_id: str) -> None:
+        """Launch a detached, authenticated-to-engine timeout process.
+
+        The watchdog is a trusted host process; it never enters the sandbox.
+        The controller does not launch the workload unless readiness is proven.
+        """
+        ready = scope.with_name(scope.name + ".ready")
+        environment = os.environ.copy()
+        if not environment.get("DOCKER_CONTEXT") and not environment.get("DOCKER_HOST"):
+            try:
+                context = subprocess.run(
+                    ["docker", "context", "show"], check=True, capture_output=True,
+                    timeout=operation_timeout(5), text=True,
+                ).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                raise WorkflowError("cannot pin Docker context for watchdog") from None
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", context):
+                raise WorkflowError("invalid Docker context for watchdog")
+            environment["DOCKER_CONTEXT"] = context
+        command = [
+            sys.executable, "-m", "agent_workflow.runners.sandbox_watchdog",
+            str(scope), dispatch_id,
+        ]
+        options = {
+            "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL, "close_fds": True,
+            "env": environment,
+        }
+        if os.name == "nt":
+            options["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            )
+        else:
+            options["start_new_session"] = True
+        try:
+            watchdog = subprocess.Popen(command, **options)
+        except OSError:
+            raise WorkflowError("cannot launch independent sandbox watchdog") from None
+        start = time.monotonic()
+        while time.monotonic() - start < operation_timeout(3):
+            if ready.exists():
+                return
+            if watchdog.poll() is not None:
+                raise WorkflowError("independent sandbox watchdog terminated")
+            time.sleep(0.05)
+        raise WorkflowError("independent sandbox watchdog did not acknowledge readiness")
 
     @staticmethod
     def _record_create(fence: Path, name: str) -> None:
