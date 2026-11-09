@@ -277,7 +277,7 @@ def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
         raise AssertionError(args)
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    monkeypatch.setattr(sandbox, "_require_engine", lambda: None)
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(coder_runtime, "docker_command", lambda args: b"")
 
     def execute(claim, _context):

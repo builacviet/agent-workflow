@@ -21,7 +21,7 @@ from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy, Sandbo
 
 
 _FIXTURE_PIN = "sha256:" + "b" * 64
-_ENGINE_INFO = b'"linux" true true true true ["name=seccomp,profile=builtin"]'
+_ENGINE_INFO = b'"fixture-daemon-a" "linux" true true true true ["name=seccomp,profile=builtin"]'
 
 
 def _image_metadata(image_id):
@@ -55,7 +55,7 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
 
     def docker(args):
         calls.append(args)
-        return b'"linux" true false true true ["name=seccomp,profile=builtin"]'
+        return b'"fixture-daemon-a" "linux" true false true true ["name=seccomp,profile=builtin"]'
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(WorkflowError, match="cannot enforce"):
@@ -165,7 +165,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
             run()
 
     assert [args[0] for args in calls] == [
-        "info", "image", "create", "container", "container", "rm", "container"
+        "info", "image", "create", "container", "info", "container", "rm", "container"
     ]
     assert calls[3][1] == "inspect"
     create = calls[2]
@@ -477,3 +477,53 @@ def test_image_with_unapproved_secret_env_is_rejected(monkeypatch):
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(WorkflowError, match="local Linux image"):
         sandbox._local_image("fixture:secret")
+
+
+
+def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
+    dispatch = "a" * 32
+    manager = SandboxManager(tmp_path / "fences")
+    scope = manager._scope_path(dispatch)
+    name = f"my-wfc-sandbox-{dispatch}-code-" + "b" * 32
+    identifier = "c" * 64
+    manager._record_scope(scope, dispatch, name, "daemon-A-123", 1000000.)
+    manager._update_scope(scope, "CREATED")
+    engine = {"id": "daemon-B-456", "owned": True, "removed": False}
+
+    def docker(args):
+        if args[:2] == ["container", "ls"]:
+            if engine["id"] == "daemon-A-123" and engine["owned"]:
+                return json.dumps({
+                    "ID": identifier, "Names": name,
+                    "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                }).encode()
+            return b""
+        if args[:2] == ["rm", "-f"]:
+            assert engine["id"] == "daemon-A-123"
+            engine["owned"] = False
+            engine["removed"] = True
+            return b""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: engine["id"])
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(WorkflowError, match="daemon identity changed"):
+        manager.stop(dispatch)
+    assert scope.exists() and not engine["removed"]
+    engine["id"] = "daemon-A-123"
+    manager.stop(dispatch)
+    assert engine["removed"] and not scope.exists()
+
+
+def test_prepared_not_submitted_can_be_reconciled(monkeypatch, tmp_path):
+    dispatch = "a" * 32
+    manager = SandboxManager(tmp_path / "fences")
+    fence = manager._fence_path(dispatch)
+    scope = manager._scope_path(dispatch)
+    name = f"my-wfc-sandbox-{dispatch}-code-" + "b" * 32
+    manager._record_scope(scope, dispatch, name, "daemon-A-123", 1000000.)
+    manager._record_create(fence, name)
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "daemon-A-123")
+    monkeypatch.setattr(sandbox, "_docker", lambda args: b"")
+    manager.stop(dispatch)
+    assert not fence.exists() and not scope.exists()

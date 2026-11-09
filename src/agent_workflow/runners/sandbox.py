@@ -19,6 +19,7 @@ _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
 _DISPATCH_ID = re.compile(r"[0-9a-f]{32}")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+_DAEMON_ID = re.compile(r"[A-Za-z0-9:._-]{8,180}")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*")
 _PHASE = re.compile(r"[a-z][a-z0-9-]{0,19}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -95,20 +96,23 @@ def _require_engine() -> None:
     raw = _docker([
         "info",
         "--format",
-        '{{json .OSType}} {{json .MemoryLimit}} {{json .CPUCfsQuota}} '
+        '{{json .ID}} {{json .OSType}} {{json .MemoryLimit}} {{json .CPUCfsQuota}} '
         '{{json .PidsLimit}} {{json .SwapLimit}} {{json .SecurityOptions}}',
-    ]).decode("utf-8", errors="replace").split(maxsplit=5)
+    ]).decode("utf-8", errors="replace").split(maxsplit=6)
     try:
-        os_type, memory, cpu, pids, swap, security = (json.loads(item) for item in raw)
+        daemon, os_type, memory, cpu, pids, swap, security = (json.loads(item) for item in raw)
     except (TypeError, ValueError):
         raise WorkflowError("invalid Docker capability response") from None
     if (
-        os_type != "linux"
+        not isinstance(daemon, str)
+        or not _DAEMON_ID.fullmatch(daemon)
+        or os_type != "linux"
         or not all(enabled is True for enabled in (memory, cpu, pids, swap))
         or not isinstance(security, list)
         or "name=seccomp,profile=builtin" not in security
     ):
         raise WorkflowError("Docker cannot enforce sandbox resource and security policy")
+    return daemon
 
 
 def _local_image(image: str) -> str:
@@ -265,7 +269,7 @@ class SandboxManager:
         deadline = time.time() + operation_timeout(policy.timeout_seconds)
         with dispatch_budget(deadline):
             mount = _workspace_bind(workspace, policy.workspace_writable)
-            _require_engine()
+            daemon_id = _require_engine()
             if _local_image(image) != approved_image_id:
                 raise WorkflowError("sandbox image reference differs from approved pin")
             args = [
@@ -288,12 +292,16 @@ class SandboxManager:
                 approved_image_id,
                 *command,
             ]
-            self._record_create(fence, name)
+            scope = self._scope_path(dispatch_id)
+            self._record_scope(scope, dispatch_id, name, daemon_id, deadline)
             try:
+                self._record_create(fence, name)
+                self._update_scope(scope, "SUBMITTED")
                 identifier = _docker(args).decode("ascii", errors="replace").strip()
                 if not _CONTAINER_ID.fullmatch(identifier):
                     raise WorkflowError("Docker did not identify the sandbox container")
                 observed_image_id = self._inspect_image(identifier, name, dispatch_id)
+                self._update_scope(scope, "CREATED")
                 self._clear_create(fence)
                 if observed_image_id != approved_image_id:
                     raise WorkflowError("sandbox container image differs from approved pin")
@@ -303,15 +311,27 @@ class SandboxManager:
                 )
                 return SandboxRunResult(output, observed_image_id)
             finally:
-                self._settle_create(dispatch_id, fence, self._name_pattern(prefix))
+                self._assert_scope(scope, dispatch_id)
+                self._settle_create(
+                    dispatch_id, fence, self._name_pattern(prefix), scope
+                )
                 self._cleanup(dispatch_id, re.escape(name))
+                self._clear_scope(scope)
 
     def stop(self, dispatch_id: str) -> None:
-        """Reconcile a dispatch under the Controller's exclusive process lock."""
+        """Only the original Docker engine may settle an owned execution."""
         prefix = _dispatch_prefix(dispatch_id)
         pattern = self._name_pattern(prefix)
-        self._settle_create(dispatch_id, self._fence_path(dispatch_id), pattern)
+        fence = self._fence_path(dispatch_id)
+        scope = self._scope_path(dispatch_id)
+        if scope is not None and scope.exists():
+            self._assert_scope(scope, dispatch_id)
+        elif fence is not None and fence.exists():
+            raise WorkflowError("sandbox create lacks daemon identity; dispatch stays blocked")
+        self._settle_create(dispatch_id, fence, pattern, scope)
         self._cleanup(dispatch_id, pattern)
+        if scope is not None and scope.exists():
+            self._clear_scope(scope)
 
     @staticmethod
     def _name_pattern(prefix: str) -> str:
@@ -321,6 +341,75 @@ class SandboxManager:
         if self._fence_dir is None:
             return None
         return self._fence_dir / dispatch_id
+
+    def _scope_path(self, dispatch_id: str) -> Path | None:
+        fence = self._fence_path(dispatch_id)
+        return fence.with_name(fence.name + ".scope") if fence else None
+
+    @staticmethod
+    def _scope_data(scope: Path) -> dict:
+        try:
+            record = json.loads(scope.read_text(encoding="ascii"))
+        except (OSError, ValueError):
+            raise WorkflowError("missing or invalid durable sandbox scope") from None
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("dispatch_id"), str)
+            or not _DISPATCH_ID.fullmatch(record["dispatch_id"])
+            or not isinstance(record.get("daemon_id"), str)
+            or not _DAEMON_ID.fullmatch(record["daemon_id"])
+            or record.get("state") not in {"PREPARED", "SUBMITTED", "CREATED"}
+            or not isinstance(record.get("name"), str)
+            or not isinstance(record.get("deadline"), (int, float))
+        ):
+            raise WorkflowError("invalid durable sandbox scope")
+        return record
+
+    @staticmethod
+    def _record_scope(
+        scope: Path, dispatch_id: str, name: str, daemon_id: str, deadline: float
+    ) -> None:
+        if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
+            raise WorkflowError("Docker daemon has no trustworthy identity")
+        scope.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        payload = json.dumps({
+            "dispatch_id": dispatch_id, "name": name,
+            "daemon_id": daemon_id, "deadline": deadline, "state": "PREPARED",
+        }, sort_keys=True)
+        try:
+            with scope.open("x", encoding="ascii") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileExistsError:
+            raise WorkflowError("existing sandbox execution requires reconciliation") from None
+        _sync_directory(scope.parent)
+
+    @classmethod
+    def _update_scope(cls, scope: Path, state: str) -> None:
+        record = cls._scope_data(scope)
+        record["state"] = state
+        temporary = scope.with_name(scope.name + "." + uuid4().hex + ".tmp")
+        try:
+            with temporary.open("x", encoding="ascii") as handle:
+                json.dump(record, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, scope)
+            _sync_directory(scope.parent)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @classmethod
+    def _assert_scope(cls, scope: Path, dispatch_id: str) -> None:
+        record = cls._scope_data(scope)
+        if record["dispatch_id"] != dispatch_id or _require_engine() != record["daemon_id"]:
+            raise WorkflowError("Docker daemon identity changed; dispatch remains blocked")
+
+    @staticmethod
+    def _clear_scope(scope: Path) -> None:
+        scope.unlink()
+        _sync_directory(scope.parent)
 
     @staticmethod
     def _record_create(fence: Path, name: str) -> None:
@@ -341,7 +430,8 @@ class SandboxManager:
         _sync_directory(fence.parent)
 
     def _settle_create(
-        self, dispatch_id: str, fence: Path | None, name_pattern: str
+        self, dispatch_id: str, fence: Path | None,
+        name_pattern: str, scope: Path | None = None,
     ) -> None:
         if fence is None:
             return
@@ -352,7 +442,14 @@ class SandboxManager:
         if not re.fullmatch(name_pattern, name):
             raise WorkflowError("invalid sandbox create fence")
         with cleanup_budget():
-            if len(self._owned(dispatch_id, re.escape(name))) != 1:
+            owned = self._owned(dispatch_id, re.escape(name))
+            if len(owned) != 1:
+                if (
+                    not owned and scope is not None
+                    and self._scope_data(scope)["state"] == "PREPARED"
+                ):
+                    self._clear_create(fence)
+                    return
                 raise WorkflowError(
                     "sandbox Docker create remains uncertain; dispatch stays blocked"
                 )
