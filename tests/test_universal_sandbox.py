@@ -464,3 +464,16 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
             capture_output=True,
             timeout=20,
         )
+
+
+
+def test_image_with_unapproved_secret_env_is_rejected(monkeypatch):
+    def docker(args):
+        return json.dumps([{
+            "Id": _FIXTURE_PIN, "Os": "linux",
+            "Config": {"Env": ["PATH=/usr/bin", "OPENAI_API_KEY=synthetic-canary"]}
+        }]).encode()
+
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    with pytest.raises(WorkflowError, match="local Linux image"):
+        sandbox._local_image("fixture:secret")

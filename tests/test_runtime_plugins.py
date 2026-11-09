@@ -276,3 +276,14 @@ def test_reject_duplicate_and_unknown_interface_version():
 def test_invalid_runtime_plan_rejected(command, env):
     with pytest.raises(WorkflowError, match="invalid runtime"):
         RuntimePlan(command, env)
+
+
+
+def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
+    class EnvPlugin(FakePlugin):
+        def plan(self, request):
+            return RuntimePlan(("fake-exec",), (("WFC_PLUGIN_TOKEN", "synthetic"),))
+
+    other = RuntimeRegistry((EnvPlugin(),))
+    with pytest.raises(WorkflowError, match="environment is not explicitly approved"):
+        other.plan(fake_request)

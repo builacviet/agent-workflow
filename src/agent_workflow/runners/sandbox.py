@@ -22,6 +22,12 @@ _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*")
 _PHASE = re.compile(r"[a-z][a-z0-9-]{0,19}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SAFE_IMAGE_ENV = frozenset({
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TMPDIR",
+    "PYTHON_VERSION", "PYTHON_PIP_VERSION", "PYTHON_SETUPTOOLS_VERSION",
+    "PYTHON_GET_PIP_URL", "PYTHON_GET_PIP_SHA256", "PYTHONUNBUFFERED",
+    "PYTHONDONTWRITEBYTECODE", "PYTHONPATH", "GPG_KEY",
+})
 _PROXY_NAMES = tuple(
     variant
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY")
@@ -110,10 +116,19 @@ def _local_image(image: str) -> str:
         result = json.loads(_docker(["image", "inspect", image]))
         metadata, = result
         identifier = metadata["Id"]
+        environment = metadata["Config"].get("Env") or []
         if (
             metadata["Os"] == "linux"
             and _IMAGE_ID.fullmatch(identifier)
             and not metadata["Config"].get("Volumes")
+            and isinstance(environment, list)
+            and all(
+                isinstance(item, str)
+                and "=" in item
+                and item.split("=", 1)[0] in _SAFE_IMAGE_ENV
+                and len(item) < 4096
+                for item in environment
+            )
         ):
             return identifier
     except (AttributeError, KeyError, TypeError, ValueError):
@@ -171,7 +186,8 @@ def _environment(env: tuple[tuple[str, str], ...]) -> list[str]:
             or not _ENV_NAME.fullmatch(key)
             or key in names
             or not isinstance(value, str)
-            or "\0" in value
+            or not value.isprintable()
+            or len(value) > 4096
         ):
             raise ValueError("invalid sandbox environment")
         names.add(key)

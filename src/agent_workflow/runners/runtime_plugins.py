@@ -75,6 +75,7 @@ class RuntimeManifest:
     supported_combinations: frozenset[tuple[str, str, str | None]]
     capabilities: frozenset[str]
     approved_image_id: str | None = None
+    approved_plan_env: frozenset[str] = frozenset()
     api_version: int = 1
 
     def __post_init__(self) -> None:
@@ -85,6 +86,12 @@ class RuntimeManifest:
             and self.supported_combinations
             and all(map(_combination, self.supported_combinations))
             and _identifiers(self.capabilities)
+            and isinstance(self.approved_plan_env, frozenset)
+            and all(
+                isinstance(key, str)
+                and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", key)
+                for key in self.approved_plan_env
+            )
             and type(self.api_version) is int
         ):
             raise WorkflowError("invalid runtime manifest")
@@ -191,10 +198,12 @@ class RuntimeRegistry:
         return manifest.approved_image_id
 
     def plan(self, request: RuntimeRequest) -> RuntimePlan:
-        _, plugin = self._resolve(request)
+        manifest, plugin = self._resolve(request)
         plan = plugin.plan(request)
         if not isinstance(plan, RuntimePlan):
             raise WorkflowError("invalid runtime plan")
+        if any(key not in manifest.approved_plan_env for key, _ in plan.env):
+            raise WorkflowError("runtime environment is not explicitly approved")
         return plan
 
     def result(
@@ -268,6 +277,7 @@ class CodexCLIPlugin:
             )
         ),
         capabilities=frozenset({"workspace-read", "workspace-write"}),
+        approved_plan_env=frozenset({"WFC_CODEX_MODEL"}),
     )
 
     def plan(self, request: RuntimeRequest) -> RuntimePlan:

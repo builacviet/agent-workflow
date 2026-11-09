@@ -33,6 +33,9 @@ from agent_workflow.runners.sandbox import (
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
 MAX_BYTES = 10_000_000
+MAX_SNAPSHOT_FILES = 10_000
+MAX_SNAPSHOT_FILE_BYTES = 16 * 1024 * 1024
+MAX_SNAPSHOT_TOTAL_BYTES = 64 * 1024 * 1024
 WINDOWS_DEVICES = {"con", "prn", "aux", "nul"} | {
     f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10)
 }
@@ -141,8 +144,12 @@ def validate_config(config: dict) -> None:
 
 
 def source_digest(root: Path) -> str:
+    """Hash a bounded snapshot without allocating file content on the host."""
     digest = hashlib.sha256()
+    file_count = 0
+    total_bytes = 0
     for directory, dirs, files in os.walk(root, followlinks=False):
+        check_deadline()
         dirs.sort()
         for name in list(dirs):
             if is_linked(Path(directory) / name):
@@ -150,17 +157,37 @@ def source_digest(root: Path) -> str:
             if name in GENERATED:
                 dirs.remove(name)
         for name in sorted(files):
+            check_deadline()
             path = Path(directory) / name
-            if is_linked(path) or not path.is_file():
+            info = path.lstat()
+            if is_linked(path) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise WorkflowError("unsafe source file")
+            file_count += 1
+            total_bytes += info.st_size
+            if (
+                file_count > MAX_SNAPSHOT_FILES
+                or info.st_size > MAX_SNAPSHOT_FILE_BYTES
+                or total_bytes > MAX_SNAPSHOT_TOTAL_BYTES
+            ):
+                raise WorkflowError("source snapshot exceeds bounded file or byte budget")
             name_bytes = path.relative_to(root).as_posix().encode("utf-8")
-            content = path.read_bytes()
             digest.update(len(name_bytes).to_bytes(8, "big"))
             digest.update(name_bytes)
-            digest.update(len(content).to_bytes(8, "big"))
-            digest.update(content)
+            digest.update(info.st_size.to_bytes(8, "big"))
+            with path.open("rb") as handle:
+                remaining = info.st_size
+                while remaining:
+                    check_deadline()
+                    chunk = handle.read(min(65536, remaining))
+                    if not chunk:
+                        raise WorkflowError("source file changed while hashing")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                if handle.read(1):
+                    raise WorkflowError("source file grew while hashing")
+            if path.stat().st_size != info.st_size:
+                raise WorkflowError("source file size changed while hashing")
     return digest.hexdigest()
-
 
 def docker_command(args: list[str]) -> bytes:
     if not args or args[0] != "docker":
@@ -261,8 +288,7 @@ class CoderRuntime:
             # Only the built-in Codex device-login profile is exempt from
             # strict sandbox image approval.
             output = self.docker(claim, source, "code", prompt, code_plan=plan)
-            self.registry.result(request, output)
-            return
+            return self.registry.result(request, output)
 
         launch = self.sandbox.run(
             SandboxPolicy(timeout_seconds=self._remaining_seconds(claim)),
@@ -274,7 +300,7 @@ class CoderRuntime:
             env=plan.env,
             stdin=prompt,
         )
-        self.registry.result(request, launch.output, observed_image_id=launch.image_id)
+        return self.registry.result(request, launch.output, observed_image_id=launch.image_id)
 
     @staticmethod
     def _remaining_seconds(claim: dict) -> int:
@@ -434,7 +460,9 @@ class CoderRuntime:
                 "Implement only this authorized task; do not commit/push/approve.\n"
                 + json.dumps(context)
             )
-            self._run_code(claim, source, request, plan, prompt, approved_image_id)
+            runtime_result = self._run_code(
+                claim, source, request, plan, prompt, approved_image_id
+            )
             self.stop(claim["dispatch_id"])
             tested_digest = source_digest(source)
             self.docker(claim, source, "test")
@@ -479,6 +507,14 @@ class CoderRuntime:
             if result["input_sha"] != claim["input_sha"]:
                 raise WorkflowError("worker result input mismatch")
             check_deadline()
+            from agent_workflow.storage.dispatch_repository import DispatchLedger
+
+            DispatchLedger(self.service).record_runtime_evidence(
+                claim["dispatch_id"], context["task_id"], claim["input_sha"],
+                request.spec.runtime, runtime_result.declared_runtime_version,
+                runtime_result.observed_image_id, runtime_result.telemetry,
+                tested_digest, result["head_sha"],
+            )
             self.service.register_task_handoff(
                 context["task_id"],
                 context["repository"],
