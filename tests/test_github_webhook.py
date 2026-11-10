@@ -163,19 +163,20 @@ class GitHubWebhookTests(TestCase):
             receiver.handle("POST", WEBHOOK_PATH, replay, self.body), HTTPStatus.OK
         )
 
-        # Even a distinct signed body that would otherwise be accepted cannot
-        # rebind an acknowledged replay UUID.
+        # Replay UUIDs are deliberately not retained. A distinct valid
+        # signed body using that UUID is a new notification, not a conflict.
         other_body = self.body + b" "
         headers = signed_headers(other_body, delivery=OTHER_DELIVERY_ID)
         self.assertEqual(
-            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.CONFLICT
+            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.ACCEPTED
         )
+        self.assertIsNotNone(reopened.get(OTHER_DELIVERY_ID))
         new_id = "704aaefb-66af-46a4-b1cf-6d8d37a28bad"
         headers["X-GitHub-Delivery"] = new_id
         self.assertEqual(
-            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.ACCEPTED
+            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.OK
         )
-        self.assertIsNotNone(reopened.get(new_id))
+        self.assertIsNone(reopened.get(new_id))
 
     def test_concurrent_duplicate_deliveries_insert_once(self) -> None:
         for second_id in (DELIVERY_ID, OTHER_DELIVERY_ID):
@@ -226,6 +227,17 @@ class GitHubWebhookTests(TestCase):
                 ],
             )
             legacy_rows = db.execute("SELECT * FROM webhook_inbox ORDER BY delivery_id").fetchall()
+            # Simulate the previous unversioned implementation with aliases.
+            db.execute("""
+                CREATE TABLE webhook_delivery_aliases (
+                    delivery_id TEXT PRIMARY KEY NOT NULL,
+                    body_digest TEXT NOT NULL
+                )
+            """)
+            db.execute(
+                "INSERT INTO webhook_delivery_aliases VALUES (?, ?)",
+                ("704aaefb-66af-46a4-b1cf-6d8d37a28bad", digest),
+            )
 
         receiver = self.make_receiver(WebhookInbox(path))
         new_id = "704aaefb-66af-46a4-b1cf-6d8d37a28bad"
@@ -243,6 +255,75 @@ class GitHubWebhookTests(TestCase):
                 db.execute("SELECT * FROM webhook_inbox ORDER BY delivery_id").fetchall(),
                 legacy_rows,
             )
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='webhook_delivery_aliases'"
+            ).fetchone())
+
+    def test_many_replays_have_bounded_database_rows(self) -> None:
+        self.assertEqual(
+            self.receiver.handle(
+                "POST", WEBHOOK_PATH, signed_headers(self.body), self.body
+            ), HTTPStatus.ACCEPTED
+        )
+        # Each UUID is new, but the signed body is identical.
+        for i in range(100):
+            delivery = f"00000000-0000-4000-8000-{i:012x}"
+            self.assertEqual(
+                self.receiver.handle(
+                    "POST", WEBHOOK_PATH,
+                    signed_headers(self.body, delivery=delivery), self.body
+                ), HTTPStatus.OK
+            )
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(
+                db.execute("SELECT count(*) FROM webhook_inbox").fetchone(), (1,)
+            )
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='webhook_delivery_aliases'"
+            ).fetchone())
+
+    def test_future_version_and_foreign_database_fail_closed(self) -> None:
+        for name, script in (
+            ("future", "PRAGMA user_version = 2"),
+            ("foreign", "CREATE TABLE alien_data (value INTEGER)"),
+        ):
+            with self.subTest(name=name):
+                path = self.path.with_name(name + ".sqlite3")
+                with closing(sqlite3.connect(path)) as db, db:
+                    db.execute(script)
+                with self.assertRaises(sqlite3.DatabaseError):
+                    WebhookInbox(path)
+                with closing(sqlite3.connect(path)) as db:
+                    self.assertIsNone(db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='webhook_inbox'"
+                    ).fetchone())
+
+    def test_incompatible_legacy_schema_fails_without_version_bump(self) -> None:
+        path = self.path.with_name("malformed.sqlite3")
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("CREATE TABLE webhook_inbox (delivery_id TEXT PRIMARY KEY)")
+        with self.assertRaises(sqlite3.DatabaseError):
+            WebhookInbox(path)
+        with closing(sqlite3.connect(path)) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (0,))
+            self.assertEqual(
+                db.execute("PRAGMA table_info(webhook_inbox)").fetchall()[0][1],
+                "delivery_id",
+            )
+
+    def test_current_schema_missing_digest_index_fails_closed(self) -> None:
+        path = self.path.with_name("missing-index.sqlite3")
+        with closing(sqlite3.connect(self.path)) as source:
+            schema = source.execute(
+                "SELECT sql FROM sqlite_master WHERE name='webhook_inbox'"
+            ).fetchone()[0]
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute(schema)
+            db.execute("PRAGMA user_version = 1")
+        with self.assertRaises(sqlite3.DatabaseError):
+            WebhookInbox(path)
 
     def test_failed_commit_never_acknowledges_and_allows_retry(self) -> None:
         connect = self.inbox._connect
