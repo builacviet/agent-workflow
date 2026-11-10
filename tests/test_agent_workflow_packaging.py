@@ -1,7 +1,6 @@
 """Migration-specific packaging and path checks, independent of workflow behavior."""
 import importlib
 from pathlib import Path
-import runpy
 
 import pytest
 
@@ -62,11 +61,3 @@ def test_flat_imports_resolve_to_the_same_module(module, package):
     implementation = importlib.import_module(f"agent_workflow.{package}.{module}")
     assert original is implementation
 
-
-@pytest.mark.parametrize("module", ["admin", "controller", "server"])
-def test_legacy_module_command_forwards_to_current_entrypoint(monkeypatch, module):
-    current = importlib.import_module(f"agent_workflow.{module}")
-    calls = []
-    monkeypatch.setattr(current, "main", lambda: calls.append(module))
-    runpy.run_module(f"my_wfc.{module}", run_name="__main__")
-    assert calls == [module]

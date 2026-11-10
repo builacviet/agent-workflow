@@ -14,7 +14,7 @@ This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI 
 - src/agent_workflow/security.py: constant-time Bearer-header validation and configured operator identity.
 - src/agent_workflow/tools.py: authenticated MCP adapter, injected SDK request context, lazy service initialization.
 - src/agent_workflow/admin.py: local-only task authorization, historical import, disposable seed/reset. No remote provision/reset tools.
-- tests/test_my_wfc.py: deterministic unit/concurrency/transaction/security tests and real loopback HTTP/MCP test with mocked GitHub.
+- tests/test_workflow_service.py: deterministic unit/concurrency/transaction/security tests and real loopback HTTP/MCP test with mocked GitHub.
 - tests/live_my_wfc_smoke.py: actual server subprocess restart/reconnect check against seeded SQLite, without submitting verdicts.
 - src/agent_workflow/resources/TASK-001-reference.md: copied real task document from the reference repository; not invented source contents.
 - pyproject.toml: mcp optional extra pins SDK 1.30.0; test extra supplies pytest; package data includes SQL and historical reference.

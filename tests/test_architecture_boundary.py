@@ -16,7 +16,7 @@ from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
-from test_my_wfc import spec, payload
+from test_workflow_service import spec, payload
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 

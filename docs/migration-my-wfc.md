@@ -1,3 +1,9 @@
+> **HISTORICAL MIGRATION RECORD — commands not for current execution.** The
+> former `src/my_wfc` command wrappers and `src/order_service` POC sample have
+> been removed in the Owner-authorized source cleanup. This file preserves the
+> original import/fixture/provenance decisions; use the active Controller and
+> MCP runbooks for actual operation.
+
 # Phase 2.2 source migration
 
 Source: private builacviet/my-wfc-mcp, commit b1a3d684162c3d9f32b3caec8116b85f7770a1c3, local D:\STUDY\TESTING\my-mcp. Target: private builacviet/techlead-review-poc. Target base main/origin-main: 015ccc535b85ce1d0ad00da787b827970b9bf39a. Migration branch: infra/integrate-my-wfc; dedicated checkout D:\WORK\Project\techlead-review-poc-my-wfc. Files were read from the source commit, rather than copied from runtime directories. The original checkout, Git repository, server and database are retained unchanged. No merge, rebase or force-push of main/TASK-001 is part of this migration.

@@ -23,12 +23,15 @@
 
 **As of 2026-11-07:** CL-12.5 [PR #11](https://github.com/builacviet/agent-workflow/pull/11), CL-12.6 [PR #12](https://github.com/builacviet/agent-workflow/pull/12) and CL-12.7 [PR #13](https://github.com/builacviet/agent-workflow/pull/13) are **merged as documentation**. Controller→Executor IPC transport and crash/job idempotency are *pending implementation/test*, not settled runtime facts. P1 [PR #14](https://github.com/builacviet/agent-workflow/pull/14) is a 2026-11-06 **BLOCKED read-only preflight**; later WSL2 P2/P3 are limited feasibility reports, with P3 source evidence review outstanding. Before making a time-sensitive claim, re-check GitHub and the active Notion status.
 
+Legacy `order_service` and `my_wfc` package paths cited in historical ADRs
+refer to the original POC snapshot, not current source. See
+[CURRENT architecture](architecture.md) for the active packages.
+
 ## Read by task type (pick a route, not the whole tree)
 
 | Task / role | Start with, after the first-read trio |
 | --- | --- |
 | **V1 planning / Dev / QC / TL Reviewer / Owner gates** | Read [V1 scope and gates](v1-scope-and-gates.md), the shared [Engineering Quality Standards](conventions/engineering-standards.md), then [Dev contract](roles/dev.md), [QC contract](roles/qc.md), [Independent TL Reviewer contract](roles/tl-reviewer.md). For `qc: required`, use the [MTP design template](templates/master-test-plan.md) and separate [MTP execution-report template](templates/mtp-execution-report.md). These are **docs-only contracts**, not proof of automated role enforcement (V1-02 pending). Next read authorized task and exact source/CI evidence. |
-| Small `order_service` logic | [CURRENT architecture](architecture.md), relevant `src/order_service/` module and adjacent tests; review policy only for submission |
 | Existing WFC/MCP/Controller bug or operation | Start at the [CURRENT Phase 3.1 runbook](phase-3.1.md) and only the affected source/tests; [my-wfc.md](my-wfc.md) contains **historical pre-Phase-3.1 assumptions** and is reference-only for older WFC behavior |
 | **Controller timeout / Docker CLI disconnect / uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |
 | Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |

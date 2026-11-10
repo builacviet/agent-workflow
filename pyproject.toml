@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-workflow"
 version = "0.2.0"
-description = "Independent order domain and MCP workflow engine for Tech Lead review"
+description = "Agent Workflow MCP, Controller and trusted GitHub worker"
 requires-python = ">=3.11"
 dependencies = []
 
