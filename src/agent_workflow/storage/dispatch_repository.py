@@ -19,16 +19,9 @@ class DispatchLedger:
         self, service: WorkflowService, *, clock: Callable = time.time
     ) -> None:
         self.service, self.clock = service, clock
+        # The workflow migration registry owns coder_dispatches.
         with service.repository.raw_connection() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS coder_dispatches (
-                    dispatch_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
-                    round_number INTEGER NOT NULL, input_sha TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('ACTIVE','BLOCKED','DONE','ACKNOWLEDGED')),
-                    slot INTEGER UNIQUE CHECK(slot=1), deadline REAL NOT NULL,
-                    result_sha TEXT, detail TEXT NOT NULL DEFAULT '',
-                    UNIQUE(task_id,round_number,input_sha)
-                );
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS coder_runtime_evidence (
                     dispatch_id TEXT PRIMARY KEY REFERENCES coder_dispatches(dispatch_id),
                     task_id TEXT NOT NULL, input_sha TEXT NOT NULL,
