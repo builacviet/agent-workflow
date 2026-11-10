@@ -42,14 +42,16 @@ TASK-001 historical state is imported as ESCALATED, two completed rounds, with o
 The migration branch is for independent ChatGPT Tech Lead review. Codex does not approve its own work or merge branches. TASK-001 remains escalated; its branch and code are not changed by consolidation.
 
 
-## Optional Docker MCP deployment
+## V1 Controller-stack MCP, webhook and ngrok
 
-A separate POC-only Docker Compose stack runs the MCP server with a persistent
-SQLite volume and an optional ngrok container using the stable domain
-`caddy-reopen-scotch.ngrok-free.dev`. It does not include the Codex Controller
-or reuse Workflow Console v2. See [Docker setup](docs/docker-mcp.md).
-Default protected workflow access remains unchanged; never enable public no-auth
-against non-synthetic data.
+Use `compose.controller.yaml` for the active local MCP, webhook receiver, router,
+and optional ngrok tunnel. The old standalone `compose.yaml` POC and
+`.runtime/mcp.env.example` have been retired; do not use legacy POC setup commands.
+MCP defaults to Auth0 in the **Controller stack configuration template**
+(`.runtime/controller-mcp.env.example`) and requires verified local Auth0 values.
+See the [runtime configuration inventory](.runtime/README.md) and the
+[V1-03C local integration runbook](docs/guides/v1-03c-local-webhook.md).
+Do not expose a public tunnel until OAuth access is verified.
 
 Phase 3.1 adds an independent GitHub App / Codex Controller. See [operator runbook](docs/phase-3.1.md) and [authorized task / ACs](docs/tasks/PHASE-3.1.md). Activation requires local credentials and a synthetic live test; implementation does not authorize merge or operate Workflow Console v2.
 

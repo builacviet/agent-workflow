@@ -1,7 +1,7 @@
 # Local runtime configuration — Agent Workflow V1
 
 This directory holds **operator-owned configuration**, not just environment variables.
-Only templates (`*.example`) and this inventory are committed to Git.
+Only active templates (`*.example`) and this inventory are committed to Git.
 Actual `.env`, `.json`, PEM, keys and tokens are local-only.
 
 - `.runtime/`: local process and Compose configuration (`.env` for environment variables, `.json` for structured Controller options)
@@ -16,11 +16,11 @@ Actual `.env`, `.json`, PEM, keys and tokens are local-only.
 | `controller-webhook.env.example` | `controller-webhook.env` | Ingress validation: Controller GitHub App installation ID | `compose.controller.yaml` |
 | `controller-ci.json.example` | `controller-ci.json` | Host CI-only watcher: Controller read-only App ID, installation, PEM, DB | `--ci-once` / `--ci-watch` |
 | `controller.json.example` | `controller.json` | **Separate** full Coder-dispatch Controller config; not used in V1-03C CI-only smoke | Full Controller |
-| `ngrok.env.example` | `ngrok.env` | ngrok authtoken | Both Compose stacks |
-| `mcp.env.example` | `mcp.env` | **Legacy standalone POC stack**, isolated DB; not used by `compose.controller.yaml` | `compose.yaml` |
+| `ngrok.env.example` | `ngrok.env` | ngrok authtoken | `compose.controller.yaml` |
 
-`mcp-auth0.env.example` was a duplicate of the Auth0 section already maintained in
-`controller-mcp.env.example`. It has been removed. Keep one MCP auth template for
+`mcp-auth0.env.example` duplicated the Auth0 section already maintained in
+`controller-mcp.env.example`. The older standalone POC template `mcp.env.example`
+and its matching root `compose.yaml` were also removed. Keep one MCP auth template for
 the Controller stack; do not create both variants.
 
 Do not mistake the two Controllers: `controller-ci.json` runs **only**
@@ -31,8 +31,8 @@ Codex dispatch worker path, with a different credential and additional options.
 
 A file name has the form `<stack>-<service>.<format>` for Controller-stack
 components; `controller-ci.json` and `controller.json` distinguish the two
-Controller execution modes. Standalone POC files retain their historical names
-until that stack is retired or migrated.
+Controller execution modes. The legacy standalone MCP POC Compose stack has been retired; only the Controller
+stack is a supported Compose entrypoint.
 
 Existing Python and Compose code uses a `WFC_` prefix as a **legacy environment
 namespace**, not a security or protocol requirement. It avoids collisions in
@@ -64,7 +64,7 @@ not environment variables and therefore do not use `WFC_`.
 
 ## Safe setup and migration
 
-1. Choose the active `compose.controller.yaml` stack; do not mix in `mcp.env` from the older POC stack.
+1. Use `compose.controller.yaml` for the V1 stack. The old `compose.yaml` and `.runtime/mcp.env.example` POC files have been removed; do not recreate or depend on them.
 2. Copy missing templates only. **Never overwrite a working ignored local env file** when pulling from Git.
 3. For the Controller MCP, restore the existing verified Auth0 values in `controller-mcp.env`; **do not** change to static Bearer merely because the starter file was blank.
 4. Keep the Controller App's **PEM** and **webhook secret** under `.secret/`, distinct from the Worker App.

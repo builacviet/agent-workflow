@@ -16,16 +16,17 @@ def test_v1_controller_stack_auth0_template_is_single_source() -> None:
     assert not (RUNTIME / "mcp-auth0.env.example").exists()
 
 
-def test_active_and_legacy_runtime_templates_have_documented_owners() -> None:
+def test_active_runtime_templates_have_documented_owners() -> None:
     inventory = (RUNTIME / "README.md").read_text(encoding="utf-8")
     for path in (
         "controller-ci.json.example",
         "controller-mcp.env.example",
         "controller-webhook.env.example",
         "controller.json.example",
-        "mcp.env.example",
         "ngrok.env.example",
     ):
         assert (RUNTIME / path).is_file()
         assert path in inventory
     assert "WFC_" in inventory
+    assert not (RUNTIME / "mcp.env.example").exists()
+    assert not (ROOT / "compose.yaml").exists()
