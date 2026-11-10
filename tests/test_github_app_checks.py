@@ -3,7 +3,7 @@ import pytest
 
 from agent_workflow.integrations.ci_gate import CiRequest, verify_ci
 from agent_workflow.integrations.github_app_checks import (
-    ControllerAppToken, GitHubAppChecks,
+    ControllerAppToken, ControllerChecksClient,
 )
 
 SHA = "a" * 40
@@ -40,7 +40,7 @@ def test_app_adapter_paginates_all_checks_before_verdict():
             for n in chunk
         ]}
 
-    checks = GitHubAppChecks(
+    checks = ControllerChecksClient(
         installation_id=17,
         token_provider=lambda: "installation-token",
         request_json=api,
@@ -67,7 +67,7 @@ def test_incomplete_page_cannot_mark_ci_success():
                     "head": {"sha": SHA}}
         return {"total_count": 101, "check_runs": []}
 
-    checks = GitHubAppChecks(
+    checks = ControllerChecksClient(
         installation_id=17,
         token_provider=lambda: "tok",
         request_json=api,
@@ -84,13 +84,13 @@ def test_incomplete_page_cannot_mark_ci_success():
 
 
 def test_wrong_repository_and_untrusted_installation_rejected():
-    checks = GitHubAppChecks(installation_id=17, token_provider=lambda: "tok")
+    checks = ControllerChecksClient(installation_id=17, token_provider=lambda: "tok")
     with pytest.raises(OSError):
         checks.get_pull_request("wrong/repo", 1)
     with pytest.raises(OSError):
         checks.list_check_runs("wrong/repo", SHA)
     with pytest.raises(ValueError):
-        GitHubAppChecks(installation_id=17, token_provider=lambda: "tok", repository="wrong/repo")
+        ControllerChecksClient(installation_id=17, token_provider=lambda: "tok", repository="wrong/repo")
 
 
 def test_token_provider_missing_pem_fails_closed(tmp_path):

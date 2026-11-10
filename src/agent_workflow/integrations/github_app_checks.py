@@ -125,7 +125,7 @@ class ControllerAppToken:
             return token
 
 
-class GitHubAppChecks:
+class ControllerChecksClient:
     """ReadOnlyChecks implementation for ci_gate.verify_ci, with full pagination."""
 
     def __init__(

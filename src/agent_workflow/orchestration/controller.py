@@ -156,7 +156,7 @@ def _ci_operator(config: dict, *, watch: bool) -> None:
     """Explicit CI-only path: cannot launch Codex or touch worker credentials."""
     from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
     from agent_workflow.integrations.github_app_checks import (
-        ControllerAppToken, GitHubAppChecks,
+        ControllerAppToken, ControllerChecksClient,
     )
     from agent_workflow.storage.ci_state import ControllerCiState
 
@@ -173,7 +173,7 @@ def _ci_operator(config: dict, *, watch: bool) -> None:
     token = ControllerAppToken(
         app_id=app_id, installation_id=installation_id, pem_path=pem,
     )
-    checks = GitHubAppChecks(
+    checks = ControllerChecksClient(
         installation_id=installation_id, token_provider=token,
     )
     ci = ControllerCiCoordinator(
