@@ -5,10 +5,6 @@ from enum import Enum, auto
 from pathlib import Path
 import sqlite3
 
-from agent_workflow.storage.migrations import (
-    Migration, migrate, table_columns, table_names,
-)
-
 
 _SCHEMA_VERSION = 1
 _INBOX_COLUMNS = (
@@ -44,11 +40,17 @@ class InboxResult(Enum):
     CONFLICT = auto()
 
 
+def _table_columns(db: sqlite3.Connection, table: str) -> tuple:
+    # Only call with hardcoded table names, never external input.
+    return tuple(
+        (row[1], row[2].upper(), row[3], row[5])
+        for row in db.execute(f"PRAGMA table_info({table})")
+    )
+
+
 def _validate_inbox_schema(db: sqlite3.Connection) -> None:
-    if table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
+    if _table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
         raise sqlite3.DatabaseError("incompatible webhook inbox table schema")
-    if "webhook_delivery_aliases" in table_names(db):
-        raise sqlite3.DatabaseError("retired webhook alias table found")
     indexes = db.execute("PRAGMA index_list(webhook_inbox)").fetchall()
     digest_indexes = [row for row in indexes if row[1] == "webhook_inbox_body_digest"]
     if (
@@ -62,52 +64,6 @@ def _validate_inbox_schema(db: sqlite3.Connection) -> None:
         raise sqlite3.DatabaseError("incompatible webhook inbox digest index")
 
 
-def _create_webhook(db: sqlite3.Connection) -> None:
-    db.execute("""
-        CREATE TABLE webhook_inbox (
-            delivery_id TEXT PRIMARY KEY NOT NULL,
-            event TEXT NOT NULL,
-            action TEXT NOT NULL,
-            repository TEXT NOT NULL,
-            installation_id INTEGER NOT NULL,
-            subject_id INTEGER NOT NULL,
-            head_sha TEXT NOT NULL,
-            body_digest TEXT NOT NULL
-        )
-    """)
-    db.execute("""
-        CREATE INDEX webhook_inbox_body_digest
-        ON webhook_inbox (body_digest)
-    """)
-
-
-def _legacy_webhook(db: sqlite3.Connection) -> int:
-    names = table_names(db)
-    if "webhook_inbox" not in names:
-        if "webhook_delivery_aliases" in names:
-            raise sqlite3.DatabaseError("orphaned legacy webhook aliases")
-        return 0
-    if table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
-        raise sqlite3.DatabaseError("incompatible legacy inbox schema")
-    if "webhook_delivery_aliases" in names:
-        if table_columns(db, "webhook_delivery_aliases") != _ALIAS_COLUMNS:
-            raise sqlite3.DatabaseError("incompatible legacy alias schema")
-        db.execute("DROP TABLE webhook_delivery_aliases")
-    db.execute("""
-        CREATE INDEX IF NOT EXISTS webhook_inbox_body_digest
-        ON webhook_inbox (body_digest)
-    """)
-    return 1
-
-
-def _migrate_webhook(db: sqlite3.Connection) -> None:
-    migrate(
-        db, "webhook", (Migration(1, "webhook_inbox", _create_webhook),),
-        adopt_legacy=_legacy_webhook,
-        validate=_validate_inbox_schema,
-    )
-
-
 class WebhookInbox:
     """Store at most one notification per signed body, across restarts."""
 
@@ -115,8 +71,57 @@ class WebhookInbox:
         if str(path) in ("", ":memory:"):
             raise ValueError("webhook inbox requires a database file")
         self._path = Path(path).resolve()
-        with closing(self._connect()) as db:
-            _migrate_webhook(db)
+        with closing(self._connect()) as db, db:
+            # Migration and validation share one write transaction; a failure
+            # rolls back both schema changes and the version bump.
+            db.execute("BEGIN IMMEDIATE")
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, _SCHEMA_VERSION):
+                raise sqlite3.DatabaseError("unsupported webhook inbox schema version")
+            tables = {
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            }
+            if tables - {"webhook_inbox", "webhook_delivery_aliases"}:
+                raise sqlite3.DatabaseError("unexpected tables in webhook inbox database")
+
+            if version == 0:
+                if "webhook_inbox" in tables:
+                    # A previous unversioned receiver must have the expected
+                    # columns before we migrate it, never silently repair it.
+                    if _table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
+                        raise sqlite3.DatabaseError("incompatible legacy inbox schema")
+                else:
+                    if "webhook_delivery_aliases" in tables:
+                        raise sqlite3.DatabaseError("orphaned legacy webhook aliases")
+                    db.execute("""
+                        CREATE TABLE webhook_inbox (
+                            delivery_id TEXT PRIMARY KEY NOT NULL,
+                            event TEXT NOT NULL,
+                            action TEXT NOT NULL,
+                            repository TEXT NOT NULL,
+                            installation_id INTEGER NOT NULL,
+                            subject_id INTEGER NOT NULL,
+                            head_sha TEXT NOT NULL,
+                            body_digest TEXT NOT NULL
+                        )
+                    """)
+                if "webhook_delivery_aliases" in tables:
+                    if _table_columns(db, "webhook_delivery_aliases") != _ALIAS_COLUMNS:
+                        raise sqlite3.DatabaseError("incompatible legacy alias schema")
+                    # Deliberately retire replay aliases. Only original
+                    # notification IDs remain bound; old inbox rows are kept.
+                    db.execute("DROP TABLE webhook_delivery_aliases")
+                db.execute("""
+                    CREATE INDEX IF NOT EXISTS webhook_inbox_body_digest
+                    ON webhook_inbox (body_digest)
+                """)
+                db.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            elif "webhook_delivery_aliases" in tables:
+                raise sqlite3.DatabaseError("unexpected aliases in current inbox schema")
+            _validate_inbox_schema(db)
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path)

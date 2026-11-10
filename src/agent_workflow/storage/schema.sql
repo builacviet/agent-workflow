@@ -35,3 +35,4 @@ CREATE TABLE IF NOT EXISTS task_events (
  previous_status TEXT, next_status TEXT NOT NULL, action TEXT NOT NULL,
  sha TEXT, timestamp REAL NOT NULL, metadata TEXT NOT NULL
 );
+PRAGMA user_version=1;

@@ -255,9 +255,7 @@ class GitHubWebhookTests(TestCase):
                 db.execute("SELECT * FROM webhook_inbox ORDER BY delivery_id").fetchall(),
                 legacy_rows,
             )
-            self.assertEqual(db.execute(
-                "SELECT version FROM schema_migrations WHERE component='webhook'"
-            ).fetchone(), (1,))
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
             self.assertIsNone(db.execute(
                 "SELECT 1 FROM sqlite_master WHERE name='webhook_delivery_aliases'"
             ).fetchone())
@@ -281,34 +279,20 @@ class GitHubWebhookTests(TestCase):
             self.assertEqual(
                 db.execute("SELECT count(*) FROM webhook_inbox").fetchone(), (1,)
             )
-            self.assertEqual(db.execute(
-                "SELECT version FROM schema_migrations WHERE component='webhook'"
-            ).fetchone(), (1,))
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (1,))
             self.assertIsNone(db.execute(
                 "SELECT 1 FROM sqlite_master WHERE name='webhook_delivery_aliases'"
             ).fetchone())
 
     def test_future_version_and_foreign_database_fail_closed(self) -> None:
-        for name in ("future", "foreign"):
+        for name, script in (
+            ("future", "PRAGMA user_version = 2"),
+            ("foreign", "CREATE TABLE alien_data (value INTEGER)"),
+        ):
             with self.subTest(name=name):
                 path = self.path.with_name(name + ".sqlite3")
                 with closing(sqlite3.connect(path)) as db, db:
-                    if name == "future":
-                        db.execute("""
-                            CREATE TABLE schema_migrations (
-                                component TEXT NOT NULL,
-                                version INTEGER NOT NULL,
-                                name TEXT NOT NULL,
-                                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                                PRIMARY KEY(component, version)
-                            )
-                        """)
-                        db.execute(
-                            "INSERT INTO schema_migrations(component,version,name) "
-                            "VALUES ('webhook',2,'future')"
-                        )
-                    else:
-                        db.execute("CREATE TABLE alien_data (value INTEGER)")
+                    db.execute(script)
                 with self.assertRaises(sqlite3.DatabaseError):
                     WebhookInbox(path)
                 with closing(sqlite3.connect(path)) as db:
@@ -323,9 +307,7 @@ class GitHubWebhookTests(TestCase):
         with self.assertRaises(sqlite3.DatabaseError):
             WebhookInbox(path)
         with closing(sqlite3.connect(path)) as db:
-            self.assertIsNone(db.execute(
-                "SELECT 1 FROM sqlite_master WHERE name='schema_migrations'"
-            ).fetchone())
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (0,))
             self.assertEqual(
                 db.execute("PRAGMA table_info(webhook_inbox)").fetchall()[0][1],
                 "delivery_id",
@@ -339,19 +321,7 @@ class GitHubWebhookTests(TestCase):
             ).fetchone()[0]
         with closing(sqlite3.connect(path)) as db, db:
             db.execute(schema)
-            db.execute("""
-                CREATE TABLE schema_migrations (
-                    component TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY(component, version)
-                )
-            """)
-            db.execute(
-                "INSERT INTO schema_migrations(component,version,name) "
-                "VALUES ('webhook',1,'webhook_inbox')"
-            )
+            db.execute("PRAGMA user_version = 1")
         with self.assertRaises(sqlite3.DatabaseError):
             WebhookInbox(path)
 

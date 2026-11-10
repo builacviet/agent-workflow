@@ -18,6 +18,17 @@ class DispatchLedger:
         self, service: WorkflowService, *, clock: Callable = time.time
     ) -> None:
         self.service, self.clock = service, clock
+        with service.repository.raw_connection() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS coder_dispatches (
+                    dispatch_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL, input_sha TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('ACTIVE','BLOCKED','DONE','ACKNOWLEDGED')),
+                    slot INTEGER UNIQUE CHECK(slot=1), deadline REAL NOT NULL,
+                    result_sha TEXT, detail TEXT NOT NULL DEFAULT '',
+                    UNIQUE(task_id,round_number,input_sha)
+                );
+            """)
 
     def claim(self, task_ids: set[str], timeout: int) -> dict | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:

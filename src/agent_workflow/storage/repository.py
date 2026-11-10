@@ -6,7 +6,6 @@ import sqlite3
 from typing import Protocol
 from agent_workflow.budget import check_deadline, operation_timeout
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.storage.workflow_migrations import migrate_workflow
 
 
 class WorkflowUnit(Protocol):
@@ -190,7 +189,11 @@ class SQLiteWorkflowRepository:
         self.db_path = str(db_path)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         with self.raw_connection() as db:
-            migrate_workflow(db)
+            if db.execute("PRAGMA user_version").fetchone()[0] not in (0, 1):
+                raise WorkflowError("unsupported database schema version")
+            db.executescript(
+                Path(__file__).with_name("schema.sql").read_text()
+            )
 
     @contextmanager
     def raw_connection(self):
