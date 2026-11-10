@@ -1,4 +1,4 @@
-# Standalone Phase 3.1 MCP state; does not start Controller or any v2 service.
+# MCP + opt-in live local webhook. No automatic Controller/worker dispatch.
 name: my-wfc-phase31
 services:
   mcp:
@@ -10,6 +10,7 @@ services:
     environment:
       WFC_DB_PATH: /state/workflow.sqlite3
       WFC_MCP_HOST: 0.0.0.0
+      WFC_PUBLIC_HOST: ${NGROK_DOMAIN:-caddy-reopen-scotch.ngrok-free.dev}
       WFC_POC_NO_AUTH: "0"
     ports:
       - "127.0.0.1:18001:8000"
@@ -27,9 +28,54 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: "no"
-
-  # Explicit opt-in: stop the existing POC ngrok tunnel before starting this one.
-  # Routes the same reserved hostname to the Phase 3.1 MCP/Controller database.
+  webhook:
+    build:
+      context: .
+      dockerfile: docker/mcp.Dockerfile
+    command: ["python", "-m", "agent_workflow.integrations.webhook_http"]
+    env_file:
+      - .runtime/controller-webhook.env
+    environment:
+      WFC_WEBHOOK_DB_PATH: /state/workflow.sqlite3
+      WFC_WEBHOOK_SECRET_FILE: /run/secret/controller-webhook-secret
+      WFC_WEBHOOK_PORT: "8081"
+    volumes:
+      - type: bind
+        source: ./data/controller
+        target: /state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.secret/controller-webhook-secret
+        target: /run/secret/controller-webhook-secret
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+  router:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    depends_on:
+      - mcp
+      - webhook
+    volumes:
+      - type: bind
+        source: ./nginx/controller-router.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
   ngrok:
     image: ngrok/ngrok:3-alpine
     profiles:
@@ -38,20 +84,16 @@ services:
       - .runtime/ngrok.env
     command:
       - http
-      - mcp:8000
+      - router:8080
       - --url
       - https://${NGROK_DOMAIN:-caddy-reopen-scotch.ngrok-free.dev}
     depends_on:
-      - mcp
+      - router
     restart: "no"
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-
-# Allocate a distinct subnet when Docker Desktop's default pools are exhausted.
-# Must not overlap existing Docker networks, the host routing table or VPN routes.
-# Existing techlead-review-poc MCP uses 10.254.240.0/24 by default.
 networks:
   default:
     ipam:
