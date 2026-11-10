@@ -19,18 +19,6 @@ class DispatchLedger:
         self, service: WorkflowService, *, clock: Callable = time.time
     ) -> None:
         self.service, self.clock = service, clock
-        # The workflow migration registry owns coder_dispatches.
-        with service.repository.raw_connection() as db:
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS coder_runtime_evidence (
-                    dispatch_id TEXT PRIMARY KEY REFERENCES coder_dispatches(dispatch_id),
-                    task_id TEXT NOT NULL, input_sha TEXT NOT NULL,
-                    runtime_name TEXT NOT NULL, declared_runtime_version TEXT NOT NULL,
-                    observed_image_id TEXT, inference_telemetry TEXT NOT NULL,
-                    tested_digest TEXT NOT NULL, published_head_sha TEXT NOT NULL,
-                    recorded_at REAL NOT NULL
-                );
-            """)
 
     def record_runtime_evidence(
         self, dispatch_id: str, task_id: str, input_sha: str,
@@ -57,11 +45,13 @@ class DispatchLedger:
             ).fetchone()
             if row is None or row["task_id"] != task_id or row["input_sha"] != input_sha or row["status"] != "ACTIVE":
                 raise WorkflowError("runtime evidence has no active matching dispatch")
-            db.execute(
+            inserted = db.execute(
                 "INSERT INTO coder_runtime_evidence VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (dispatch_id, task_id, input_sha, runtime_name, declared_version,
                  image_id, telemetry, tested_digest, published_head_sha, self.clock()),
             )
+            if inserted.rowcount != 1:
+                raise WorkflowError("runtime evidence was not inserted")
 
     def claim(self, task_ids: set[str], timeout: int) -> dict | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:
