@@ -81,7 +81,9 @@ def migrate(
             """)
         if table_columns(db, "schema_migrations") != _MIGRATIONS_COLUMNS:
             raise sqlite3.DatabaseError("incompatible schema_migrations table")
-        recorded = tuple(db.execute(
+        # sqlite3.Row (used by the workflow adapter) does not compare
+        # equal to tuples. Normalize recorded evidence for all adapters.
+        recorded = tuple(tuple(row) for row in db.execute(
             "SELECT version, name FROM schema_migrations "
             "WHERE component = ? ORDER BY version", (component,)
         ))
