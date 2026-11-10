@@ -161,6 +161,20 @@ class ControllerCiState:
     def record(self, evidence: CiEvidence) -> None:
         if type(evidence) is not CiEvidence:
             raise WorkflowError("untrusted CI evidence type")
+        if (
+            evidence.check_name != "Python tests"
+            or evidence.check_app_slug != "github-actions"
+            or evidence.installation_id <= 0
+        ):
+            raise WorkflowError("CI evidence source is not authorized")
+        if evidence.verdict == "SUCCESS" and (
+            evidence.reason != "REQUIRED_CHECK_PASSED"
+            or evidence.observed_head_sha != evidence.expected_head_sha
+            or evidence.tested_sha != evidence.expected_head_sha
+            or type(evidence.check_run_id) is not int
+            or evidence.check_run_id <= 0
+        ):
+            raise WorkflowError("CI success lacks exact-HEAD trusted evidence")
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(

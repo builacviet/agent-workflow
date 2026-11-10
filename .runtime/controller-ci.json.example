@@ -1,0 +1,8 @@
+{
+  "database": "D:/WORK/Project/agent-workflow/data/controller/workflow.sqlite3",
+  "controller_github_app": {
+    "app_id": 0,
+    "installation_id": 0,
+    "pem": "D:/WORK/Project/agent-workflow/.secret/controller-readonly-app.pem"
+  }
+}

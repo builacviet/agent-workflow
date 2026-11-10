@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import (
-    HTTPRedirectHandler, Request, build_opener,
+    HTTPRedirectHandler, ProxyHandler, Request, build_opener,
 )
 
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, validate_sha
@@ -50,7 +50,7 @@ def _github_json(method: str, path: str, bearer: str) -> Mapping:
         method=method,
     )
     try:
-        with build_opener(_NoRedirects()).open(request, timeout=8) as response:
+        with build_opener(ProxyHandler({}), _NoRedirects()).open(request, timeout=8) as response:
             body = response.read(_MAX_BODY + 1)
         if len(body) > _MAX_BODY:
             raise OSError("GitHub API response too large")
@@ -119,7 +119,7 @@ class ControllerAppToken:
                 ).timestamp()
                 if expire_at <= self._clock() + 60:
                     raise ValueError("installation token already expired")
-            except (OSError, ValueError, ImportError, TypeError, KeyError):
+            except Exception:
                 raise OSError("Controller GitHub App authentication unavailable") from None
             self._token, self._expires = token, expire_at
             return token
