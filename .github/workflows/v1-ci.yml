@@ -23,6 +23,23 @@ jobs:
     name: Python tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Isolated CI-only database, never a project or production credential.
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: agent_workflow
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-ephemeral
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agent_workflow"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      AGENT_WORKFLOW_TEST_POSTGRES_DSN: postgresql://postgres:ci-only-ephemeral@127.0.0.1:5432/agent_workflow
     steps:
       - name: Checkout exact triggering ref
         uses: actions/checkout@v6
@@ -48,7 +65,7 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e '.[test,mcp]'
+          python -m pip install -e '.[test,mcp,postgres]'
           python -m pip check
 
       - name: Compile Python source and tests
