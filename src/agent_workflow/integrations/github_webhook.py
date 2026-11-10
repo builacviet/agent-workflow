@@ -18,6 +18,19 @@ from agent_workflow.storage.webhook_inbox import (
 WEBHOOK_PATH = "/webhooks/github"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 _ACTIONS = {"workflow_run": "completed", "pull_request": "synchronize"}
+# Valid subscribed GitHub actions (only completed/synchronize wake the watcher).
+# Unknown actions for these event types indicate malformed/mislabeled payloads.
+_VALID_ACTIONS = {
+    "workflow_run": frozenset({"requested", "in_progress", "completed"}),
+    "pull_request": frozenset({
+        "assigned", "auto_merge_disabled", "auto_merge_enabled", "closed",
+        "converted_to_draft", "demilestoned", "dequeued", "edited",
+        "enqueued", "labeled", "locked", "milestoned", "opened",
+        "ready_for_review", "reopened", "review_request_removed",
+        "review_requested", "synchronize", "unassigned", "unlabeled",
+        "unlocked",
+    }),
+}
 _SIGNATURE = re.compile(r"sha256=[0-9a-f]{64}")
 _DELIVERY = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", re.I)
 _WEBHOOK_HEADERS = frozenset({
@@ -149,6 +162,8 @@ class GitHubWebhookReceiver:
         # a mislabeled body must not be silently acknowledged.
         subject = payload.get(event)
         if not isinstance(subject, dict):
+            return HTTPStatus.BAD_REQUEST
+        if action not in _VALID_ACTIONS[event]:
             return HTTPStatus.BAD_REQUEST
         if action != _ACTIONS[event]:
             return HTTPStatus.OK
