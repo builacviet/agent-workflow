@@ -53,7 +53,15 @@ def _create_ci(db: sqlite3.Connection) -> None:
     """)
 
 
-_MIGRATIONS = (Migration(1, "controller_ci_gate", _create_ci),)
+def _add_ci_provenance(db: sqlite3.Connection) -> None:
+    db.execute("ALTER TABLE controller_ci_observations ADD COLUMN workflow_run_id INTEGER")
+    db.execute("ALTER TABLE controller_ci_observations ADD COLUMN run_attempt INTEGER")
+
+
+_MIGRATIONS = (
+    Migration(1, "controller_ci_gate", _create_ci),
+    Migration(2, "controller_ci_provenance", _add_ci_provenance),
+)
 _OWNED = {"controller_ci_tasks", "controller_ci_observations", "controller_ci_processed"}
 
 
@@ -173,6 +181,10 @@ class ControllerCiState:
             or evidence.tested_sha != evidence.expected_head_sha
             or type(evidence.check_run_id) is not int
             or evidence.check_run_id <= 0
+            or type(evidence.workflow_run_id) is not int
+            or evidence.workflow_run_id <= 0
+            or type(evidence.run_attempt) is not int
+            or evidence.run_attempt <= 0
         ):
             raise WorkflowError("CI success lacks exact-HEAD trusted evidence")
         with closing(self._connect()) as db, db:
@@ -189,11 +201,12 @@ class ControllerCiState:
                 raise WorkflowError("CI evidence mismatched task/PR/HEAD")
             inserted = db.execute(
                 "INSERT INTO controller_ci_observations("
-                "task_id,pr_number,head_sha,verdict,reason,check_run_id,observed_at)"
-                "VALUES(?,?,?,?,?,?,?)",
+                "task_id,pr_number,head_sha,verdict,reason,check_run_id,observed_at,"
+                "workflow_run_id,run_attempt)"
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (evidence.task_id, evidence.pr_number, evidence.expected_head_sha,
                  evidence.verdict, evidence.reason, evidence.check_run_id,
-                 evidence.observed_at),
+                 evidence.observed_at, evidence.workflow_run_id, evidence.run_attempt),
             )
             if inserted.rowcount != 1:
                 raise WorkflowError("CI observation insertion failed")

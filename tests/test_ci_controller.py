@@ -51,6 +51,8 @@ class FakeChecks:
             "id": 3, "name": "Python tests", "head_sha": sha,
             "app": {"slug": "github-actions"}, "status": "completed",
             "conclusion": "success", "completed_at": "2026-11-10T00:00:00Z",
+            "event": "push", "workflow_path": ".github/workflows/v1-ci.yml",
+            "tested_sha": sha, "workflow_run_id": 44, "run_attempt": 1,
         }]}
 
 

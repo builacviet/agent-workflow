@@ -29,11 +29,28 @@ def test_app_adapter_paginates_all_checks_before_verdict():
                 "base": {"repo": {"full_name": REPO}},
                 "head": {"sha": SHA},
             }
+        if "/actions/runs?" in path:
+            return {"total_count": 1, "workflow_runs": [{
+                "id": 456, "check_suite_id": 456, "run_attempt": 1,
+                "event": "push", "head_sha": SHA, "name": "V1 CI",
+                "path": ".github/workflows/v1-ci.yml",
+                "repository": {"full_name": REPO},
+                "status": "completed", "conclusion": "success",
+            }]}
         page = int(path.split("page=")[-1])
         chunk = list(range(100)) if page == 1 else [100]
+        if "/actions/runs/456/jobs?" in path:
+            return {"total_count": 101, "jobs": [
+                {"id": n + 1, "name": "Python tests", "head_sha": SHA,
+                 "run_id": 456, "run_attempt": 1, "workflow_name": "V1 CI",
+                 "status": "completed", "conclusion": "success"}
+                for n in chunk
+            ]}
+        assert "/check-runs?" in path and "filter=all" in path
         return {"total_count": 101, "check_runs": [
             {
                 "id": n + 1, "name": "Python tests", "head_sha": SHA,
+                "check_suite": {"id": 456},
                 "app": {"slug": "github-actions"}, "status": "completed",
                 "conclusion": "success", "completed_at": "2026-11-10T00:00:00Z",
             }
@@ -55,6 +72,8 @@ def test_app_adapter_paginates_all_checks_before_verdict():
     )
     assert evidence.verdict == "SUCCESS"
     assert len([path for _, path in calls if "/check-runs?" in path]) == 2
+    assert len([path for _, path in calls if "/jobs?" in path]) == 2
+    assert evidence.workflow_run_id == 456 and evidence.run_attempt == 1
 
 
 def test_incomplete_page_cannot_mark_ci_success():
@@ -99,3 +118,27 @@ def test_token_provider_missing_pem_fails_closed(tmp_path):
     )
     with pytest.raises(OSError, match="authentication unavailable"):
         tokens()
+
+def test_push_run_missing_and_merge_only_checks_cannot_open_gate():
+    def api(method, path, token):
+        if "/actions/runs?" in path:
+            return {"total_count": 0, "workflow_runs": []}
+        if "/check-runs?" in path:
+            return {"total_count": 1, "check_runs": [{
+                "id": 20, "name": "Python tests", "head_sha": SHA,
+                "check_suite": {"id": 22},
+                "app": {"slug": "github-actions"}, "status": "completed",
+                "conclusion": "success", "completed_at": "2026-11-10T00:00:00Z",
+            }]}
+        return {"number": 3, "base": {"repo": {"full_name": REPO}},
+                "head": {"sha": SHA}}
+    checks = ControllerChecksClient(
+        installation_id=17, token_provider=lambda: "tok", request_json=api,
+    )
+    ev = verify_ci(
+        CiRequest("task-1", REPO, 17, 3, SHA, "Python tests"),
+        checks, allowed_repository=REPO,
+        allowed_check_names=frozenset({"Python tests"}),
+        failure_history_complete=True, previous_failure_for_sha=False,
+    )
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "REQUIRED_CHECK_MISSING")

@@ -25,6 +25,8 @@ def run(conclusion="success", **changes):
         "id": 19, "name": "Python tests", "head_sha": HEAD,
         "app": {"slug": "github-actions"}, "status": "completed",
         "conclusion": conclusion, "completed_at": "2026-11-10T00:01:00Z",
+        "event": "push", "workflow_path": ".github/workflows/v1-ci.yml",
+        "tested_sha": HEAD, "workflow_run_id": 123, "run_attempt": 1,
     } | changes
 
 
@@ -126,8 +128,18 @@ def test_enriched_actions_provenance_is_recorded():
 
 
 def test_partial_actions_provenance_blocks():
-    ev = verdict(FakeGitHub([run(workflow_run_id=123)]))
-    assert (ev.verdict, ev.reason) == ("BLOCKED", "WORKFLOW_PROVENANCE_UNVERIFIED")
+    ev = verdict(FakeGitHub([run(run_attempt=None)]))
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "REQUIRED_CHECK_MISSING")
+
+
+def test_pull_request_check_with_matching_head_cannot_pass():
+    ev = verdict(FakeGitHub([run(event="pull_request")]))
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "REQUIRED_CHECK_MISSING")
+
+
+def test_self_asserted_tested_sha_cannot_pass():
+    ev = verdict(FakeGitHub([run(tested_sha=OLD)]))
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "REQUIRED_CHECK_MISSING")
 
 
 def test_check_source_is_pinned_and_cannot_be_spoofed_by_other_app():

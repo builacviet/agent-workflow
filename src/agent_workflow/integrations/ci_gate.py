@@ -103,6 +103,13 @@ def _check_run(run: object, sha: str, request: CiRequest) -> bool:
         and app.get("slug") == request.check_app_slug
         and type(run.get("id")) is int
         and run["id"] > 0
+        and run.get("event") == "push"
+        and run.get("workflow_path") == ".github/workflows/v1-ci.yml"
+        and run.get("tested_sha") == sha
+        and type(run.get("workflow_run_id")) is int
+        and run["workflow_run_id"] > 0
+        and type(run.get("run_attempt")) is int
+        and run["run_attempt"] > 0
     )
 
 
@@ -183,19 +190,10 @@ def verify_ci(
             request.repository, request.pr_number,
         ) != seen_head:
             return evidence("BLOCKED", "PR_HEAD_CHANGED_DURING_QUERY")
-        tested = seen_head
         latest = max(relevant, key=lambda run: (run["completed_at"], run["id"]))
+        tested = latest["tested_sha"]
         check_id, completed = latest["id"], latest["completed_at"]
-        # The Checks API does not always expose Actions run/attempt metadata.
-        # A trusted Actions adapter may enrich the observation.
-        raw_workflow, raw_attempt = latest.get("workflow_run_id"), latest.get("run_attempt")
-        if raw_workflow is not None or raw_attempt is not None:
-            if (
-                type(raw_workflow) is not int or raw_workflow <= 0
-                or type(raw_attempt) is not int or raw_attempt <= 0
-            ):
-                return evidence("BLOCKED", "WORKFLOW_PROVENANCE_UNVERIFIED")
-            workflow_run_id, run_attempt = raw_workflow, raw_attempt
+        workflow_run_id, run_attempt = latest["workflow_run_id"], latest["run_attempt"]
         conclusions = {run.get("conclusion") for run in relevant}
         if not failure_history_complete:
             return evidence("BLOCKED", "DURABLE_HISTORY_UNVERIFIED")

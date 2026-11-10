@@ -22,6 +22,10 @@ from agent_workflow.integrations.github import REPOSITORY, WorkflowError, valida
 _API = "https://api.github.com"
 _MAX_BODY = 2_000_000
 _MAX_CHECKS = 2_000
+_MAX_ACTIONS_RUNS = 2_000
+_MAX_ACTIONS_JOBS = 2_000
+_REQUIRED_WORKFLOW = ".github/workflows/v1-ci.yml"
+_REQUIRED_JOB = "Python tests"
 
 
 class _NoRedirects(HTTPRedirectHandler):
@@ -161,7 +165,38 @@ class ControllerChecksClient:
             raise OSError("unapproved GitHub PR read")
         return self._request("GET", f"/repos/{repository}/pulls/{number}")
 
+    def _pages(self, path: str, key: str, cap: int) -> list[Mapping]:
+        """Fail closed unless every server-advertised page is retrieved."""
+        entries: list[Mapping] = []
+        total: int | None = None
+        for page in range(1, cap // 100 + 1):
+            suffix = "&" if "?" in path else "?"
+            payload = self._request(
+                "GET", f"{path}{suffix}per_page=100&page={page}",
+            )
+            count, chunk = payload.get("total_count"), payload.get(key)
+            if (
+                type(count) is not int or count < 0 or count > cap
+                or not isinstance(chunk, list) or len(chunk) > 100
+                or any(not isinstance(item, Mapping) for item in chunk)
+                or (total is not None and total != count)
+            ):
+                raise OSError("GitHub CI pagination incomplete")
+            total = count
+            entries.extend(chunk)
+            if len(entries) == total:
+                return entries
+            if not chunk or len(entries) > total:
+                raise OSError("GitHub CI pagination incomplete")
+        raise OSError("GitHub CI exceeded bounded pagination")
+
     def list_check_runs(self, repository: str, sha: str) -> Mapping:
+        """Join ALL Checks history with ALL push Actions runs and job attempts.
+
+        A pull_request check on a synthetic merge is not evidence for a push.
+        The job identity, SHA, suite, attempt and conclusion must agree across
+        two independently queried GitHub API endpoint families.
+        """
         if repository != REPOSITORY:
             raise OSError("unapproved GitHub checks repository")
         try:
@@ -169,26 +204,89 @@ class ControllerChecksClient:
         except WorkflowError:
             raise OSError("unapproved GitHub checks SHA") from None
 
-        result: list = []
-        total: int | None = None
-        for page in range(1, _MAX_CHECKS // 100 + 1):
-            payload = self._request(
-                "GET",
-                f"/repos/{repository}/commits/{sha}/check-runs?per_page=100&page={page}",
+        checks = self._pages(
+            f"/repos/{repository}/commits/{sha}/check-runs?filter=all",
+            "check_runs", _MAX_CHECKS,
+        )
+        check_by_id: dict[int, Mapping] = {}
+        for check in checks:
+            check_id = check.get("id")
+            if type(check_id) is not int or check_id <= 0 or check_id in check_by_id:
+                raise OSError("GitHub CI check identity ambiguous")
+            check_by_id[check_id] = check
+
+        runs = self._pages(
+            f"/repos/{repository}/actions/runs?head_sha={sha}&event=push",
+            "workflow_runs", _MAX_ACTIONS_RUNS,
+        )
+        verified: list[dict] = []
+        seen_jobs: set[int] = set()
+        for run in runs:
+            if run.get("path") != _REQUIRED_WORKFLOW:
+                continue
+            run_id, suite, attempt = (
+                run.get("id"), run.get("check_suite_id"), run.get("run_attempt"),
             )
-            count, chunk = payload.get("total_count"), payload.get("check_runs")
+            repo = run.get("repository")
             if (
-                type(count) is not int or count < 0 or count > _MAX_CHECKS
-                or not isinstance(chunk, list)
-                or len(chunk) > 100
-                or any(not isinstance(item, Mapping) for item in chunk)
-                or (total is not None and total != count)
+                type(run_id) is not int or run_id <= 0
+                or type(suite) is not int or suite <= 0
+                or type(attempt) is not int or attempt <= 0
+                or run.get("event") != "push"
+                or run.get("head_sha") != sha
+                or run.get("name") != "V1 CI"
+                or not isinstance(repo, Mapping)
+                or repo.get("full_name") != repository
+                or run.get("status") != "completed"
+                or run.get("conclusion") not in {"success", "failure"}
             ):
-                raise OSError("GitHub checks pagination incomplete")
-            total = count
-            result.extend(chunk)
-            if len(result) == total:
-                return {"total_count": total, "check_runs": result}
-            if not chunk or len(result) > total:
-                raise OSError("GitHub checks pagination incomplete")
-        raise OSError("GitHub checks exceeded bounded pagination")
+                raise OSError("trusted push workflow provenance unavailable")
+
+            jobs = self._pages(
+                f"/repos/{repository}/actions/runs/{run_id}/jobs?filter=all",
+                "jobs", _MAX_ACTIONS_JOBS,
+            )
+            matched = 0
+            for job in jobs:
+                if job.get("name") != _REQUIRED_JOB:
+                    continue
+                matched += 1
+                job_id, job_attempt = job.get("id"), job.get("run_attempt")
+                if (
+                    type(job_id) is not int or job_id <= 0
+                    or job_id in seen_jobs
+                    or type(job_attempt) is not int
+                    or not 0 < job_attempt <= attempt
+                    or job.get("run_id") != run_id
+                    or job.get("head_sha") != sha
+                    or job.get("workflow_name") != "V1 CI"
+                ):
+                    raise OSError("trusted push job provenance unavailable")
+                seen_jobs.add(job_id)
+                check = check_by_id.get(job_id)
+                check_suite = check.get("check_suite") if check else None
+                check_app = check.get("app") if check else None
+                if (
+                    not isinstance(check, Mapping)
+                    or not isinstance(check_suite, Mapping)
+                    or check_suite.get("id") != suite
+                    or not isinstance(check_app, Mapping)
+                    or check_app.get("slug") != "github-actions"
+                    or check.get("name") != _REQUIRED_JOB
+                    or check.get("head_sha") != sha
+                    or check.get("status") != job.get("status")
+                    or check.get("conclusion") != job.get("conclusion")
+                    or (run["conclusion"] == "success" and job.get("conclusion") != "success")
+                ):
+                    raise OSError("trusted push job/check identity mismatch")
+                verified.append({
+                    **check,
+                    "event": "push",
+                    "workflow_path": _REQUIRED_WORKFLOW,
+                    "workflow_run_id": run_id,
+                    "run_attempt": job_attempt,
+                    "tested_sha": job["head_sha"],
+                })
+            if not matched:
+                raise OSError("trusted push workflow missing required job")
+        return {"total_count": len(verified), "check_runs": verified}

@@ -27,7 +27,7 @@ def test_review_gate_denies_missing_and_stale_ci(tmp_path, monkeypatch):
     assert service.list_review_queue() == []
     state.record(CiEvidence(
         "T", REPO, 17, 21, B, B, B, "Python tests", "github-actions",
-        "SUCCESS", "REQUIRED_CHECK_PASSED", 3, None, None,
+        "SUCCESS", "REQUIRED_CHECK_PASSED", 3, 44, 1,
         "2026-11-10T00:00:00Z", "2026-11-10T00:01:00Z",
     ))
     assert service.list_review_queue()[0]["head_sha"] == B
