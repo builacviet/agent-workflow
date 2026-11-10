@@ -49,6 +49,8 @@ def test_ci_failure_repair_head_limit(tmp_path):
     service, state = setup(tmp_path)
     state.track("T", 21, B)
     state.record(evidence("FAILURE"))
+    state.record(evidence("BLOCKED"))
+    assert state.tracked()[0]["verdict"] == "FAILURE"
     assert state.previous_failure("T", B)
     # Simulate an authorized post-repair handoff with a new SHA.
     for n, sha in enumerate((C, D), start=1):
