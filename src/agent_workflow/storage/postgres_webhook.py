@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
 
+from psycopg import Error as PostgresError
+
 
 class PostgresWebhookInbox:
     def __init__(self, dsn: str):
@@ -23,6 +25,13 @@ class PostgresWebhookInbox:
             raise TypeError("untrusted webhook notification")
         if not isinstance(body_digest, str) or len(body_digest) != 64:
             raise ValueError("invalid webhook body digest")
+        try:
+            return self._record_transaction(notification, body_digest)
+        except PostgresError:
+            # Webhook HTTP maps OSError to 503, not 202. Do not log a DSN.
+            raise OSError("PostgreSQL webhook inbox unavailable") from None
+
+    def _record_transaction(self, notification: WebhookNotification, body_digest: str) -> InboxResult:
         with self._connect() as conn:
             with conn.transaction():
                 inserted = conn.execute(
