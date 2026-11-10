@@ -44,8 +44,8 @@ The migration branch is for independent ChatGPT Tech Lead review. Codex does not
 
 ## V1 Controller-stack MCP, webhook and ngrok
 
-Use `compose.controller.yaml` for the active local MCP, webhook receiver, router,
-and optional ngrok tunnel. The old standalone `compose.yaml` POC and
+Use the root `compose.yaml` for the active local MCP, webhook receiver, router,
+and optional ngrok tunnel. The old standalone POC Compose definition and
 `.runtime/mcp.env.example` have been retired; do not use legacy POC setup commands.
 MCP defaults to Auth0 in the **Controller stack configuration template**
 (`.runtime/controller-mcp.env.example`) and requires verified local Auth0 values.

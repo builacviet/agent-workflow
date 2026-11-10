@@ -29,4 +29,10 @@ def test_active_runtime_templates_have_documented_owners() -> None:
         assert path in inventory
     assert "WFC_" in inventory
     assert not (RUNTIME / "mcp.env.example").exists()
-    assert not (ROOT / "compose.yaml").exists()
+    compose = ROOT / "compose.yaml"
+    assert compose.exists()
+    body = compose.read_text(encoding="utf-8")
+    assert "name: my-wfc-phase31" in body
+    for service in ("mcp:", "webhook:", "router:", "ngrok:"):
+        assert service in body
+    assert not (ROOT / "compose.controller.yaml").exists()

@@ -1,6 +1,7 @@
 > **HISTORICAL / RETIRED — DO NOT RUN.** This document describes the original
-> standalone MCP/ngrok POC, whose `compose.yaml` and `.runtime/mcp.env.example`
-> have now been removed from the active source tree. The commands below are
+> standalone MCP/ngrok POC, whose original Compose definition and
+> `.runtime/mcp.env.example` have been retired. The root `compose.yaml`
+> now defines the **different V1 Controller stack**, not the old POC. The commands below are
 > preserved **for historical context only** and will not work from the current
 > checkout. For the supported V1 setup, see
 > [V1-03C local integration](guides/v1-03c-local-webhook.md) and

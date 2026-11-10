@@ -32,8 +32,8 @@ See [.runtime configuration inventory](../../.runtime/README.md) for the active 
 
 Run from the repository root. Use a disposable local database first and back up current state before testing new SQLite migrations.
 
-    docker compose -f compose.controller.yaml config --quiet
-    docker compose -f compose.controller.yaml up -d --build mcp webhook router
+    docker compose -f compose.yaml config --quiet
+    docker compose -f compose.yaml up -d --build mcp webhook router
 
 Start CI-only consumption in a trusted host terminal (no Codex worker is dispatched):
 
@@ -44,7 +44,7 @@ Run exactly one of the above commands, not both concurrently. The watcher scans 
 
 Only after local processes have passed their checks, stop any older tunnel using the same reserved hostname and start ngrok:
 
-    docker compose -f compose.controller.yaml --profile tunnel up -d ngrok
+    docker compose -f compose.yaml --profile tunnel up -d ngrok
 
 ## Smoke-test and shutdown
 
@@ -53,7 +53,7 @@ Only after local processes have passed their checks, stop any older tunnel using
 - Confirm /mcp still requires the existing bearer/OAuth token; webhook HMAC is not a substitute. Never print tokens, raw payload or PEM.
 - Stop the public tunnel after the local test:
 
-    docker compose -f compose.controller.yaml --profile tunnel stop ngrok
+    docker compose -f compose.yaml --profile tunnel stop ngrok
 
 ## Remaining proof before the PR merge
 

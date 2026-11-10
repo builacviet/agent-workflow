@@ -606,7 +606,7 @@ def test_controller_compose_parses_without_starting_services():
             "docker",
             "compose",
             "-f",
-            str(root / "compose.controller.yaml"),
+            str(root / "compose.yaml"),
             "config",
             "--no-env-resolution",
             "--quiet",
