@@ -1,5 +1,6 @@
 """Exercise the offline receiver with signed requests and a disposable SQLite file."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import hashlib
 import hmac
 from http import HTTPStatus
@@ -146,18 +147,102 @@ class GitHubWebhookTests(TestCase):
         )
         self.assertEqual(self.inbox.get(DELIVERY_ID).subject_id, 456)
 
+    def test_replay_under_new_id_stays_a_duplicate_after_restart(self) -> None:
+        self.assertEqual(
+            self.receiver.handle("POST", WEBHOOK_PATH, signed_headers(self.body), self.body),
+            HTTPStatus.ACCEPTED,
+        )
+        replay = {**signed_headers(self.body), "X-GitHub-Delivery": OTHER_DELIVERY_ID}
+        self.assertEqual(
+            self.receiver.handle("POST", WEBHOOK_PATH, replay, self.body), HTTPStatus.OK
+        )
+        reopened = WebhookInbox(self.path)
+        receiver = self.make_receiver(reopened)
+        self.assertIsNone(reopened.get(OTHER_DELIVERY_ID))
+        self.assertEqual(
+            receiver.handle("POST", WEBHOOK_PATH, replay, self.body), HTTPStatus.OK
+        )
+
+        # Even a distinct signed body that would otherwise be accepted cannot
+        # rebind an acknowledged replay UUID.
+        other_body = self.body + b" "
+        headers = signed_headers(other_body, delivery=OTHER_DELIVERY_ID)
+        self.assertEqual(
+            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.CONFLICT
+        )
+        new_id = "704aaefb-66af-46a4-b1cf-6d8d37a28bad"
+        headers["X-GitHub-Delivery"] = new_id
+        self.assertEqual(
+            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.ACCEPTED
+        )
+        self.assertIsNotNone(reopened.get(new_id))
+
     def test_concurrent_duplicate_deliveries_insert_once(self) -> None:
-        headers = signed_headers(self.body)
-        barrier = Barrier(2)
+        for second_id in (DELIVERY_ID, OTHER_DELIVERY_ID):
+            with self.subTest(second_id=second_id):
+                path = self.path.with_name(second_id + ".sqlite3")
+                inbox = WebhookInbox(path)
+                first = self.make_receiver(inbox)
+                second = self.make_receiver(WebhookInbox(path))
+                barrier = Barrier(2)
 
-        def deliver(receiver: GitHubWebhookReceiver) -> HTTPStatus:
-            barrier.wait(timeout=10)
-            return receiver.handle("POST", WEBHOOK_PATH, headers, self.body)
+                def deliver(receiver: GitHubWebhookReceiver, delivery: str) -> HTTPStatus:
+                    headers = signed_headers(self.body, delivery=delivery)
+                    barrier.wait(timeout=10)
+                    return receiver.handle("POST", WEBHOOK_PATH, headers, self.body)
 
-        second = self.make_receiver(WebhookInbox(self.path))
-        with ThreadPoolExecutor(max_workers=2) as workers:
-            results = list(workers.map(deliver, (self.receiver, second)))
-        self.assertCountEqual(results, (HTTPStatus.ACCEPTED, HTTPStatus.OK))
+                with ThreadPoolExecutor(max_workers=2) as workers:
+                    jobs = (
+                        workers.submit(deliver, first, DELIVERY_ID),
+                        workers.submit(deliver, second, second_id),
+                    )
+                    results = [job.result() for job in jobs]
+                self.assertCountEqual(results, (HTTPStatus.ACCEPTED, HTTPStatus.OK))
+                with closing(sqlite3.connect(path)) as db:
+                    self.assertEqual(db.execute("SELECT count(*) FROM webhook_inbox").fetchone(), (1,))
+
+    def test_upgrades_legacy_inbox_without_dropping_existing_replays(self) -> None:
+        path = self.path.with_name("legacy.sqlite3")
+        digest = hashlib.sha256(self.body).hexdigest()
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("""
+                CREATE TABLE webhook_inbox (
+                    delivery_id TEXT PRIMARY KEY NOT NULL,
+                    event TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    repository TEXT NOT NULL,
+                    installation_id INTEGER NOT NULL,
+                    subject_id INTEGER NOT NULL,
+                    head_sha TEXT NOT NULL,
+                    body_digest TEXT NOT NULL
+                )
+            """)
+            db.executemany(
+                "INSERT INTO webhook_inbox VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (delivery_id, "workflow_run", "completed", REPOSITORY,
+                     INSTALLATION_ID, 456, HEAD_SHA, digest)
+                    for delivery_id in (DELIVERY_ID, OTHER_DELIVERY_ID)
+                ],
+            )
+            legacy_rows = db.execute("SELECT * FROM webhook_inbox ORDER BY delivery_id").fetchall()
+
+        receiver = self.make_receiver(WebhookInbox(path))
+        new_id = "704aaefb-66af-46a4-b1cf-6d8d37a28bad"
+        replay = signed_headers(self.body, delivery=new_id)
+        self.assertEqual(
+            receiver.handle("POST", WEBHOOK_PATH, replay, self.body), HTTPStatus.OK
+        )
+        other_body = self.body + b" "
+        headers = signed_headers(other_body, delivery=OTHER_DELIVERY_ID)
+        self.assertEqual(
+            receiver.handle("POST", WEBHOOK_PATH, headers, other_body), HTTPStatus.CONFLICT
+        )
+        with closing(sqlite3.connect(path)) as db:
+            self.assertEqual(
+                db.execute("SELECT * FROM webhook_inbox ORDER BY delivery_id").fetchall(),
+                legacy_rows,
+            )
 
     def test_failed_commit_never_acknowledges_and_allows_retry(self) -> None:
         connect = self.inbox._connect
