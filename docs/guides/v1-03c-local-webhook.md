@@ -19,11 +19,14 @@ Create a dedicated read-only App installed only on builacviet/agent-workflow. Pe
 
 ## Local configuration
 
+See [.runtime configuration inventory](../../.runtime/README.md) for the active and legacy templates, ownership, and key meanings. All non-example files and PEM/secret material are local-only and Git-ignored. The full worker Controller uses a separate `controller.json`; do not substitute it for the `controller-ci.json` CI-only configuration.
+
+
 1. On the trusted host, copy .runtime/controller-webhook.env.example to .runtime/controller-webhook.env and set the Controller App Installation ID.
 2. Keep the local webhook secret file at .secret/controller-webhook-secret (exact configured secret, no extra spaces).
 3. Copy .runtime/controller-ci.json.example to .runtime/controller-ci.json and set DB path, Controller App ID / Installation ID and absolute PEM path. This CI-only config does NOT require worker credentials.
-4. Configure the existing .runtime/controller-mcp.env and .runtime/ngrok.env. MCP auth must remain enabled; never set WFC_POC_NO_AUTH=1 with public ingress.
-5. If testing CI reviewer gating, configure WFC_CI_GATE_REQUIRED=1 for the MCP process and the trusted Dev Controller process. A task must have a trusted PR handoff and ControllerCiState tracking first; no unregistered task can pass CI.
+4. Configure .runtime/controller-mcp.env and .runtime/ngrok.env. New controller-stack MCP templates select Auth0 OAuth, but copying the template alone is insufficient: restore the verified Auth0 issuer, allowed subject, and ChatGPT CIMD client identity from the existing trusted setup. Do not use a short-lived Bearer workaround for an OAuth deployment. MCP auth must remain enabled; never set WFC_POC_NO_AUTH=1 with public ingress.
+5. Verify `.runtime/controller-ci.json` uses the same physical SQLite database as the Compose services (`./data/controller/workflow.sqlite3` in this checkout), with host-absolute paths for the DB and Controller App PEM. If testing CI reviewer gating, configure WFC_CI_GATE_REQUIRED=1 for the MCP process and the trusted Dev Controller process. A task must have a trusted PR handoff and ControllerCiState tracking first; no unregistered task can pass CI.
 
 ## Local Compose and CI-only process
 

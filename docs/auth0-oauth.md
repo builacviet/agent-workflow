@@ -28,6 +28,7 @@ or live ChatGPT login is claimed by this code commit.
 
 Use a local ignored env file, e.g. copy
 `.runtime/controller-mcp.env.example` to `.runtime/controller-mcp.env`.
+The controller-stack template selects `auth0` by default; populate the verified Auth0 values before starting MCP. The Python server's fallback remains legacy static Bearer when no mode is provided. See the [.runtime inventory](../.runtime/README.md).
 The standalone `compose.controller.yaml` uses this ignored file. This is for an **isolated test deployment**, not a direction to
 overwrite an already-running Compose service.
 
