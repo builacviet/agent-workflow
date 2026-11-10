@@ -1,6 +1,7 @@
 """SQLite transactions own all workflow transitions; no AI review is performed here."""
 
 import json
+import os
 import time
 import uuid
 from urllib.parse import quote
@@ -18,6 +19,11 @@ from agent_workflow.storage.repository import SQLiteWorkflowRepository, Workflow
 
 def default_service() -> "WorkflowService":
     return WorkflowService(database_path())
+
+
+def ci_gate_required() -> bool:
+    """Opt-in local gate: untracked and stale SHA always block review."""
+    return os.environ.get("WFC_CI_GATE_REQUIRED") == "1"
 
 
 def encode(value):
@@ -218,8 +224,8 @@ class WorkflowService:
                     "review_round": t["completed_review_rounds"] + 1,
                 }
                 for t in rows
-                if requested_effort is None
-                or t["requested_effort"] == requested_effort
+                if (requested_effort is None or t["requested_effort"] == requested_effort)
+                and (not ci_gate_required() or db.ci_approved((t["task_id"], t["current_head_sha"])))
             ]
 
     def claim_review(self, task_id, expected_head_sha, reviewer):
@@ -233,6 +239,8 @@ class WorkflowService:
                 raise WorkflowError("task is not reviewable")
             if expected_head_sha != task["current_head_sha"]:
                 raise WorkflowError("stale claim SHA")
+            if ci_gate_required() and not db.ci_approved((task_id, expected_head_sha)):
+                raise WorkflowError("verified exact-HEAD CI is required before review")
             token = uuid.uuid4().hex
             now = self.clock()
             expires = now + self.lease_seconds
@@ -337,6 +345,8 @@ class WorkflowService:
                 or data["reviewed_head_sha"] != attempt["expected_sha"]
             ):
                 raise WorkflowError("stale submission SHA")
+            if ci_gate_required() and not db.ci_approved((task["task_id"], data["reviewed_head_sha"])):
+                raise WorkflowError("verified exact-HEAD CI is required for review submission")
             round_number = task["completed_review_rounds"] + 1
             if (
                 data["review_round"] != round_number

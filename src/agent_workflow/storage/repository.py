@@ -31,6 +31,7 @@ class WorkflowUnit(Protocol):
     def list_findings(self, values: tuple = ()) -> list[dict]: ...
     def list_events(self, values: tuple = ()) -> list[dict]: ...
     def find_claim(self, values: tuple = ()) -> dict | None: ...
+    def ci_approved(self, values: tuple = ()) -> bool: ...
 
 
 class WorkflowRepository(Protocol):
@@ -157,6 +158,16 @@ class SQLiteUnit:
         )
         row = cursor.fetchone()
         return dict(row) if row is not None else None
+
+    def ci_approved(self, values: tuple = ()) -> bool:
+        # Missing or tampered CI schema never authorizes a review.
+        try:
+            return self.db.execute(
+                "SELECT 1 FROM controller_ci_tasks WHERE task_id=? AND head_sha=? "
+                "AND verdict='SUCCESS' LIMIT 1", values
+            ).fetchone() is not None
+        except sqlite3.DatabaseError:
+            return False
 
     def import_historical_head(self, values: tuple) -> None:
         self.db.execute(
