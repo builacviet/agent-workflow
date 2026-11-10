@@ -203,7 +203,10 @@ class ControllerCiState:
                 "AND head_sha=? AND verdict='FAILURE' LIMIT 1",
                 (evidence.task_id, evidence.expected_head_sha),
             ).fetchone()
-            verdict = "BLOCKED" if failure and evidence.verdict == "SUCCESS" else evidence.verdict
+            # Verified CI failure is sticky for this SHA: no later rerun,
+            # missing API response or transient BLOCKED observation can open
+            # review or revoke the task's eligibility for a repair HEAD.
+            verdict = "FAILURE" if failure else evidence.verdict
             changed = db.execute(
                 "UPDATE controller_ci_tasks SET verdict=? "
                 "WHERE task_id=? AND head_sha=?",
