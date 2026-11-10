@@ -122,3 +122,56 @@ def test_postgres_concurrent_controller_advisory_locks(pg):
                 pass
         with controller_advisory_lock(DSN, "ci_watcher") as ci:
             ci.ensure_alive()
+
+def test_postgres_workflow_service_adapter_provisions_and_handoffs(pg):
+    from agent_workflow.domain.service import WorkflowService
+    from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+    repo = PostgresWorkflowRepository(DSN)
+    service = WorkflowService(repository=repo, db_path=DSN)
+    spec = {
+        "task_id": "PG-TEST-001",
+        "title": "PostgreSQL workflow",
+        "description": "Isolated CI proof",
+        "acceptance_criteria": ["AC"],
+        "definition_of_done": "verified",
+        "repository": "builacviet/agent-workflow",
+        "branch": "codex/pg-test",
+        "base_sha": "a" * 40,
+        "requested_effort": "high",
+        "risk_level": "high",
+        "require_verified_effort": True,
+        "context_paths": ["docs/handoff.md"],
+        "synthetic": True,
+    }
+    service.provision_task(spec)
+    # Idempotent authorization and consistent status in independent connections.
+    WorkflowService(repository=PostgresWorkflowRepository(DSN),
+                    db_path=DSN).provision_task(spec)
+    service.register_task_handoff(
+        "PG-TEST-001", "builacviet/agent-workflow", "codex/pg-test",
+        "a" * 40, "b" * 40, "docs/handoff.md", "CI verified",
+    )
+    with repo.read() as db:
+        task = db.find_task(("PG-TEST-001",))
+        assert task["status"] == "READY_IN_REVIEW"
+        assert task["current_head_sha"] == "b" * 40
+        assert len(db.list_events(("PG-TEST-001",))) == 2
+
+
+def test_postgres_workflow_adapter_rolls_back_failed_transaction(pg):
+    from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+    repo = PostgresWorkflowRepository(DSN)
+    with pytest.raises(RuntimeError, match="rollback"):
+        with repo.raw_transaction() as db:
+            db.execute(
+                "INSERT INTO tasks(task_id,metadata,repository,branch,base_sha,"
+                "requested_effort,require_verified_effort,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                ("PG-ROLLBACK", "{}", "builacviet/agent-workflow", "codex/pg",
+                 "a" * 40, "high", 1, "AWAITING_HANDOFF", 0.0, 0.0),
+            )
+            raise RuntimeError("rollback")
+    with repo.read() as db:
+        assert db.execute("SELECT 1 FROM tasks WHERE task_id=?", ("PG-ROLLBACK",)).fetchone() is None
