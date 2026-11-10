@@ -18,7 +18,8 @@ from agent_workflow.storage.repository import SQLiteWorkflowRepository, Workflow
 
 
 def default_service() -> "WorkflowService":
-    return WorkflowService(database_path())
+    # Explicit opt-in; SQLite remains the default until Owner-authorized cutover.
+    return WorkflowService(os.environ.get("AGENT_WORKFLOW_MCP_DATABASE_URL") or database_path())
 
 
 def ci_gate_required() -> bool:
@@ -53,7 +54,14 @@ class WorkflowService:
         }
         self.effort_verifier = effort_verifier
         self.efforts = efforts
-        self.repository = repository if repository is not None else SQLiteWorkflowRepository(db_path)
+        if repository is not None:
+            self.repository = repository
+        elif isinstance(db_path, str) and db_path.startswith(("postgresql://", "postgres://")):
+            from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+            self.repository = PostgresWorkflowRepository(db_path)
+        else:
+            self.repository = SQLiteWorkflowRepository(db_path)
 
     def transaction(self):
         return self.repository.transaction()

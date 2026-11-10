@@ -625,9 +625,14 @@ class CoderRuntime:
             # CI remains BLOCKED until the separate Controller App re-verifies
             # GitHub's current PR HEAD and complete named Checks history.
             if os.environ.get("WFC_CI_GATE_REQUIRED") == "1":
-                from agent_workflow.storage.ci_state import ControllerCiState
+                if self.service.db_path.startswith(("postgresql://", "postgres://")):
+                    from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
+                    ci_state = PostgresControllerCiState(self.service.db_path)
+                else:
+                    from agent_workflow.storage.ci_state import ControllerCiState
+                    ci_state = ControllerCiState(self.service.db_path)
 
-                ControllerCiState(self.service.db_path).track(
+                ci_state.track(
                     context["task_id"],
                     int(result["pr_url"].rsplit("/", 1)[1]),
                     result["head_sha"],

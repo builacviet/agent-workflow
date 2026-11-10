@@ -98,7 +98,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    db = os.environ["WFC_WEBHOOK_DB_PATH"]
+    db = os.environ.get("AGENT_WORKFLOW_WEBHOOK_DATABASE_URL") or os.environ["WFC_WEBHOOK_DB_PATH"]
+    if db.startswith(("postgresql://", "postgres://")):
+        from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
+        inbox = PostgresWebhookInbox(db)
+    else:
+        inbox = WebhookInbox(db)
     secret_path = Path(os.environ["WFC_WEBHOOK_SECRET_FILE"])
     if not secret_path.is_absolute():
         raise ValueError("webhook secret must be mounted at absolute path")
@@ -106,7 +111,7 @@ def main() -> None:
     if len(secret) < 32:
         raise ValueError("use at least 32 random bytes for webhook secret")
     receiver = GitHubWebhookReceiver(
-        WebhookInbox(db), secret=secret,
+        inbox, secret=secret,
         installation_id=int(os.environ["WFC_CONTROLLER_INSTALLATION_ID"]),
     )
     port = int(os.environ.get("WFC_WEBHOOK_PORT", "8081"))
