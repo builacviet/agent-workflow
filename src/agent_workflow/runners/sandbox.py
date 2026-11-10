@@ -453,9 +453,22 @@ class SandboxManager:
             raise WorkflowError("invalid durable Docker endpoint")
         return host, daemon_id
 
+    def has_launch_records(self, dispatch_id: str) -> bool:
+        engine = self._engine_path(dispatch_id)
+        for path in (engine, engine.with_suffix(".scope"), engine.with_suffix("")):
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            return True
+        return False
+
     def clear_engine(self, dispatch_id: str) -> None:
         path = self._engine_path(dispatch_id)
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
         _sync_directory(path.parent)
 
     @staticmethod

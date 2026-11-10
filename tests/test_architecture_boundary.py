@@ -248,6 +248,113 @@ def test_controller_only_launches_phases_and_receives_result(
     assert calls[-1] == "stop"
 
 
+
+
+@pytest.fixture
+def recovery_dispatch(tmp_path):
+    database = tmp_path / "state.db"
+    service = WorkflowService(database)
+    service.provision_task(spec())
+    service.provision_task(spec("NEXT"))
+    config = {"database": str(database), "tasks": {"TEST": {}}, "model": "gpt-6-luna"}
+    return config, service, DispatchLedger(service)
+
+
+def _blocked_dispatch(service):
+    with service.repository.raw_connection() as db:
+        row = db.execute("SELECT dispatch_id, status FROM coder_dispatches WHERE slot=1").fetchone()
+    assert row["status"] == "BLOCKED"
+    return row["dispatch_id"]
+
+
+def _acknowledge(config, dispatch_id):
+    operate(config, Namespace(acknowledge=dispatch_id, reconciled=True, once=True))
+
+
+@pytest.mark.parametrize("failure", ["invalid-model", "docker-unavailable"])
+def test_operator_can_acknowledge_proven_pre_launch(recovery_dispatch, monkeypatch, failure):
+    config, service, ledger = recovery_dispatch
+
+    def no_docker(*args):
+        pytest.fail("reconciliation must not contact Docker for a proven pre-launch dispatch")
+
+    monkeypatch.setattr(sandbox, "_require_engine", no_docker)
+    if failure == "invalid-model":
+        config["model"] = "unsupported"
+        monkeypatch.setattr(coder_runtime, "_selected_host", no_docker)
+    else:
+        monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+
+        def unavailable():
+            raise WorkflowError("synthetic Docker outage")
+
+        monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
+
+    with pytest.raises(WorkflowError, match="Controller attempt failed"):
+        operate(config, Namespace(acknowledge=None, once=True))
+    dispatch_id = _blocked_dispatch(service)
+    assert ledger.is_pre_launch(dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+    _acknowledge(config, dispatch_id)
+    assert not ledger.is_pre_launch(dispatch_id)
+    assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
+
+
+@pytest.mark.parametrize("pin_written", [False, True])
+def test_missing_pin_after_pre_launch_retirement_holds_slot(recovery_dispatch, monkeypatch, pin_written):
+    config, service, ledger = recovery_dispatch
+    runtime = CoderRuntime(config, service)
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
+    original = sandbox.SandboxManager.record_engine
+
+    def record_pin(manager, dispatch_id, host, daemon_id):
+        # A fresh connection must see the committed retirement before any pin write.
+        assert not ledger.is_pre_launch(dispatch_id)
+        if not pin_written:
+            raise OSError("synthetic pin write failure")
+        original(manager, dispatch_id, host, daemon_id)
+
+    def uncertain(*args):
+        raise WorkflowError("synthetic launch uncertainty")
+
+    monkeypatch.setattr(sandbox.SandboxManager, "record_engine", record_pin)
+    monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
+    with pytest.raises(WorkflowError, match="Controller attempt failed"):
+        operate(config, Namespace(acknowledge=None, once=True))
+    dispatch_id = _blocked_dispatch(service)
+    if pin_written:
+        runtime.sandbox._engine_path(dispatch_id).unlink()
+    assert not ledger.is_pre_launch(dispatch_id)
+    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
+def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
+    config, _, ledger = recovery_dispatch
+    claim = ledger.claim({"TEST"}, 60)
+    dispatch_id = claim["dispatch_id"]
+    ledger.block(dispatch_id)
+    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
+@pytest.mark.parametrize("suffix", [".engine", ".scope", ""])
+def test_pre_launch_marker_cannot_override_existing_launch_records(recovery_dispatch, suffix):
+    config, service, ledger = recovery_dispatch
+    dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
+    ledger.block(dispatch_id)
+    runtime = CoderRuntime(config, service)
+    path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
+    path.parent.mkdir()
+    path.touch()
+    with pytest.raises(WorkflowError, match="pre-launch evidence conflicts with Docker records"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
 @pytest.mark.parametrize("definitive", [False, True])
 def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, monkeypatch, definitive):
     database = tmp_path / "state.db"

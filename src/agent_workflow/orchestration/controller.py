@@ -24,9 +24,10 @@ def run_once(
     execute: Callable[[dict, dict], str],
     timeout: int = 1800,
     *,
+    track_pre_launch: bool = False,
     on_finished: Callable[[str], None] | None = None,
 ) -> bool:
-    claim = ledger.claim(task_ids, timeout)
+    claim = ledger.claim(task_ids, timeout, track_pre_launch=track_pre_launch)
     if claim is None:
         return False
     try:
@@ -126,6 +127,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
                 set(config["tasks"]),
                 runtime.execute,
                 config.get("timeout_seconds", 1800),
+                track_pre_launch=True,
                 on_finished=runtime.release_engine,
             )
         except (WorkflowError, OSError, sqlite3.Error, ValueError):

@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, canonical_repository
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.runners.runtime_plugins import (
     AgentRuntimePlugin,
     CodexCLIPlugin,
@@ -356,6 +357,10 @@ class CoderRuntime:
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
+        if DispatchLedger(self.service).is_pre_launch(dispatch_id):
+            if self.sandbox.has_launch_records(dispatch_id):
+                raise WorkflowError("pre-launch evidence conflicts with Docker records")
+            return
         host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
         with cleanup_budget(), _bind_host(host):
             _assert_daemon(daemon_id)
@@ -411,10 +416,12 @@ class CoderRuntime:
         if host is None:
             # The standalone probe/test entry point also needs a durable pin.
             existing = self.sandbox._engine_path(dispatch_id).exists()
+            if existing and self.service is not None and DispatchLedger(self.service).is_pre_launch(dispatch_id):
+                raise WorkflowError("pre-launch evidence conflicts with Docker records")
             host = self.sandbox.recovery_engine(dispatch_id)[0] if existing else _selected_host()
             with _bind_host(host):
                 if not existing:
-                    self.sandbox.record_engine(dispatch_id, host, _require_engine())
+                    self._record_engine(dispatch_id, host, _require_engine())
                 return self._docker_bound(claim, stage, mode, prompt, code_plan)
         return self._docker_bound(claim, stage, mode, prompt, code_plan)
 
@@ -496,10 +503,15 @@ class CoderRuntime:
         host = _selected_host()
         with _bind_host(host):
             daemon_id = _require_engine()
-            self.sandbox.record_engine(claim["dispatch_id"], host, daemon_id)
+            self._record_engine(claim["dispatch_id"], host, daemon_id)
             result = self._execute_bound(claim, context, request, plan, approved_image_id)
             _assert_daemon(daemon_id)
             return result
+
+    def _record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
+        if self.service is not None:
+            DispatchLedger(self.service).retire_pre_launch(dispatch_id)
+        self.sandbox.record_engine(dispatch_id, host, daemon_id)
 
     def release_engine(self, dispatch_id: str) -> None:
         """Drop the pin only after the dispatch ledger reaches a terminal state."""
@@ -594,8 +606,6 @@ class CoderRuntime:
             if result["input_sha"] != claim["input_sha"]:
                 raise WorkflowError("worker result input mismatch")
             check_deadline()
-            from agent_workflow.storage.dispatch_repository import DispatchLedger
-
             DispatchLedger(self.service).record_runtime_evidence(
                 claim["dispatch_id"], context["task_id"], claim["input_sha"],
                 request.spec.runtime, runtime_result.declared_runtime_version,
