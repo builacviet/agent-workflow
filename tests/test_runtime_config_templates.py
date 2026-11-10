@@ -36,3 +36,13 @@ def test_active_runtime_templates_have_documented_owners() -> None:
     for service in ("mcp:", "webhook:", "router:", "ngrok:"):
         assert service in body
     assert not (ROOT / "compose.controller.yaml").exists()
+
+def test_nginx_dynamic_service_dns_preserves_routes() -> None:
+    config = (ROOT / "nginx/controller-router.conf").read_text(encoding="utf-8")
+    assert "resolver 127.0.0.11" in config
+    assert "proxy_pass http://$webhook_upstream;" in config
+    assert "proxy_pass http://$mcp_upstream;" in config
+    assert "proxy_pass http://webhook:8081;" not in config
+    assert "proxy_pass http://mcp:8000;" not in config
+    assert "location = /webhooks/github" in config
+    assert "location / {" in config

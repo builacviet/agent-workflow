@@ -466,7 +466,6 @@ class GitHubWebhookTests(TestCase):
         for body in (
             b"{", b"[]", b"\xff", b'{"a": 1, "a": 2}', b'{"a": NaN}',
             b"[" * 2000 + b"]" * 2000,
-            encode({**payload_for("workflow_run"), "action": "requested"}),
             encode({**payload_for("workflow_run"), "workflow_run": None}),
             encode({**payload_for("workflow_run"), "workflow_run": {"id": 456}}),
             encode({
@@ -483,13 +482,40 @@ class GitHubWebhookTests(TestCase):
                 )
         self.assertIsNone(self.inbox.get(DELIVERY_ID))
 
-    def test_rejects_unsupported_events_and_ambiguous_headers(self) -> None:
+    def test_signed_irrelevant_actions_acknowledge_without_queuing(self) -> None:
+        examples = [
+            ("workflow_run", encode({**payload_for("workflow_run"), "action": "requested"})),
+            ("pull_request", encode({**payload_for("pull_request"), "action": "opened"})),
+            ("pull_request", encode({**payload_for("pull_request"), "action": "closed"})),
+            ("push", encode(payload_for("workflow_run"))),
+            ("ping", encode({"zen": "Keep it logically awesome!", "hook_id": 33})),
+        ]
+        for event, body in examples:
+            with self.subTest(event=event):
+                self.assertEqual(
+                    self.receiver.handle("POST", WEBHOOK_PATH, signed_headers(body, event), body),
+                    HTTPStatus.OK,
+                )
+                self.assertIsNone(self.inbox.get(DELIVERY_ID))
+
+        signed_bad_identity = encode({**payload_for("workflow_run"), "action": "requested",
+                                      "installation": {"id": INSTALLATION_ID + 1}})
+        self.assertEqual(
+            self.receiver.handle("POST", WEBHOOK_PATH, signed_headers(signed_bad_identity),
+                                 signed_bad_identity),
+            HTTPStatus.FORBIDDEN,
+        )
+        self.assertEqual(
+            self.receiver.handle("POST", WEBHOOK_PATH, signed_headers(self.body, secret=b"bad"),
+                                 self.body),
+            HTTPStatus.FORBIDDEN,
+        )
+
+    def test_rejects_malformed_metadata_and_ambiguous_headers(self) -> None:
         headers = signed_headers(self.body)
         missing_delivery = {key: value for key, value in headers.items()
                             if key != "X-GitHub-Delivery"}
         for bad_headers in (
-            signed_headers(self.body, "push"),
-            signed_headers(self.body, "pull_request"),
             signed_headers(self.body, delivery="invalid-id"),
             missing_delivery,
             [*headers.items(), ("x-github-delivery", DELIVERY_ID)],

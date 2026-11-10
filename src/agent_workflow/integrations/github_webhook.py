@@ -109,7 +109,7 @@ class GitHubWebhookReceiver:
 
         event = selected.get("x-github-event", "")
         delivery = selected.get("x-github-delivery", "")
-        if event not in _ACTIONS or not _DELIVERY.fullmatch(delivery):
+        if not event or not _DELIVERY.fullmatch(delivery):
             return HTTPStatus.BAD_REQUEST
         try:
             payload = json.loads(
@@ -119,10 +119,14 @@ class GitHubWebhookReceiver:
             )
         except (ValueError, RecursionError):
             return HTTPStatus.BAD_REQUEST
-
-        action = _ACTIONS[event]
-        if not isinstance(payload, dict) or payload.get("action") != action:
+        if not isinstance(payload, dict):
             return HTTPStatus.BAD_REQUEST
+
+        # GitHub App ping is signed but has no task identity or action.
+        # Acknowledging it never authorizes CI or mutates the inbox.
+        if event == "ping":
+            return HTTPStatus.OK
+
         repository, installation = payload.get("repository"), payload.get("installation")
         if (
             not isinstance(repository, dict)
@@ -132,6 +136,17 @@ class GitHubWebhookReceiver:
             or installation["id"] != self._installation_id
         ):
             return HTTPStatus.FORBIDDEN
+
+        # Registered GitHub App event subscriptions deliver many actions.
+        # Only the two wake-up signals are queued; all other valid signed
+        # events/actions are acknowledged without writing or deciding CI.
+        if event not in _ACTIONS:
+            return HTTPStatus.OK
+        action = payload.get("action")
+        if not isinstance(action, str) or not action:
+            return HTTPStatus.BAD_REQUEST
+        if action != _ACTIONS[event]:
+            return HTTPStatus.OK
 
         subject = payload.get(event)
         if not isinstance(subject, dict):
