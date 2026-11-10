@@ -23,8 +23,11 @@ def run_once(
     task_ids: set[str],
     execute: Callable[[dict, dict], str],
     timeout: int = 1800,
+    *,
+    track_pre_launch: bool = False,
+    on_finished: Callable[[str], None] | None = None,
 ) -> bool:
-    claim = ledger.claim(task_ids, timeout)
+    claim = ledger.claim(task_ids, timeout, track_pre_launch=track_pre_launch)
     if claim is None:
         return False
     try:
@@ -43,6 +46,8 @@ def run_once(
     except BaseException:
         ledger.block(claim["dispatch_id"])
         raise
+    if on_finished is not None:
+        on_finished(claim["dispatch_id"])
     return True
 
 
@@ -109,8 +114,10 @@ def operate(config: dict, args: argparse.Namespace) -> None:
             raise WorkflowError(
                 "operator must reconcile Git/PR/handoff first; use --reconciled"
             )
-        runtime.stop(args.acknowledge)
+        # Keep the ledger slot held until Docker settlement is established.
+        runtime.reconcile(args.acknowledge)
         ledger.acknowledge(args.acknowledge)
+        runtime.release_engine(args.acknowledge)
         return
     while True:
         try:
@@ -120,6 +127,8 @@ def operate(config: dict, args: argparse.Namespace) -> None:
                 set(config["tasks"]),
                 runtime.execute,
                 config.get("timeout_seconds", 1800),
+                track_pre_launch=True,
+                on_finished=runtime.release_engine,
             )
         except (WorkflowError, OSError, sqlite3.Error, ValueError):
             # Never log subprocess output, prompts, credentials or task content.

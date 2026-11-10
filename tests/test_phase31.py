@@ -555,9 +555,13 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state):
         return b""
 
     monkeypatch.setattr(runtime, "docker_command", command)
+    from agent_workflow.runners import sandbox
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    controller_runtime = runtime.CoderRuntime({}, state)
+    controller_runtime.sandbox.record_engine("a" * 32, "unix:///fixture.sock", "fixture-daemon-a")
     with budget.dispatch_budget(1001):
         now[0] = 1002
-        runtime.CoderRuntime({}, state).stop("a" * 32)
+        controller_runtime.stop("a" * 32)
         with pytest.raises(TimeoutError):
             budget.check_deadline()
 

@@ -1,5 +1,6 @@
 """Architecture boundary regressions for local WFC and worker-owned publication."""
 
+from argparse import Namespace
 from contextlib import contextmanager
 import inspect
 import json
@@ -10,10 +11,13 @@ import pytest
 
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.orchestration.controller import run_once
+from agent_workflow.orchestration.controller import operate, run_once
 from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.runners.sandbox import SandboxRunResult
 from test_my_wfc import spec, payload
+from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 
 def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
@@ -114,9 +118,22 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
         service.provision_task(spec() | {"title": "conflicting authorization"})
 
 
-@pytest.mark.parametrize("failure", [None, "test", "publish", "result", "pr_url"])
+@pytest.mark.parametrize(
+    ("failure", "runtime_name"),
+    [
+        (None, "codex"),
+        ("test", "codex"),
+        ("publish", "codex"),
+        ("result", "codex"),
+        ("pr_url", "codex"),
+        (None, "fake"),
+        ("unsupported runtime", "unregistered"),
+        ("unsupported model", "codex"),
+        ("unsupported effort", "codex"),
+    ],
+)
 def test_controller_only_launches_phases_and_receives_result(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, runtime_name
 ):
     service = WorkflowService(tmp_path / "state.db")
     service.provision_task(spec())
@@ -125,13 +142,39 @@ def test_controller_only_launches_phases_and_receives_result(
         "handoff_path": "docs/handoff.md",
         "write_paths": ["src", "docs"],
     }
+    model = "gpt-6-luna" if runtime_name == "codex" else "fixture-model"
+    if failure == "unsupported model":
+        model = "unapproved-model"
+    effort = "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
     runtime = CoderRuntime(
-        {"tasks": {"TEST": task}, "app_id": 1, "installation_id": 2}, service
+        {
+            "tasks": {"TEST": task},
+            "app_id": 1,
+            "installation_id": 2,
+            "model": model,
+            "runtime": runtime_name,
+            "provider": "openai" if runtime_name == "codex" else "fixture",
+            "effort": effort,
+            "runtime_image": "synthetic-image",
+        },
+        service,
+        plugins=(FakePlugin(),),
     )
+    if runtime_name == "codex":
+        # Exercise backwards compatibility with existing operator configs.
+        runtime.config.pop("runtime")
+        runtime.config.pop("provider")
     calls = []
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("stop"))
 
-    def docker(claim, stage, mode, prompt=""):
+    def docker(claim, stage, mode, prompt="", *, code_plan=None):
+        if mode == "code":
+            assert runtime_name == "codex"
+            assert code_plan.command == ("code",)
+            assert code_plan.env == (("WFC_CODEX_MODEL", "gpt-6-luna"),)
         calls.append(mode)
         if mode == failure:
             raise WorkflowError("phase failed")
@@ -156,14 +199,42 @@ def test_controller_only_launches_phases_and_receives_result(
             (stage / "result.json").write_text(json.dumps(result))
         return b"success"
 
+    def sandbox_run(policy, **invocation):
+        assert runtime_name == "fake"
+        assert policy.network == "none"
+        assert invocation["workspace"].name == "source"
+        assert invocation["image"] == "synthetic-image"
+        assert invocation["approved_image_id"] == FAKE_IMAGE_ID
+        assert invocation["command"] == ("fake-exec", "fixture-model", "medium")
+        assert invocation["env"] == ()
+        calls.append("code")
+        return SandboxRunResult(output=b"fixture", image_id=FAKE_IMAGE_ID)
+
     monkeypatch.setattr(runtime, "docker", docker)
+    monkeypatch.setattr(runtime.sandbox, "run", sandbox_run)
     ledger = DispatchLedger(service)
+    if failure and failure.startswith("unsupported"):
+        message = (
+            "unsupported runtime$"
+            if runtime_name == "unregistered"
+            else "unsupported runtime provider, model or effort"
+        )
+        with pytest.raises(WorkflowError, match=message):
+            run_once(service, ledger, {"TEST"}, runtime.execute)
+        assert ledger.claim({"TEST"}, 60) is None
+        assert calls == []
+        assert not (tmp_path / ".runtime").exists()
+        return
     if failure:
         with pytest.raises(WorkflowError):
             run_once(service, ledger, {"TEST"}, runtime.execute)
         assert ledger.claim({"TEST"}, 60) is None
     else:
-        assert run_once(service, ledger, {"TEST"}, runtime.execute)
+        assert run_once(
+            service, ledger, {"TEST"}, runtime.execute,
+            on_finished=runtime.release_engine,
+        )
+        assert not list((tmp_path / "state.db.sandbox-fences").glob("*.engine"))
         assert (
             service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
         )
@@ -175,6 +246,188 @@ def test_controller_only_launches_phases_and_receives_result(
         ]
     assert service.get_review_context("TEST")["completed_review_rounds"] == 0
     assert calls[-1] == "stop"
+
+
+
+
+@pytest.fixture
+def recovery_dispatch(tmp_path):
+    database = tmp_path / "state.db"
+    service = WorkflowService(database)
+    service.provision_task(spec())
+    service.provision_task(spec("NEXT"))
+    config = {"database": str(database), "tasks": {"TEST": {}}, "model": "gpt-6-luna"}
+    return config, service, DispatchLedger(service)
+
+
+def _blocked_dispatch(service):
+    with service.repository.raw_connection() as db:
+        row = db.execute("SELECT dispatch_id, status FROM coder_dispatches WHERE slot=1").fetchone()
+    assert row["status"] == "BLOCKED"
+    return row["dispatch_id"]
+
+
+def _acknowledge(config, dispatch_id):
+    operate(config, Namespace(acknowledge=dispatch_id, reconciled=True, once=True))
+
+
+@pytest.mark.parametrize("failure", ["invalid-model", "docker-unavailable"])
+def test_operator_can_acknowledge_proven_pre_launch(recovery_dispatch, monkeypatch, failure):
+    config, service, ledger = recovery_dispatch
+
+    def no_docker(*args):
+        pytest.fail("reconciliation must not contact Docker for a proven pre-launch dispatch")
+
+    monkeypatch.setattr(sandbox, "_require_engine", no_docker)
+    if failure == "invalid-model":
+        config["model"] = "unsupported"
+        monkeypatch.setattr(coder_runtime, "_selected_host", no_docker)
+    else:
+        monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+
+        def unavailable():
+            raise WorkflowError("synthetic Docker outage")
+
+        monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
+
+    with pytest.raises(WorkflowError, match="Controller attempt failed"):
+        operate(config, Namespace(acknowledge=None, once=True))
+    dispatch_id = _blocked_dispatch(service)
+    assert ledger.is_pre_launch(dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+    _acknowledge(config, dispatch_id)
+    assert not ledger.is_pre_launch(dispatch_id)
+    assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
+
+
+@pytest.mark.parametrize("pin_written", [False, True])
+def test_missing_pin_after_pre_launch_retirement_holds_slot(recovery_dispatch, monkeypatch, pin_written):
+    config, service, ledger = recovery_dispatch
+    runtime = CoderRuntime(config, service)
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
+    original = sandbox.SandboxManager.record_engine
+
+    def record_pin(manager, dispatch_id, host, daemon_id):
+        # A fresh connection must see the committed retirement before any pin write.
+        assert not ledger.is_pre_launch(dispatch_id)
+        if not pin_written:
+            raise OSError("synthetic pin write failure")
+        original(manager, dispatch_id, host, daemon_id)
+
+    def uncertain(*args):
+        raise WorkflowError("synthetic launch uncertainty")
+
+    monkeypatch.setattr(sandbox.SandboxManager, "record_engine", record_pin)
+    monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
+    with pytest.raises(WorkflowError, match="Controller attempt failed"):
+        operate(config, Namespace(acknowledge=None, once=True))
+    dispatch_id = _blocked_dispatch(service)
+    if pin_written:
+        runtime.sandbox._engine_path(dispatch_id).unlink()
+    assert not ledger.is_pre_launch(dispatch_id)
+    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
+def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
+    config, _, ledger = recovery_dispatch
+    claim = ledger.claim({"TEST"}, 60)
+    dispatch_id = claim["dispatch_id"]
+    ledger.block(dispatch_id)
+    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
+@pytest.mark.parametrize("suffix", [".engine", ".scope", ""])
+def test_pre_launch_marker_cannot_override_existing_launch_records(recovery_dispatch, suffix):
+    config, service, ledger = recovery_dispatch
+    dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
+    ledger.block(dispatch_id)
+    runtime = CoderRuntime(config, service)
+    path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
+    path.parent.mkdir()
+    path.touch()
+    with pytest.raises(WorkflowError, match="pre-launch evidence conflicts with Docker records"):
+        _acknowledge(config, dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+
+
+@pytest.mark.parametrize("definitive", [False, True])
+def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, monkeypatch, definitive):
+    database = tmp_path / "state.db"
+    config = {"database": str(database)}
+    service = WorkflowService(database)
+    service.provision_task(spec())
+    service.provision_task(spec("NEXT"))
+    ledger = DispatchLedger(service)
+    runtime = CoderRuntime(config, service)
+    dispatch_id = None
+    name = None
+    visible = False
+    identifier = "a" * 64
+    pin = "sha256:" + "b" * 64
+
+    def docker(args):
+        nonlocal name, visible
+        if args[0] == "image":
+            return json.dumps([{"Id": pin, "Os": "linux", "Config": {}}]).encode()
+        if args[0] == "create":
+            name = args[args.index("--name") + 1]
+            if definitive:
+                raise sandbox.DockerCreateRejected("simulated definitive rejection")
+            raise WorkflowError("simulated create timeout")
+        if args[:2] == ["container", "ls"]:
+            if visible:
+                return json.dumps({
+                    "ID": identifier,
+                    "Names": name,
+                    "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch_id}",
+                }).encode()
+            return b""
+        if args == ["rm", "-f", identifier]:
+            assert visible
+            visible = False
+            return b""
+        raise AssertionError(args)
+
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
+    monkeypatch.setattr(sandbox, "_docker", docker)
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(coder_runtime, "docker_command", lambda args: b"")
+
+    def execute(claim, _context):
+        nonlocal dispatch_id
+        dispatch_id = claim["dispatch_id"]
+        runtime.sandbox.record_engine(dispatch_id, "unix:///fixture.sock", "fixture-daemon-a")
+        runtime.sandbox.run(
+            sandbox.SandboxPolicy(),
+            dispatch_id=dispatch_id,
+            workspace=tmp_path.resolve(),
+            image="fixture",
+            approved_image_id=pin,
+            command=("fixture",),
+        )
+        pytest.fail("an uncertain create must never start a workload")
+
+    with pytest.raises(WorkflowError):
+        run_once(service, ledger, {"TEST"}, execute)
+    assert name is not None
+    args = Namespace(acknowledge=dispatch_id, reconciled=True, once=True)
+    assert ledger.claim({"NEXT"}, 60) is None
+    if not definitive:
+        # Empty inventory is not proof an accepted request cannot appear later.
+        with pytest.raises(WorkflowError, match="create remains uncertain"):
+            operate(config, args)
+        assert ledger.claim({"NEXT"}, 60) is None
+        visible = True
+    # Operator acknowledgment is still required even for definitive rejection.
+    operate(config, args)
+    assert not visible
+    assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
 
 
 def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
@@ -363,3 +616,33 @@ def test_controller_compose_parses_without_starting_services():
         capture_output=True,
         timeout=20,
     )
+
+
+def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
+    service = WorkflowService(tmp_path / "test.db")
+    runtime = CoderRuntime({"image": "fixture"}, service)
+    dispatch = "a" * 32
+    host = "unix:///fixture.sock"
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)
+    monkeypatch.setattr(sandbox, "_selected_host", lambda: host)
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setenv("HTTPS_PROXY", "http://fixture:synthetic-canary@proxy.invalid")
+    monkeypatch.setenv("DOCKER_CONTEXT", "some-other-context")
+    runtime.sandbox.record_engine(dispatch, host, "fixture-daemon-a")
+
+    def run(args, prompt, remaining):
+        assert "--network=none" in args
+        assert {args[index + 1] for index, arg in enumerate(args) if arg == "--env"} >= {
+            name + "=" for name in sandbox._PROXY_NAMES
+        }
+        invocation, env = sandbox._docker_invocation(args)
+        assert invocation[:3] == ["docker", "--host", host]
+        assert "HTTPS_PROXY" not in env and "DOCKER_CONTEXT" not in env
+        assert all("synthetic-canary" not in arg for arg in invocation)
+        return b"synthetic test output"
+
+    monkeypatch.setattr(coder_runtime, "run_container", run)
+    assert runtime.docker(
+        {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},
+        tmp_path, "test",
+    ) == b"synthetic test output"

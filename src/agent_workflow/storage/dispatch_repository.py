@@ -2,6 +2,7 @@
 
 import time
 import uuid
+import re
 from typing import Callable
 
 from agent_workflow.integrations.github import (
@@ -13,13 +14,52 @@ from agent_workflow.integrations.github import (
 from agent_workflow.domain.service import WorkflowService
 
 
+# Reserved detail for a held slot before the runtime can write its Docker pin.
+_PRE_LAUNCH = "PRE_LAUNCH"
+
+
 class DispatchLedger:
     def __init__(
         self, service: WorkflowService, *, clock: Callable = time.time
     ) -> None:
         self.service, self.clock = service, clock
 
-    def claim(self, task_ids: set[str], timeout: int) -> dict | None:
+    def record_runtime_evidence(
+        self, dispatch_id: str, task_id: str, input_sha: str,
+        runtime_name: str, declared_version: str,
+        image_id: str | None, telemetry: str,
+        tested_digest: str, published_head_sha: str,
+    ) -> None:
+        """Store validated host evidence before reporting a task handoff."""
+        validate_sha(input_sha)
+        validate_sha(published_head_sha)
+        if (
+            not re.fullmatch(r"[0-9a-f]{32}", dispatch_id)
+            or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", runtime_name)
+            or not isinstance(declared_version, str) or not declared_version.strip()
+            or (image_id is not None and not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id))
+            or telemetry != "UNVERIFIED"
+            or not re.fullmatch(r"[a-f0-9]{64}", tested_digest)
+        ):
+            raise WorkflowError("invalid runtime evidence")
+        with self.service.repository.raw_transaction() as db:
+            row = db.execute(
+                "SELECT task_id,input_sha,status FROM coder_dispatches "
+                "WHERE dispatch_id=? AND slot=1", (dispatch_id,)
+            ).fetchone()
+            if row is None or row["task_id"] != task_id or row["input_sha"] != input_sha or row["status"] != "ACTIVE":
+                raise WorkflowError("runtime evidence has no active matching dispatch")
+            inserted = db.execute(
+                "INSERT INTO coder_runtime_evidence VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (dispatch_id, task_id, input_sha, runtime_name, declared_version,
+                 image_id, telemetry, tested_digest, published_head_sha, self.clock()),
+            )
+            if inserted.rowcount != 1:
+                raise WorkflowError("runtime evidence was not inserted")
+
+    def claim(
+        self, task_ids: set[str], timeout: int, *, track_pre_launch: bool = False
+    ) -> dict | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:
             raise WorkflowError("runtime timeout must be 60..3600 seconds")
         with self.service.repository.raw_transaction() as db:
@@ -47,13 +87,16 @@ class DispatchLedger:
                 dispatch_id = uuid.uuid4().hex
                 deadline = self.clock() + timeout
                 db.execute(
-                    "INSERT INTO coder_dispatches(dispatch_id,task_id,round_number,input_sha,status,slot,deadline) VALUES(?,?,?,?,'ACTIVE',1,?)",
+                    "INSERT INTO coder_dispatches"
+                    "(dispatch_id,task_id,round_number,input_sha,status,slot,deadline,detail) "
+                    "VALUES(?,?,?,?,'ACTIVE',1,?,?)",
                     (
                         dispatch_id,
                         task["task_id"],
                         round_number,
                         sha,
                         deadline,
+                        _PRE_LAUNCH if track_pre_launch else "",
                     ),
                 )
                 return {
@@ -64,6 +107,29 @@ class DispatchLedger:
                     "round_number": round_number,
                 }
         return None
+
+    def is_pre_launch(self, dispatch_id: str) -> bool:
+        with self.service.repository.raw_connection() as db:
+            return db.execute(
+                "SELECT 1 FROM coder_dispatches WHERE dispatch_id=? AND slot=1 AND detail=?",
+                (dispatch_id, _PRE_LAUNCH),
+            ).fetchone() is not None
+
+    def retire_pre_launch(self, dispatch_id: str) -> None:
+        """Commit retirement before any pin write or worker side effect."""
+        with self.service.repository.raw_transaction() as db:
+            row = db.execute(
+                "SELECT detail FROM coder_dispatches WHERE dispatch_id=? AND slot=1",
+                (dispatch_id,),
+            ).fetchone()
+            if row is not None and row["detail"] == _PRE_LAUNCH:
+                changed = db.execute(
+                    "UPDATE coder_dispatches SET detail='' "
+                    "WHERE dispatch_id=? AND slot=1 AND status='ACTIVE'",
+                    (dispatch_id,),
+                ).rowcount
+                if changed != 1:
+                    raise WorkflowError("could not retire dispatch pre-launch evidence")
 
     def finish(self, dispatch_id: str, sha: str) -> None:
         validate_sha(sha)
@@ -78,16 +144,21 @@ class DispatchLedger:
     def block(self, dispatch_id: str) -> None:
         with self.service.repository.raw_transaction() as db:
             db.execute(
-                "UPDATE coder_dispatches SET status='BLOCKED',detail='Operator reconciliation required; do not retry automatically' WHERE dispatch_id=? AND slot=1",
-                (dispatch_id,),
+                "UPDATE coder_dispatches SET status='BLOCKED', detail=CASE "
+                "WHEN detail=? THEN detail ELSE "
+                "'Operator reconciliation required; do not retry automatically' END "
+                "WHERE dispatch_id=? AND slot=1",
+                (_PRE_LAUNCH, dispatch_id),
             )
 
     def acknowledge(self, dispatch_id: str) -> None:
         """Operator must first stop/inspect containers and reconcile external effects."""
         with self.service.repository.raw_transaction() as db:
             changed = db.execute(
-                "UPDATE coder_dispatches SET status='ACKNOWLEDGED',slot=NULL WHERE dispatch_id=? AND slot=1",
-                (dispatch_id,),
+                "UPDATE coder_dispatches SET status='ACKNOWLEDGED', slot=NULL, "
+                "detail=CASE WHEN detail=? THEN '' ELSE detail END "
+                "WHERE dispatch_id=? AND slot=1",
+                (_PRE_LAUNCH, dispatch_id),
             ).rowcount
             if changed != 1:
                 raise WorkflowError("unknown active dispatch")

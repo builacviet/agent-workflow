@@ -15,21 +15,26 @@ from agent_workflow.runners.coder_runtime import CoderRuntime
     "mode", ["code", "test", "prepare", "publish", "probe"]
 )
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
-    import agent_workflow.runners.coder_runtime as module
+    from agent_workflow.runners import coder_runtime as module, sandbox
 
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
     pem = tmp_path / "app.pem"
     pem.write_text("synthetic")
     config = {
+        "database": str(tmp_path / "disposable.sqlite3"),
         "image": "fixture",
-        "model": "fixture-model",
+        "model": "gpt-6-luna",
         "pem": str(pem),
         "codex_auth_volume": "techlead-review-poc_codex_auth",
         "seccomp_profile": str(profile),
         "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
     }
     calls, commands = [], []
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
+    monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(
         module, "docker_command", lambda args: commands.append(args)
     )
@@ -38,9 +43,16 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
-    CoderRuntime(config, None).docker(
-        {"dispatch_id": "a" * 32, "deadline": time.time() + 60}, tmp_path, mode
+    runtime = CoderRuntime(config, None)
+    claim = {
+        "dispatch_id": "a" * 32,
+        "input_sha": "b" * 40,
+        "deadline": time.time() + 60,
+    }
+    code_plan = (
+        runtime.registry.plan(runtime._code_request(claim)) if mode == "code" else None
     )
+    runtime.docker(claim, tmp_path, mode, code_plan=code_plan)
     text = " ".join(calls[0])
     assert ("src=techlead-review-poc_codex_auth" in text) == (mode == "code")
     assert bool(commands) == (mode == "code")
