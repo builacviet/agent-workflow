@@ -145,10 +145,14 @@ class GitHubWebhookReceiver:
         action = payload.get("action")
         if not isinstance(action, str) or not action:
             return HTTPStatus.BAD_REQUEST
+        # Even a no-op action must belong to the signed event type;
+        # a mislabeled body must not be silently acknowledged.
+        subject = payload.get(event)
+        if not isinstance(subject, dict):
+            return HTTPStatus.BAD_REQUEST
         if action != _ACTIONS[event]:
             return HTTPStatus.OK
 
-        subject = payload.get(event)
         if not isinstance(subject, dict):
             return HTTPStatus.BAD_REQUEST
         if event == "workflow_run":
