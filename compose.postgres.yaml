@@ -1,0 +1,33 @@
+# Additive PostgreSQL test stack: explicitly opt in, not an implicit
+# replacement of the currently running SQLite-based MCP/Controller.
+# docker compose -f compose.postgres.yaml --profile database up -d postgres
+name: agent-workflow-postgres
+services:
+  postgres:
+    image: postgres:17-bookworm
+    profiles: [database]
+    environment:
+      POSTGRES_DB: agent_workflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/postgres:/docker-entrypoint-initdb.d:ro
+    secrets:
+      - postgres_admin_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_workflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+secrets:
+  postgres_admin_password:
+    file: ./.secret/postgres-admin-password
+volumes:
+  pgdata:
