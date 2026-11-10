@@ -175,3 +175,46 @@ def test_postgres_workflow_adapter_rolls_back_failed_transaction(pg):
             raise RuntimeError("rollback")
     with repo.raw_connection() as db:
         assert db.execute("SELECT 1 FROM tasks WHERE task_id=?", ("PG-ROLLBACK",)).fetchone() is None
+
+def test_postgres_webhook_adapter_durable_replay_and_conflict(pg):
+    from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
+    from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
+
+    inbox = PostgresWebhookInbox(DSN)
+    event = WebhookNotification(
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "workflow_run", "completed", "builacviet/agent-workflow",
+        17, 123, "a" * 40,
+    )
+    digest = "a" * 64
+    assert inbox.record(event, digest) is InboxResult.INSERTED
+    assert inbox.get(event.delivery_id) == event
+    assert PostgresWebhookInbox(DSN).record(event, digest) is InboxResult.DUPLICATE
+    assert inbox.record(event, "c" * 64) is InboxResult.CONFLICT
+    alias = WebhookNotification(
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        event.event, event.action, event.repository, event.installation_id,
+        event.subject_id, event.head_sha,
+    )
+    assert inbox.record(alias, digest) is InboxResult.DUPLICATE
+    assert inbox.get(alias.delivery_id) is None
+
+
+def test_postgres_webhook_concurrent_duplicate_digest_only_one_insert(pg):
+    from concurrent.futures import ThreadPoolExecutor
+    from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
+    from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
+
+    def deliver(delivery_id):
+        item = WebhookNotification(
+            delivery_id, "pull_request", "synchronize",
+            "builacviet/agent-workflow", 17, 123, "a" * 40,
+        )
+        return PostgresWebhookInbox(DSN).record(item, "d" * 64)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(deliver, (
+            "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        )))
+    assert sorted(x.name for x in results) == ["DUPLICATE", "INSERTED"]
