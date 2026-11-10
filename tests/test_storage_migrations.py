@@ -144,6 +144,17 @@ def test_legacy_workflow_accepts_sql_formatting_and_identifier_case(tmp_path):
     assert [row[1] for row in _rows(path)] == [1, 2]
 
 
+def test_workflow_schema_rejects_unicode_whitespace_inside_identifier(tmp_path):
+    path = tmp_path / "changed-column.sqlite"
+    with closing(sqlite3.connect(path)) as db, db:
+        # SQLite treats the non-breaking space as part of the identifier.
+        db.executescript(workflow_migrations._CORE_SQL.replace(
+            "metadata TEXT", "metadata\u00a0TEXT"
+        ))
+    with pytest.raises(sqlite3.DatabaseError, match="incompatible workflow schema"):
+        SQLiteWorkflowRepository(path)
+
+
 def test_workflow_schema_rejects_case_changed_check_literal(tmp_path):
     path = tmp_path / "changed-check.sqlite"
     with closing(sqlite3.connect(path)) as db, db:

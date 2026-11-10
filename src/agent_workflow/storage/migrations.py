@@ -24,7 +24,7 @@ _REGISTRY_SQL = """
 """
 _SQL_TOKEN = re.compile(
     r"""--[^\r\n]*|/\*[\s\S]*?\*/|'(?:''|[^'])*'|"(?:""|[^"])*"|"""
-    r"""(?:\x60(?:\x60\x60|[^\x60])*\x60)|\[[^\]]*\]|\s+|\w+|."""
+    r"""(?:\x60(?:\x60\x60|[^\x60])*\x60)|\[[^\]]*\]|[ \t\n\f\r]+|[a-zA-Z0-9_$\x80-\U0010FFFF]+|."""
 )
 
 
@@ -32,9 +32,9 @@ def _sql_tokens(sql: str | None) -> tuple[str, ...] | None:
     if sql is None:
         return None
     return tuple(
-        token if token[0] in "'\"[`" else token.lower()
+        token if not token.isascii() or token[0] in "'\"[`" else token.lower()
         for token in _SQL_TOKEN.findall(sql)
-        if not token.isspace() and not token.startswith(("--", "/*"))
+        if token[0] not in " \t\n\f\r" and not token.startswith(("--", "/*"))
     )
 
 
