@@ -173,5 +173,5 @@ def test_postgres_workflow_adapter_rolls_back_failed_transaction(pg):
                  "a" * 40, "high", 1, "AWAITING_HANDOFF", 0.0, 0.0),
             )
             raise RuntimeError("rollback")
-    with repo.read() as db:
+    with repo.raw_connection() as db:
         assert db.execute("SELECT 1 FROM tasks WHERE task_id=?", ("PG-ROLLBACK",)).fetchone() is None
