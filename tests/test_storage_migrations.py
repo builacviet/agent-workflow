@@ -169,6 +169,34 @@ def test_workflow_schema_rejects_case_changed_check_literal(tmp_path):
         ).fetchone() is None
 
 
+
+def test_dispatch_cr_comment_does_not_hide_slot_check(tmp_path):
+    """SQLite -- comments end at LF, not CR; reject a dropped CHECK constraint."""
+    path = tmp_path / "bad-legacy-dispatch.sqlite"
+    with closing(sqlite3.connect(path)) as db, db:
+        db.executescript(workflow_migrations._CORE_SQL)
+        altered = workflow_migrations._DISPATCH_SQL.replace(
+            "slot INTEGER UNIQUE CHECK(slot=1),",
+            "slot INTEGER UNIQUE --\rCHECK(slot=1)\n,",
+        )
+        assert altered != workflow_migrations._DISPATCH_SQL
+        db.execute(altered)
+        # Prove SQLite no longer enforces CHECK(slot=1) in the tampered DDL.
+        db.execute(
+            "INSERT INTO coder_dispatches("
+            "dispatch_id,task_id,round_number,input_sha,status,slot,deadline"
+            ") VALUES ('D-2','T-2',1,'sha','ACTIVE',2,300)"
+        )
+
+    with pytest.raises(sqlite3.DatabaseError, match="incompatible workflow schema"):
+        SQLiteWorkflowRepository(path)
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT slot FROM coder_dispatches").fetchall() == [(2,)]
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='schema_migrations'"
+        ).fetchone() is None
+
+
 @pytest.fixture
 def workflow_v4(monkeypatch):
     monkeypatch.setattr(
