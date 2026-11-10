@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import math
@@ -12,10 +14,12 @@ import stat
 import subprocess
 import sys
 import time
+from typing import Iterator
 from uuid import uuid4
 
 from agent_workflow.budget import cleanup_budget, dispatch_budget, operation_timeout
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.runners.runtime_plugins import credential_env_name, nonsecret_env_value
 
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
@@ -36,6 +40,72 @@ _PROXY_NAMES = tuple(
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY")
     for variant in (name, name.lower())
 )
+
+
+# A host bind is meaningful only on a local daemon. Resolve context names once
+# to a concrete socket or named pipe; never use a mutable context as the pin.
+_LOCAL_HOST = re.compile(r"(?:unix:///[^\s\x00]+|npipe:////\./pipe/[A-Za-z0-9_.-]+)")
+_DOCKER_HOST: ContextVar[str | None] = ContextVar("sandbox_docker_host", default=None)
+
+
+class DockerCreateRejected(WorkflowError):
+    """Affirmative evidence that Docker did not accept the create request."""
+
+
+def _valid_host(host: object) -> bool:
+    return isinstance(host, str) and _LOCAL_HOST.fullmatch(host) is not None
+
+
+def _selected_host() -> str:
+    if not os.environ.get("DOCKER_CONTEXT") and os.environ.get("DOCKER_HOST"):
+        host = os.environ["DOCKER_HOST"]
+    else:
+        try:
+            host = subprocess.run(
+                ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                check=True, capture_output=True, text=True, timeout=operation_timeout(5),
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            raise WorkflowError("cannot resolve the local Docker endpoint") from None
+    if not _valid_host(host):
+        raise WorkflowError("sandbox requires a local Docker socket or named pipe")
+    return host
+
+
+@contextmanager
+def _bind_host(host: str) -> Iterator[None]:
+    bound = _DOCKER_HOST.get()
+    if not _valid_host(host) or (bound is not None and bound != host):
+        raise WorkflowError("Docker endpoint changed; dispatch remains blocked")
+    token = _DOCKER_HOST.set(host)
+    try:
+        yield
+    finally:
+        _DOCKER_HOST.reset(token)
+
+
+def _docker_invocation(args: list[str]) -> tuple[list[str], dict[str, str] | None]:
+    host = _DOCKER_HOST.get()
+    if host is None:
+        return args, None
+    # DOCKER_CONTEXT can otherwise take precedence over endpoint selection.
+    excluded = {
+        "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS", "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH", "DOCKER_CUSTOM_HEADERS",
+        *(name.upper() for name in _PROXY_NAMES),
+    }
+    env = {key: value for key, value in os.environ.items() if key.upper() not in excluded}
+    return [args[0], "--host", host, *args[1:]], env
+
+
+def _assert_daemon(daemon_id: str) -> None:
+    if _require_engine() != daemon_id:
+        raise WorkflowError("Docker daemon identity changed; dispatch remains blocked")
+
+
+def _assert_selected_host(host: str) -> None:
+    if _selected_host() != host:
+        raise WorkflowError("Docker endpoint changed during execution")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +164,7 @@ def _docker(args: list[str]) -> bytes:
     return docker_command(["docker", *args])
 
 
-def _require_engine() -> None:
+def _require_engine() -> str:
     raw = _docker([
         "info",
         "--format",
@@ -132,7 +202,7 @@ def _local_image(image: str) -> str:
                 isinstance(item, str)
                 and "=" in item
                 and item.split("=", 1)[0] in _SAFE_IMAGE_ENV
-                and len(item) < 4096
+                and nonsecret_env_value(item.split("=", 1)[1])
                 for item in environment
             )
         ):
@@ -182,7 +252,7 @@ def _environment(env: tuple[tuple[str, str], ...]) -> list[str]:
     args = [arg for name in _PROXY_NAMES for arg in ("--env", name + "=")]
     if not isinstance(env, tuple):
         raise ValueError("sandbox environment must be explicit name/value pairs")
-    names = set(_PROXY_NAMES)
+    names = {name.upper() for name in _PROXY_NAMES}
     for pair in env:
         if not isinstance(pair, tuple) or len(pair) != 2:
             raise ValueError("sandbox environment must be explicit name/value pairs")
@@ -190,13 +260,12 @@ def _environment(env: tuple[tuple[str, str], ...]) -> list[str]:
         if (
             not isinstance(key, str)
             or not _ENV_NAME.fullmatch(key)
-            or key in names
-            or not isinstance(value, str)
-            or not value.isprintable()
-            or len(value) > 4096
+            or key.upper() in names
+            or credential_env_name(key)
+            or not nonsecret_env_value(value)
         ):
             raise ValueError("invalid sandbox environment")
-        names.add(key)
+        names.add(key.upper())
         args.extend(("--env", f"{key}={value}"))
     return args
 
@@ -269,7 +338,8 @@ class SandboxManager:
         environment = _environment(env)
         name = f"{prefix}-{phase}-{uuid4().hex}"
         deadline = time.time() + operation_timeout(policy.timeout_seconds)
-        with dispatch_budget(deadline):
+        host = _DOCKER_HOST.get() or _selected_host()
+        with dispatch_budget(deadline), _bind_host(host):
             mount = _workspace_bind(workspace, policy.workspace_writable)
             daemon_id = _require_engine()
             if _local_image(image) != approved_image_id:
@@ -295,11 +365,17 @@ class SandboxManager:
                 *command,
             ]
             scope = self._scope_path(dispatch_id)
-            self._record_scope(scope, dispatch_id, name, daemon_id, deadline)
+            _assert_selected_host(host)
+            self._record_scope(scope, dispatch_id, name, daemon_id, deadline, host)
             try:
                 self._record_create(fence, name)
+                _assert_daemon(daemon_id)
                 self._update_scope(scope, "SUBMITTED")
-                identifier = _docker(args).decode("ascii", errors="replace").strip()
+                try:
+                    identifier = _docker(args).decode("ascii", errors="replace").strip()
+                except DockerCreateRejected:
+                    self._update_scope(scope, "REJECTED")
+                    raise
                 if not _CONTAINER_ID.fullmatch(identifier):
                     raise WorkflowError("Docker did not identify the sandbox container")
                 observed_image_id = self._inspect_image(identifier, name, dispatch_id)
@@ -310,6 +386,8 @@ class SandboxManager:
                 # Independent trusted host watchdog must acknowledge readiness
                 # before the untrusted workload is allowed to start.
                 self._start_watchdog(scope, dispatch_id)
+                _assert_selected_host(host)
+                self._assert_scope(scope, dispatch_id)
                 remaining = math.ceil(operation_timeout(policy.timeout_seconds))
                 output = run_container(
                     ["docker", "start", "-ai", identifier], stdin, remaining
@@ -325,6 +403,7 @@ class SandboxManager:
                         dispatch_id, fence, self._name_pattern(prefix), scope
                     )
                     self._cleanup(dispatch_id, re.escape(name))
+                    self._assert_scope(scope, dispatch_id)
                     self._clear_scope(scope)
 
     def stop(self, dispatch_id: str) -> None:
@@ -333,14 +412,51 @@ class SandboxManager:
         pattern = self._name_pattern(prefix)
         fence = self._fence_path(dispatch_id)
         scope = self._scope_path(dispatch_id)
-        if scope is not None and scope.exists():
+        if scope is None or not scope.exists():
+            if fence is not None and fence.exists():
+                raise WorkflowError("sandbox create lacks daemon identity; dispatch stays blocked")
+            if _DOCKER_HOST.get() is not None:
+                with cleanup_budget():
+                    self._cleanup(dispatch_id, pattern)
+            return
+        record = self._scope_data(scope)
+        with cleanup_budget(), _bind_host(record["host"]):
             self._assert_scope(scope, dispatch_id)
-        elif fence is not None and fence.exists():
-            raise WorkflowError("sandbox create lacks daemon identity; dispatch stays blocked")
-        self._settle_create(dispatch_id, fence, pattern, scope)
-        self._cleanup(dispatch_id, pattern)
-        if scope is not None and scope.exists():
+            self._settle_create(dispatch_id, fence, pattern, scope)
+            self._cleanup(dispatch_id, pattern)
+            _assert_daemon(record["daemon_id"])
             self._clear_scope(scope)
+
+    def _engine_path(self, dispatch_id: str) -> Path:
+        _dispatch_prefix(dispatch_id)
+        fence = self._fence_path(dispatch_id)
+        if fence is None:
+            raise WorkflowError("runtime requires durable Docker endpoint storage")
+        return fence.with_name(fence.name + ".engine")
+
+    def record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
+        path = self._engine_path(dispatch_id)
+        self._write_record(path, {"host": host, "daemon_id": daemon_id})
+
+    def recovery_engine(self, dispatch_id: str) -> tuple[str, str]:
+        _dispatch_prefix(dispatch_id)
+        path = self._engine_path(dispatch_id)
+        if not path.exists():
+            scope = self._scope_path(dispatch_id)
+            if scope is None or not scope.exists():
+                raise WorkflowError("dispatch lacks its original Docker endpoint; stays blocked")
+            record = self._scope_data(scope)
+        else:
+            record = self._read_record(path)
+        host, daemon_id = record.get("host"), record.get("daemon_id")
+        if not _valid_host(host) or not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
+            raise WorkflowError("invalid durable Docker endpoint")
+        return host, daemon_id
+
+    def clear_engine(self, dispatch_id: str) -> None:
+        path = self._engine_path(dispatch_id)
+        path.unlink(missing_ok=True)
+        _sync_directory(path.parent)
 
     @staticmethod
     def _name_pattern(prefix: str) -> str:
@@ -356,18 +472,25 @@ class SandboxManager:
         return fence.with_name(fence.name + ".scope") if fence else None
 
     @staticmethod
-    def _scope_data(scope: Path) -> dict:
+    def _read_record(path: Path) -> dict:
         try:
-            record = json.loads(scope.read_text(encoding="ascii"))
+            record = json.loads(path.read_text(encoding="ascii"))
         except (OSError, ValueError):
             raise WorkflowError("missing or invalid durable sandbox scope") from None
+        if not isinstance(record, dict):
+            raise WorkflowError("invalid durable sandbox scope")
+        return record
+
+    @classmethod
+    def _scope_data(cls, scope: Path) -> dict:
+        record = cls._read_record(scope)
         if (
-            not isinstance(record, dict)
-            or not isinstance(record.get("dispatch_id"), str)
+            not isinstance(record.get("dispatch_id"), str)
+            or not _valid_host(record.get("host"))
             or not _DISPATCH_ID.fullmatch(record["dispatch_id"])
             or not isinstance(record.get("daemon_id"), str)
             or not _DAEMON_ID.fullmatch(record["daemon_id"])
-            or record.get("state") not in {"PREPARED", "SUBMITTED", "CREATED"}
+            or record.get("state") not in {"PREPARED", "SUBMITTED", "CREATED", "REJECTED"}
             or not isinstance(record.get("name"), str)
             or not isinstance(record.get("deadline"), (int, float))
             or not isinstance(record.get("monotonic_deadline"), (int, float))
@@ -376,26 +499,31 @@ class SandboxManager:
         return record
 
     @staticmethod
-    def _record_scope(
-        scope: Path, dispatch_id: str, name: str, daemon_id: str, deadline: float
-    ) -> None:
-        if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
-            raise WorkflowError("Docker daemon has no trustworthy identity")
-        scope.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        payload = json.dumps({
-            "dispatch_id": dispatch_id, "name": name,
-            "daemon_id": daemon_id, "deadline": deadline,
-            "monotonic_deadline": time.monotonic() + max(0., deadline - time.time()),
-            "state": "PREPARED",
-        }, sort_keys=True)
+    def _write_record(path: Path, record: dict) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
-            with scope.open("x", encoding="ascii") as handle:
-                handle.write(payload)
+            with path.open("x", encoding="ascii") as handle:
+                json.dump(record, handle, sort_keys=True)
                 handle.flush()
                 os.fsync(handle.fileno())
         except FileExistsError:
             raise WorkflowError("existing sandbox execution requires reconciliation") from None
-        _sync_directory(scope.parent)
+        _sync_directory(path.parent)
+        _sync_directory(path.parent.parent)
+
+    @classmethod
+    def _record_scope(
+        cls, scope: Path, dispatch_id: str, name: str, daemon_id: str,
+        deadline: float, host: str,
+    ) -> None:
+        if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
+            raise WorkflowError("Docker daemon has no trustworthy identity")
+        cls._write_record(scope, {
+            "dispatch_id": dispatch_id, "name": name, "host": host,
+            "daemon_id": daemon_id, "deadline": deadline,
+            "monotonic_deadline": time.monotonic() + max(0., deadline - time.time()),
+            "state": "PREPARED",
+        })
 
     @classmethod
     def _update_scope(cls, scope: Path, state: str) -> None:
@@ -415,8 +543,9 @@ class SandboxManager:
     @classmethod
     def _assert_scope(cls, scope: Path, dispatch_id: str) -> None:
         record = cls._scope_data(scope)
-        if record["dispatch_id"] != dispatch_id or _require_engine() != record["daemon_id"]:
-            raise WorkflowError("Docker daemon identity changed; dispatch remains blocked")
+        if record["dispatch_id"] != dispatch_id or record["host"] != _DOCKER_HOST.get():
+            raise WorkflowError("Docker endpoint differs from durable sandbox scope")
+        _assert_daemon(record["daemon_id"])
 
     @staticmethod
     def _clear_scope(scope: Path) -> None:
@@ -432,26 +561,19 @@ class SandboxManager:
         The controller does not launch the workload unless readiness is proven.
         """
         ready = scope.with_name(scope.name + ".ready")
-        environment = os.environ.copy()
-        if not environment.get("DOCKER_CONTEXT") and not environment.get("DOCKER_HOST"):
-            try:
-                context = subprocess.run(
-                    ["docker", "context", "show"], check=True, capture_output=True,
-                    timeout=operation_timeout(5), text=True,
-                ).stdout.strip()
-            except (OSError, subprocess.SubprocessError):
-                raise WorkflowError("cannot pin Docker context for watchdog") from None
-            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", context):
-                raise WorkflowError("invalid Docker context for watchdog")
-            environment["DOCKER_CONTEXT"] = context
         command = [
             sys.executable, "-m", "agent_workflow.runners.sandbox_watchdog",
             str(scope), dispatch_id,
         ]
+        # Keep only host process bootstrap and local Docker configuration.
+        allowed_env = {
+            "PATH", "PYTHONPATH", "PYTHONHOME", "HOME", "USERPROFILE", "SYSTEMROOT",
+            "WINDIR", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR", "DOCKER_CONFIG",
+        }
         options = {
+            "env": {key: value for key, value in os.environ.items() if key.upper() in allowed_env},
             "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL, "close_fds": True,
-            "env": environment,
         }
         if os.name == "nt":
             options["creationflags"] = (
@@ -507,7 +629,7 @@ class SandboxManager:
             if len(owned) != 1:
                 if (
                     not owned and scope is not None
-                    and self._scope_data(scope)["state"] == "PREPARED"
+                    and self._scope_data(scope)["state"] in {"PREPARED", "REJECTED"}
                 ):
                     self._clear_create(fence)
                     return
@@ -542,23 +664,23 @@ class SandboxManager:
         raise WorkflowError("could not verify sandbox container identity")
 
     def _cleanup(self, dispatch_id: str, name_pattern: str) -> None:
-        with cleanup_budget():
-            identifiers = self._owned(dispatch_id, name_pattern)
-            for identifier in identifiers:
-                try:
-                    _docker(["rm", "-f", identifier])
-                except WorkflowError:
-                    # A concurrent removal can still be visible when rm fails.
-                    if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
-                        raise
-            if self._owned(dispatch_id, name_pattern):
-                raise WorkflowError("sandbox termination not confirmed")
+        identifiers = self._owned(dispatch_id, name_pattern)
+        for identifier in identifiers:
+            try:
+                _docker(["rm", "-f", identifier])
+            except WorkflowError:
+                # A concurrent removal can still be visible when rm fails.
+                if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
+                    raise
+        if self._owned(dispatch_id, name_pattern):
+            raise WorkflowError("sandbox termination not confirmed")
 
     def _wait_for_removal(
         self, dispatch_id: str, name_pattern: str, identifier: str
     ) -> bool:
         try:
-            with dispatch_budget(time.time() + 3):
+            allowance = operation_timeout(3)
+            with dispatch_budget(time.time() + allowance):
                 while identifier in self._owned(dispatch_id, name_pattern):
                     time.sleep(operation_timeout(0.1))
                 return True

@@ -15,13 +15,14 @@ from agent_workflow.runners.coder_runtime import CoderRuntime
     "mode", ["code", "test", "prepare", "publish", "probe"]
 )
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
-    import agent_workflow.runners.coder_runtime as module
+    from agent_workflow.runners import coder_runtime as module, sandbox
 
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
     pem = tmp_path / "app.pem"
     pem.write_text("synthetic")
     config = {
+        "database": str(tmp_path / "disposable.sqlite3"),
         "image": "fixture",
         "model": "gpt-6-luna",
         "pem": str(pem),
@@ -30,6 +31,10 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
     }
     calls, commands = [], []
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
+    monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(
         module, "docker_command", lambda args: commands.append(args)
     )

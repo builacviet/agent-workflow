@@ -25,8 +25,17 @@ from agent_workflow.runners.runtime_plugins import (
     RuntimeSpec,
 )
 from agent_workflow.runners.sandbox import (
+    DockerCreateRejected,
     SandboxManager,
     SandboxPolicy,
+    _DOCKER_HOST,
+    _assert_daemon,
+    _assert_selected_host,
+    _bind_host,
+    _docker_invocation,
+    _environment,
+    _require_engine,
+    _selected_host,
     docker_security_args,
 )
 
@@ -209,26 +218,39 @@ def docker_command(args: list[str]) -> bytes:
             break
 
     timeout = operation_timeout(30)
+    invocation, env = _docker_invocation(args)
     try:
         return subprocess.run(
-            args, capture_output=True, check=True, timeout=timeout
+            invocation, env=env, capture_output=True, check=True, timeout=timeout
         ).stdout
     except subprocess.TimeoutExpired:
         check_deadline()
         raise WorkflowError(f"Docker {operation} timed out") from None
     except subprocess.CalledProcessError as error:
+        if operation == "create" and error.returncode == 1:
+            # Only an exact daemon rejection of the requested immutable image
+            # is terminal. Timeouts, transport errors and conflicts are not.
+            rejection = (error.stderr or b"").strip()
+            image = next((arg for arg in args if re.fullmatch(r"sha256:[0-9a-f]{64}", arg)), None)
+            if image and rejection == b"Error response from daemon: No such image: " + image.encode("ascii"):
+                raise DockerCreateRejected("Docker rejected the sandbox image") from None
         raise WorkflowError(
             f"Docker {operation} failed (exit {error.returncode})"
         ) from None
-    except OSError:
+    except (FileNotFoundError, PermissionError):
+        if operation == "create":
+            raise DockerCreateRejected("could not launch Docker create") from None
         raise WorkflowError(f"could not launch Docker {operation}") from None
+    except OSError:
+        raise WorkflowError(f"Docker {operation} I/O failed") from None
 
 
 def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
     # Output goes to private bounded temporary storage, never Docker logs/chat.
     with tempfile.TemporaryFile() as output:
+        invocation, env = _docker_invocation(args)
         process = subprocess.Popen(
-            args, stdin=subprocess.PIPE, stdout=output, stderr=output
+            invocation, env=env, stdin=subprocess.PIPE, stdout=output, stderr=output
         )
         try:
             started = time.monotonic()
@@ -272,7 +294,7 @@ class CoderRuntime:
     ) -> None:
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
-        database = config.get("database")
+        database = config.get("database") or getattr(service.repository, "db_path", None)
         fence_dir = (
             Path(str(Path(database).resolve()) + ".sandbox-fences")
             if database is not None
@@ -334,13 +356,19 @@ class CoderRuntime:
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
-        self.sandbox.stop(dispatch_id)
-        self.stop(dispatch_id)
+        host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
+        with cleanup_budget(), _bind_host(host):
+            _assert_daemon(daemon_id)
+            self.stop(dispatch_id)
+            self.sandbox.stop(dispatch_id)
+            _assert_daemon(daemon_id)
 
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
             raise WorkflowError("invalid dispatch identifier")
-        with cleanup_budget():
+        host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
+        with cleanup_budget(), _bind_host(host):
+            _assert_daemon(daemon_id)
             for suffix in ("code", "test", "probe", "prepare", "publish"):
                 name = f"my-wfc-{dispatch_id}-{suffix}"
                 # docker rm -f is scoped to our exact persisted names. No v2 operations.
@@ -367,6 +395,7 @@ class CoderRuntime:
                     ]
                 ).strip():
                     raise WorkflowError("runtime termination not confirmed")
+            _assert_daemon(daemon_id)
 
     def docker(
         self,
@@ -377,6 +406,25 @@ class CoderRuntime:
         *,
         code_plan: RuntimePlan | None = None,
     ) -> bytes:
+        dispatch_id = claim["dispatch_id"]
+        host = _DOCKER_HOST.get()
+        if host is None:
+            # The standalone probe/test entry point also needs a durable pin.
+            existing = self.sandbox._engine_path(dispatch_id).exists()
+            host = self.sandbox.recovery_engine(dispatch_id)[0] if existing else _selected_host()
+            with _bind_host(host):
+                if not existing:
+                    self.sandbox.record_engine(dispatch_id, host, _require_engine())
+                return self._docker_bound(claim, stage, mode, prompt, code_plan)
+        return self._docker_bound(claim, stage, mode, prompt, code_plan)
+
+    def _docker_bound(
+        self, claim: dict, stage: Path, mode: str, prompt: str,
+        code_plan: RuntimePlan | None,
+    ) -> bytes:
+        host, daemon_id = self.sandbox.recovery_engine(claim["dispatch_id"])
+        _assert_selected_host(host)
+        _assert_daemon(daemon_id)
         name = f"my-wfc-{claim['dispatch_id']}-{mode}"
         args = [
             "docker",
@@ -410,6 +458,8 @@ class CoderRuntime:
                 f"type=bind,src={key},dst=/run/.secret/coder-app.pem,readonly",
             ]
         command = (mode,)
+        if mode in {"code", "test", "probe"}:
+            args += _environment(code_plan.env if mode == "code" and code_plan else ())
         if mode == "code":
             if (
                 code_plan is None
@@ -425,8 +475,6 @@ class CoderRuntime:
                 "--mount",
                 f"type=volume,src={volume},dst=/home/coder/.codex",
             ]
-            for name, value in code_plan.env:
-                args += ["--env", f"{name}={value}"]
         elif mode not in {"prepare", "publish"}:
             args += ["--network=none"]
 
@@ -445,6 +493,22 @@ class CoderRuntime:
         approved_image_id = self.registry.approved_image_id(request)
         if approved_image_id is not None and not self.config.get("runtime_image"):
             raise WorkflowError("explicit sandbox image required for runtime plugin")
+        host = _selected_host()
+        with _bind_host(host):
+            daemon_id = _require_engine()
+            self.sandbox.record_engine(claim["dispatch_id"], host, daemon_id)
+            result = self._execute_bound(claim, context, request, plan, approved_image_id)
+            _assert_daemon(daemon_id)
+            return result
+
+    def release_engine(self, dispatch_id: str) -> None:
+        """Drop the pin only after the dispatch ledger reaches a terminal state."""
+        self.sandbox.clear_engine(dispatch_id)
+
+    def _execute_bound(
+        self, claim: dict, context: dict, request: RuntimeRequest, plan: RuntimePlan,
+        approved_image_id: str | None,
+    ) -> str:
         task = self.config["tasks"][context["task_id"]]
         stage = (
             Path(task["worktree"])
@@ -481,6 +545,8 @@ class CoderRuntime:
                 "Implement only this authorized task; do not commit/push/approve.\n"
                 + json.dumps(context)
             )
+            _, daemon_id = self.sandbox.recovery_engine(claim["dispatch_id"])
+            _assert_daemon(daemon_id)
             runtime_result = self._run_code(
                 claim, source, request, plan, prompt, approved_image_id
             )

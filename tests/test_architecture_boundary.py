@@ -165,6 +165,9 @@ def test_controller_only_launches_phases_and_receives_result(
         runtime.config.pop("runtime")
         runtime.config.pop("provider")
     calls = []
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("stop"))
 
     def docker(claim, stage, mode, prompt="", *, code_plan=None):
@@ -227,7 +230,11 @@ def test_controller_only_launches_phases_and_receives_result(
             run_once(service, ledger, {"TEST"}, runtime.execute)
         assert ledger.claim({"TEST"}, 60) is None
     else:
-        assert run_once(service, ledger, {"TEST"}, runtime.execute)
+        assert run_once(
+            service, ledger, {"TEST"}, runtime.execute,
+            on_finished=runtime.release_engine,
+        )
+        assert not list((tmp_path / "state.db.sandbox-fences").glob("*.engine"))
         assert (
             service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
         )
@@ -241,7 +248,8 @@ def test_controller_only_launches_phases_and_receives_result(
     assert calls[-1] == "stop"
 
 
-def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
+@pytest.mark.parametrize("definitive", [False, True])
+def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, monkeypatch, definitive):
     database = tmp_path / "state.db"
     config = {"database": str(database)}
     service = WorkflowService(database)
@@ -261,6 +269,8 @@ def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
             return json.dumps([{"Id": pin, "Os": "linux", "Config": {}}]).encode()
         if args[0] == "create":
             name = args[args.index("--name") + 1]
+            if definitive:
+                raise sandbox.DockerCreateRejected("simulated definitive rejection")
             raise WorkflowError("simulated create timeout")
         if args[:2] == ["container", "ls"]:
             if visible:
@@ -276,6 +286,8 @@ def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
             return b""
         raise AssertionError(args)
 
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(coder_runtime, "docker_command", lambda args: b"")
@@ -283,6 +295,7 @@ def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
     def execute(claim, _context):
         nonlocal dispatch_id
         dispatch_id = claim["dispatch_id"]
+        runtime.sandbox.record_engine(dispatch_id, "unix:///fixture.sock", "fixture-daemon-a")
         runtime.sandbox.run(
             sandbox.SandboxPolicy(),
             dispatch_id=dispatch_id,
@@ -297,14 +310,14 @@ def test_late_create_holds_global_slot_until_settled(tmp_path, monkeypatch):
         run_once(service, ledger, {"TEST"}, execute)
     assert name is not None
     args = Namespace(acknowledge=dispatch_id, reconciled=True, once=True)
-    # A new Controller process sees an empty inventory while create is pending.
-    with pytest.raises(WorkflowError, match="create remains uncertain"):
-        operate(config, args)
     assert ledger.claim({"NEXT"}, 60) is None
-
-    # The daemon completes the old request. Now reconciliation can confirm
-    # settlement, remove the owned container, and release the global slot.
-    visible = True
+    if not definitive:
+        # Empty inventory is not proof an accepted request cannot appear later.
+        with pytest.raises(WorkflowError, match="create remains uncertain"):
+            operate(config, args)
+        assert ledger.claim({"NEXT"}, 60) is None
+        visible = True
+    # Operator acknowledgment is still required even for definitive rejection.
     operate(config, args)
     assert not visible
     assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
@@ -496,3 +509,33 @@ def test_controller_compose_parses_without_starting_services():
         capture_output=True,
         timeout=20,
     )
+
+
+def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
+    service = WorkflowService(tmp_path / "test.db")
+    runtime = CoderRuntime({"image": "fixture"}, service)
+    dispatch = "a" * 32
+    host = "unix:///fixture.sock"
+    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)
+    monkeypatch.setattr(sandbox, "_selected_host", lambda: host)
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setenv("HTTPS_PROXY", "http://fixture:synthetic-canary@proxy.invalid")
+    monkeypatch.setenv("DOCKER_CONTEXT", "some-other-context")
+    runtime.sandbox.record_engine(dispatch, host, "fixture-daemon-a")
+
+    def run(args, prompt, remaining):
+        assert "--network=none" in args
+        assert {args[index + 1] for index, arg in enumerate(args) if arg == "--env"} >= {
+            name + "=" for name in sandbox._PROXY_NAMES
+        }
+        invocation, env = sandbox._docker_invocation(args)
+        assert invocation[:3] == ["docker", "--host", host]
+        assert "HTTPS_PROXY" not in env and "DOCKER_CONTEXT" not in env
+        assert all("synthetic-canary" not in arg for arg in invocation)
+        return b"synthetic test output"
+
+    monkeypatch.setattr(coder_runtime, "run_container", run)
+    assert runtime.docker(
+        {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},
+        tmp_path, "test",
+    ) == b"synthetic test output"

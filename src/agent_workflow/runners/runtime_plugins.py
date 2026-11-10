@@ -7,6 +7,30 @@ from typing import Literal, Protocol
 from agent_workflow.integrations.github import WorkflowError, validate_sha
 
 
+_CREDENTIAL_VALUE = re.compile(
+    r"(?i)(?:[a-z][a-z0-9+.-]*://[^/\s]*@|"
+    r"\b(?:bearer\s+|basic\s+|(?:api[_-]?key|access[_-]?token|"
+    r"token|secret|password|credential|authorization)\s*[:=])|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\b(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[a-z0-9_-]{8,})"
+)
+
+
+def credential_env_name(name: str) -> bool:
+    return any(
+        marker in name.upper()
+        for marker in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
+    )
+
+
+def nonsecret_env_value(value: object) -> bool:
+    return (
+        isinstance(value, str) and len(value) <= 4096
+        and (not value or value.isprintable())
+        and _CREDENTIAL_VALUE.search(value) is None
+    )
+
+
 def _identifier(value: str) -> bool:
     return isinstance(value, str) and bool(
         re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value)
@@ -77,6 +101,7 @@ class RuntimeManifest:
     approved_image_id: str | None = None
     approved_plan_env: frozenset[str] = frozenset()
     api_version: int = 1
+    approved_plan_values: frozenset[tuple[str, str]] = frozenset()
 
     def __post_init__(self) -> None:
         if not (
@@ -90,8 +115,15 @@ class RuntimeManifest:
             and all(
                 isinstance(key, str)
                 and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", key)
-                and not any(secret in key for secret in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"))
+                and not credential_env_name(key)
                 for key in self.approved_plan_env
+            )
+            and isinstance(self.approved_plan_values, frozenset)
+            and all(
+                isinstance(pair, tuple) and len(pair) == 2
+                and isinstance(pair[0], str) and pair[0] in self.approved_plan_env
+                and _text(pair[1]) and nonsecret_env_value(pair[1])
+                for pair in self.approved_plan_values
             )
             and type(self.api_version) is int
         ):
@@ -127,8 +159,8 @@ class RuntimePlan:
                 and len(pair) == 2
                 and isinstance(pair[0], str)
                 and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", pair[0])
-                and not any(secret in pair[0] for secret in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH"))
-                and _text(pair[1])
+                and not credential_env_name(pair[0])
+                and _text(pair[1]) and nonsecret_env_value(pair[1])
                 and pair[0] not in names
             ):
                 raise WorkflowError("invalid runtime environment")
@@ -206,6 +238,13 @@ class RuntimeRegistry:
             raise WorkflowError("invalid runtime plan")
         if any(key not in manifest.approved_plan_env for key, _ in plan.env):
             raise WorkflowError("runtime environment is not explicitly approved")
+        # Custom adapters may supply only explicitly approved nonsecret literals.
+        if type(plugin) is CodexCLIPlugin:
+            approved = {("WFC_CODEX_MODEL", request.spec.model)}
+        else:
+            approved = manifest.approved_plan_values
+        if any(pair not in approved for pair in plan.env):
+            raise WorkflowError("runtime environment value is not explicitly approved")
         return plan
 
     def result(

@@ -23,6 +23,8 @@ def run_once(
     task_ids: set[str],
     execute: Callable[[dict, dict], str],
     timeout: int = 1800,
+    *,
+    on_finished: Callable[[str], None] | None = None,
 ) -> bool:
     claim = ledger.claim(task_ids, timeout)
     if claim is None:
@@ -43,6 +45,8 @@ def run_once(
     except BaseException:
         ledger.block(claim["dispatch_id"])
         raise
+    if on_finished is not None:
+        on_finished(claim["dispatch_id"])
     return True
 
 
@@ -112,6 +116,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         # Keep the ledger slot held until Docker settlement is established.
         runtime.reconcile(args.acknowledge)
         ledger.acknowledge(args.acknowledge)
+        runtime.release_engine(args.acknowledge)
         return
     while True:
         try:
@@ -121,6 +126,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
                 set(config["tasks"]),
                 runtime.execute,
                 config.get("timeout_seconds", 1800),
+                on_finished=runtime.release_engine,
             )
         except (WorkflowError, OSError, sqlite3.Error, ValueError):
             # Never log subprocess output, prompts, credentials or task content.

@@ -288,3 +288,34 @@ def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
     other = RuntimeRegistry((EnvPlugin(),))
     with pytest.raises(WorkflowError, match="environment is not explicitly approved"):
         other.plan(fake_request)
+
+
+@pytest.mark.parametrize("value", [
+    "Bearer synthetic-canary",
+    "https://fixture:synthetic-canary@proxy.invalid",
+    "access_token=synthetic-canary",
+    "ghp_synthetic123456789",
+])
+def test_approved_env_key_cannot_carry_credential_canary(value):
+    with pytest.raises(WorkflowError, match="invalid runtime environment"):
+        RuntimePlan(("fake-exec",), (("WFC_PLUGIN_OPTION", value),))
+
+
+def test_runtime_env_requires_an_exact_nonsecret_literal(fake_request):
+    class EnvPlugin(FakePlugin):
+        manifest = replace(
+            FakePlugin.manifest,
+            approved_plan_env=frozenset({"WFC_PLUGIN_OPTION"}),
+            approved_plan_values=frozenset({("WFC_PLUGIN_OPTION", "safe-fixture")}),
+        )
+
+        def plan(self, request):
+            return RuntimePlan(("fake-exec",), (("WFC_PLUGIN_OPTION", self.value),))
+
+    plugin = EnvPlugin()
+    registry = RuntimeRegistry((plugin,))
+    plugin.value = "opaque-canary"
+    with pytest.raises(WorkflowError, match="value is not explicitly approved"):
+        registry.plan(fake_request)
+    plugin.value = "safe-fixture"
+    assert registry.plan(fake_request).env == (("WFC_PLUGIN_OPTION", "safe-fixture"),)
