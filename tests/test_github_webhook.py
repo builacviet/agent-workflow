@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from agent_workflow.integrations.github import REPOSITORY
 from agent_workflow.integrations.github_webhook import WEBHOOK_PATH, GitHubWebhookReceiver
+from agent_workflow.storage.repository import SQLiteWorkflowRepository
 from agent_workflow.storage.webhook_inbox import WebhookInbox, WebhookNotification
 
 
@@ -203,7 +204,12 @@ class GitHubWebhookTests(TestCase):
                     self.assertEqual(db.execute("SELECT count(*) FROM webhook_inbox").fetchone(), (1,))
 
     def test_upgrades_legacy_inbox_without_dropping_existing_replays(self) -> None:
-        path = self.path.with_name("legacy.sqlite3")
+        for workflow_first in (False, True):
+            with self.subTest(workflow_first=workflow_first):
+                self.check_legacy_inbox_upgrade(workflow_first)
+
+    def check_legacy_inbox_upgrade(self, workflow_first: bool) -> None:
+        path = self.path.with_name(f"legacy-{workflow_first}.sqlite3")
         digest = hashlib.sha256(self.body).hexdigest()
         with closing(sqlite3.connect(path)) as db, db:
             db.execute("""
@@ -239,7 +245,14 @@ class GitHubWebhookTests(TestCase):
                 ("704aaefb-66af-46a4-b1cf-6d8d37a28bad", digest),
             )
 
+        if workflow_first:
+            SQLiteWorkflowRepository(path)
+            with closing(sqlite3.connect(path)) as db:
+                self.assertIsNotNone(db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='webhook_delivery_aliases'"
+                ).fetchone())
         receiver = self.make_receiver(WebhookInbox(path))
+        SQLiteWorkflowRepository(path)
         new_id = "704aaefb-66af-46a4-b1cf-6d8d37a28bad"
         replay = signed_headers(self.body, delivery=new_id)
         self.assertEqual(
@@ -354,6 +367,40 @@ class GitHubWebhookTests(TestCase):
             )
         with self.assertRaises(sqlite3.DatabaseError):
             WebhookInbox(path)
+
+    def test_unexpected_inbox_trigger_fails_closed_without_false_ack(self) -> None:
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("""
+                CREATE TRIGGER ignore_webhook BEFORE INSERT ON webhook_inbox
+                BEGIN SELECT RAISE(IGNORE); END
+            """)
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "incompatible webhook"):
+            WebhookInbox(self.path)
+        # The receiver was already initialized when the trigger appeared.
+        headers = signed_headers(self.body)
+        self.assertEqual(
+            self.receiver.handle("POST", WEBHOOK_PATH, headers, self.body),
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+        self.assertIsNone(self.inbox.get(DELIVERY_ID))
+
+    def test_zero_row_insert_is_not_acknowledged(self) -> None:
+        connect = self.inbox._connect
+
+        def connect_with_ignored_insert() -> sqlite3.Connection:
+            db = connect()
+            db.execute("""
+                CREATE TEMP TRIGGER ignore_webhook BEFORE INSERT ON main.webhook_inbox
+                BEGIN SELECT RAISE(IGNORE); END
+            """)
+            return db
+
+        with patch.object(self.inbox, "_connect", side_effect=connect_with_ignored_insert):
+            self.assertEqual(
+                self.receiver.handle("POST", WEBHOOK_PATH, signed_headers(self.body), self.body),
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+        self.assertIsNone(self.inbox.get(DELIVERY_ID))
 
     def test_failed_commit_never_acknowledges_and_allows_retry(self) -> None:
         connect = self.inbox._connect

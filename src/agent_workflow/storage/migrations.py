@@ -1,6 +1,8 @@
 """One atomic, versioned SQLite migration mechanism shared by storage adapters."""
 from collections.abc import Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
+import re
 import sqlite3
 
 
@@ -11,27 +13,60 @@ class Migration:
     upgrade: Callable[[sqlite3.Connection], None]
 
 
-def table_columns(db: sqlite3.Connection, table: str) -> tuple:
-    """Table names are internal constants; never supply user input."""
+_REGISTRY_SQL = """
+    CREATE TABLE schema_migrations (
+        component TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(component, version)
+    )
+"""
+_SQL_TOKEN = re.compile(
+    r"""--[^\r\n]*|/\*[\s\S]*?\*/|'(?:''|[^'])*'|"(?:""|[^"])*"|"""
+    r"""(?:\x60(?:\x60\x60|[^\x60])*\x60)|\[[^\]]*\]|\s+|\w+|."""
+)
+
+
+def _sql_tokens(sql: str | None) -> tuple[str, ...] | None:
+    if sql is None:
+        return None
     return tuple(
-        (row[1], row[2].upper(), row[3], row[5])
-        for row in db.execute(f"PRAGMA table_info({table})")
+        token if token[0] in "'\"[`" else token.lower()
+        for token in _SQL_TOKEN.findall(sql)
+        if not token.isspace() and not token.startswith(("--", "/*"))
     )
 
 
-_MIGRATIONS_COLUMNS = (
-    ("component", "TEXT", 1, 1),
-    ("version", "INTEGER", 1, 2),
-    ("name", "TEXT", 1, 0),
-    ("applied_at", "TEXT", 1, 0),
-)
+def validate_schema(
+    db: sqlite3.Connection,
+    expected_db: sqlite3.Connection,
+    component: str,
+    *,
+    retired_tables: tuple[str, ...] = (),
+) -> None:
+    """Compare owned tables and their attached indexes and triggers."""
+    query = "SELECT type, name, tbl_name, sql FROM main.sqlite_schema"
+    expected = {
+        (kind, name.lower(), table.lower()): _sql_tokens(sql)
+        for kind, name, table, sql in expected_db.execute(query)
+    }
+    owned_tables = {table for _, _, table in expected} | set(retired_tables)
+    owned_names = {name for _, name, _ in expected} | owned_tables
+    actual = {
+        (kind, name.lower(), table.lower()): _sql_tokens(sql)
+        for kind, name, table, sql in db.execute(query)
+        if table.lower() in owned_tables or name.lower() in owned_names
+    }
+    if actual != expected:
+        raise sqlite3.DatabaseError(f"incompatible {component} schema")
 
 
 def table_names(db: sqlite3.Connection) -> set[str]:
     return {
-        row[0] for row in db.execute(
+        row[0].lower() for row in db.execute(
             "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            "WHERE type='table' AND name NOT GLOB 'sqlite_*'"
         )
     }
 
@@ -56,7 +91,7 @@ def migrate(
     migrations: Sequence[Migration],
     *,
     adopt_legacy: Callable[[sqlite3.Connection], int],
-    validate: Callable[[sqlite3.Connection], None],
+    validate: Callable[[sqlite3.Connection, int], None],
 ) -> None:
     """Upgrade a component in one transaction, preserving other components."""
     if not component or not migrations:
@@ -70,17 +105,10 @@ def migrate(
     db.execute("BEGIN IMMEDIATE")
     try:
         if "schema_migrations" not in table_names(db):
-            db.execute("""
-                CREATE TABLE schema_migrations (
-                    component TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY(component, version)
-                )
-            """)
-        if table_columns(db, "schema_migrations") != _MIGRATIONS_COLUMNS:
-            raise sqlite3.DatabaseError("incompatible schema_migrations table")
+            db.execute(_REGISTRY_SQL)
+        with closing(sqlite3.connect(":memory:")) as expected:
+            expected.execute(_REGISTRY_SQL)
+            validate_schema(db, expected, "schema_migrations")
         # sqlite3.Row (used by the workflow adapter) does not compare
         # equal to tuples. Normalize recorded evidence for all adapters.
         recorded = tuple(tuple(row) for row in db.execute(
@@ -104,6 +132,8 @@ def migrate(
                 )
         else:
             adopted = len(recorded)
+            if adopted < len(migrations):
+                validate(db, adopted)
 
         for step in migrations[adopted:]:
             step.upgrade(db)
@@ -111,7 +141,7 @@ def migrate(
                 "INSERT INTO schema_migrations(component, version, name) "
                 "VALUES (?, ?, ?)", (component, step.version, step.name)
             )
-        validate(db)
+        validate(db, len(migrations))
         db.commit()
     except Exception:
         db.rollback()

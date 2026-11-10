@@ -6,25 +6,17 @@ from pathlib import Path
 import sqlite3
 
 from agent_workflow.storage.migrations import (
-    Migration, migrate, table_columns, table_names,
+    Migration, migrate, table_names, validate_schema,
 )
+from agent_workflow.storage.workflow_migrations import LEGACY_WORKFLOW_TABLES
 
 
-_SCHEMA_VERSION = 1
-_INBOX_COLUMNS = (
-    ("delivery_id", "TEXT", 1, 1),
-    ("event", "TEXT", 1, 0),
-    ("action", "TEXT", 1, 0),
-    ("repository", "TEXT", 1, 0),
-    ("installation_id", "INTEGER", 1, 0),
-    ("subject_id", "INTEGER", 1, 0),
-    ("head_sha", "TEXT", 1, 0),
-    ("body_digest", "TEXT", 1, 0),
-)
-_ALIAS_COLUMNS = (
-    ("delivery_id", "TEXT", 1, 1),
-    ("body_digest", "TEXT", 1, 0),
-)
+_LEGACY_ALIAS_SQL = """
+    CREATE TABLE webhook_delivery_aliases (
+        delivery_id TEXT PRIMARY KEY NOT NULL,
+        body_digest TEXT NOT NULL
+    )
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,32 +34,6 @@ class InboxResult(Enum):
     INSERTED = auto()
     DUPLICATE = auto()
     CONFLICT = auto()
-
-
-def _validate_inbox_schema(db: sqlite3.Connection) -> None:
-    # A webhook inbox may share a SQLite file with known workflow tables.
-    allowed = {
-        "schema_migrations", "webhook_inbox", "tasks",
-        "review_attempts", "reviews", "review_findings",
-        "task_events", "coder_dispatches",
-    }
-    if table_names(db) - allowed:
-        raise sqlite3.DatabaseError("unexpected tables in webhook inbox database")
-    if table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
-        raise sqlite3.DatabaseError("incompatible webhook inbox table schema")
-    if "webhook_delivery_aliases" in table_names(db):
-        raise sqlite3.DatabaseError("retired webhook alias table found")
-    indexes = db.execute("PRAGMA index_list(webhook_inbox)").fetchall()
-    digest_indexes = [row for row in indexes if row[1] == "webhook_inbox_body_digest"]
-    if (
-        len(digest_indexes) != 1
-        or digest_indexes[0][2] != 0
-        or digest_indexes[0][4] != 0
-        or tuple(row[2] for row in db.execute(
-            "PRAGMA index_info(webhook_inbox_body_digest)"
-        )) != ("body_digest",)
-    ):
-        raise sqlite3.DatabaseError("incompatible webhook inbox digest index")
 
 
 def _create_webhook(db: sqlite3.Connection) -> None:
@@ -89,35 +55,48 @@ def _create_webhook(db: sqlite3.Connection) -> None:
     """)
 
 
+_WEBHOOK_MIGRATIONS = (Migration(1, "webhook_inbox", _create_webhook),)
+
+
+def _validate_inbox_schema(db: sqlite3.Connection, version: int) -> None:
+    with closing(sqlite3.connect(":memory:")) as expected:
+        for step in _WEBHOOK_MIGRATIONS[:version]:
+            step.upgrade(expected)
+        validate_schema(
+            db, expected, "webhook", retired_tables=("webhook_delivery_aliases",),
+        )
+
+
 def _legacy_webhook(db: sqlite3.Connection) -> int:
     names = table_names(db)
-    allowed = {
-        "schema_migrations", "webhook_inbox", "webhook_delivery_aliases",
-        "tasks", "review_attempts", "reviews", "review_findings",
-        "task_events", "coder_dispatches",
-    }
-    if names - allowed:
-        raise sqlite3.DatabaseError("unexpected legacy webhook tables")
     if "webhook_inbox" not in names:
         if "webhook_delivery_aliases" in names:
             raise sqlite3.DatabaseError("orphaned legacy webhook aliases")
+        # Without an inbox, accept a fresh file or a workflow database. A
+        # registered workflow can have tables added by newer workflow migrations.
+        workflow_registered = db.execute(
+            "SELECT 1 FROM schema_migrations WHERE component = 'workflow' LIMIT 1"
+        ).fetchone()
+        if not workflow_registered and names - (LEGACY_WORKFLOW_TABLES | {"schema_migrations"}):
+            raise sqlite3.DatabaseError("unexpected legacy webhook tables")
         return 0
-    if table_columns(db, "webhook_inbox") != _INBOX_COLUMNS:
-        raise sqlite3.DatabaseError("incompatible legacy inbox schema")
-    if "webhook_delivery_aliases" in names:
-        if table_columns(db, "webhook_delivery_aliases") != _ALIAS_COLUMNS:
-            raise sqlite3.DatabaseError("incompatible legacy alias schema")
-        db.execute("DROP TABLE webhook_delivery_aliases")
+
     db.execute("""
         CREATE INDEX IF NOT EXISTS webhook_inbox_body_digest
         ON webhook_inbox (body_digest)
     """)
+    if "webhook_delivery_aliases" in names:
+        with closing(sqlite3.connect(":memory:")) as expected:
+            expected.execute(_LEGACY_ALIAS_SQL)
+            validate_schema(db, expected, "legacy webhook alias")
+        db.execute("DROP TABLE webhook_delivery_aliases")
+    _validate_inbox_schema(db, 1)
     return 1
 
 
 def _migrate_webhook(db: sqlite3.Connection) -> None:
     migrate(
-        db, "webhook", (Migration(1, "webhook_inbox", _create_webhook),),
+        db, "webhook", _WEBHOOK_MIGRATIONS,
         adopt_legacy=_legacy_webhook,
         validate=_validate_inbox_schema,
     )
@@ -165,7 +144,13 @@ class WebhookInbox:
             ).fetchone() is not None:
                 return InboxResult.DUPLICATE
 
-            db.execute(
+            # Also reject triggers installed after this adapter was opened.
+            if db.execute(
+                "SELECT 1 FROM main.sqlite_schema WHERE type='trigger' "
+                "AND tbl_name = 'webhook_inbox' COLLATE NOCASE LIMIT 1"
+            ).fetchone() is not None:
+                raise sqlite3.DatabaseError("unexpected webhook inbox trigger")
+            inserted = db.execute(
                 """
                 INSERT INTO webhook_inbox (
                     delivery_id, event, action, repository, installation_id,
@@ -179,6 +164,8 @@ class WebhookInbox:
                     notification.head_sha, body_digest,
                 ),
             )
+            if inserted.rowcount != 1:
+                raise sqlite3.DatabaseError("webhook notification was not inserted")
             return InboxResult.INSERTED
 
     def get(self, delivery_id: str) -> WebhookNotification | None:
