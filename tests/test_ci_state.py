@@ -28,7 +28,7 @@ def evidence(verdict="SUCCESS", sha=B):
     return CiEvidence(
         "T", REPO, 17, 21, sha, sha, sha, "Python tests",
         "github-actions", verdict, "REQUIRED_CHECK_PASSED" if verdict == "SUCCESS"
-        else "REQUIRED_CHECK_FAILED", 7, None, None,
+        else "REQUIRED_CHECK_FAILED", 7, 44, 1,
         "2026-11-10T00:00:00Z", "2026-11-10T00:01:00Z",
     )
 
