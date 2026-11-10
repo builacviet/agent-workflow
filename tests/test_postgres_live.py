@@ -218,3 +218,66 @@ def test_postgres_webhook_concurrent_duplicate_digest_only_one_insert(pg):
             "ffffffff-ffff-4fff-8fff-ffffffffffff",
         )))
     assert sorted(x.name for x in results) == ["DUPLICATE", "INSERTED"]
+
+def test_postgres_ci_state_tracks_exact_head_and_sticky_failure(pg):
+    from agent_workflow.domain.service import WorkflowService
+    from agent_workflow.integrations.ci_gate import CiEvidence
+    from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+    from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
+
+    service = WorkflowService(repository=PostgresWorkflowRepository(DSN), db_path=DSN)
+    task = {
+        "task_id": "PG-CI-001", "title": "CI tracking", "description": "CI tracking",
+        "acceptance_criteria": ["AC"], "definition_of_done": "CI",
+        "repository": "builacviet/agent-workflow", "branch": "codex/pg-ci",
+        "base_sha": "a" * 40, "requested_effort": "high", "risk_level": "high",
+        "require_verified_effort": True, "context_paths": ["docs/handoff.md"],
+        "synthetic": True,
+    }
+    service.provision_task(task)
+    service.register_task_handoff(
+        "PG-CI-001", "builacviet/agent-workflow", "codex/pg-ci",
+        "a" * 40, "c" * 40, "docs/handoff.md", "CI pending",
+    )
+    state = PostgresControllerCiState(DSN)
+    assert not state.approved("PG-CI-001", "c" * 40)
+    state.track("PG-CI-001", 71, "c" * 40)
+    state.track("PG-CI-001", 71, "c" * 40)
+    assert state.tracked()[0]["task_id"] in {"PG-CI-001", "PG-TEST-001"}
+    success = CiEvidence(
+        "PG-CI-001", "builacviet/agent-workflow", 17, 71,
+        "c" * 40, "c" * 40, "c" * 40, "Python tests", "github-actions",
+        "SUCCESS", "REQUIRED_CHECK_PASSED", 123, 234, 1,
+        "2026-11-10T00:00:00Z", "2026-11-10T00:01:00Z",
+    )
+    state.record(success)
+    assert state.approved("PG-CI-001", "c" * 40)
+    failure = CiEvidence(
+        "PG-CI-001", "builacviet/agent-workflow", 17, 71,
+        "c" * 40, "c" * 40, "c" * 40, "Python tests", "github-actions",
+        "FAILURE", "REQUIRED_CHECK_FAILED", 122, 233, 1,
+        "2026-11-10T00:00:00Z", "2026-11-10T00:02:00Z",
+    )
+    state.record(failure)
+    assert not state.approved("PG-CI-001", "c" * 40)
+    assert state.previous_failure("PG-CI-001", "c" * 40)
+    state.record(success)
+    assert not state.approved("PG-CI-001", "c" * 40)
+
+
+def test_postgres_ci_processed_webhook_ledger(pg):
+    from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
+    from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
+    from agent_workflow.storage.webhook_inbox import WebhookNotification, InboxResult
+
+    item = WebhookNotification(
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaabbbb", "workflow_run", "completed",
+        "builacviet/agent-workflow", 17, 41, "c" * 40,
+    )
+    inbox = PostgresWebhookInbox(DSN)
+    assert inbox.record(item, "e" * 64) is InboxResult.INSERTED
+    state = PostgresControllerCiState(DSN)
+    assert item.delivery_id in {x.delivery_id for x in state.pending_events()}
+    state.mark_processed(item.delivery_id)
+    state.mark_processed(item.delivery_id)
+    assert item.delivery_id not in {x.delivery_id for x in state.pending_events()}
