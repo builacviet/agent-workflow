@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
 from agent_workflow.storage.ci_state import ControllerCiState
