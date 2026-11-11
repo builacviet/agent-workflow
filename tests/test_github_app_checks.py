@@ -268,3 +268,39 @@ def test_n1_unfinished_workflow_still_blocks_even_with_old_green_evidence():
     }
     ev = _n1_history_verdict([green, pending])
     assert (ev.verdict, ev.reason) == ("BLOCKED", "GITHUB_READ_UNAVAILABLE")
+
+
+@pytest.mark.parametrize("job_conclusion", ["cancelled", "timed_out", "skipped"])
+def test_n1_latest_job_non_verdict_never_reuses_old_success(job_conclusion):
+    # A 'success' workflow run is not proof that the latest required job ran.
+    run = {
+        "id": 501, "attempt": 2, "conclusion": "success",
+        "jobs": [(601, 1, "success"), (602, 2, job_conclusion)],
+    }
+    ev = _n1_history_verdict([run])
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "GITHUB_READ_UNAVAILABLE")
+
+
+@pytest.mark.parametrize("workflow_conclusion,latest_job_conclusion", [
+    ("success", "failure"),
+    ("failure", "success"),
+    ("failure", "cancelled"),
+])
+def test_n1_latest_job_workflow_conclusion_mismatch_blocks(
+    workflow_conclusion, latest_job_conclusion,
+):
+    run = {
+        "id": 501, "attempt": 2, "conclusion": workflow_conclusion,
+        "jobs": [(601, 1, "success"), (602, 2, latest_job_conclusion)],
+    }
+    ev = _n1_history_verdict([run])
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "GITHUB_READ_UNAVAILABLE")
+
+
+def test_n1_completed_success_without_latest_required_job_cannot_reuse_old():
+    run = {
+        "id": 501, "attempt": 2, "conclusion": "success",
+        "jobs": [(601, 1, "success")],
+    }
+    ev = _n1_history_verdict([run])
+    assert (ev.verdict, ev.reason) == ("BLOCKED", "GITHUB_READ_UNAVAILABLE")
