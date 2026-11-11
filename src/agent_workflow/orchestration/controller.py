@@ -187,7 +187,9 @@ def _ci_operator(config: dict, *, watch: bool) -> None:
     while True:
         try:
             observations = ci.reconcile_once()
-            if any(e.reason == "GITHUB_READ_UNAVAILABLE" for e in observations):
+            # A retained BLOCKED inbox may require multiple GitHub reads.
+            # Bound retries for missing/pending checks as well as API errors.
+            if any(e.verdict == "BLOCKED" for e in observations):
                 delay = min(60, delay * 2)
             else:
                 delay = 2

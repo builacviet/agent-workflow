@@ -76,10 +76,10 @@ class ControllerCiCoordinator:
             ):
                 raise WorkflowError("CI inbox has incompatible notification")
         observations = self.observe_all()
-        if any(
-            e.reason in {"GITHUB_READ_UNAVAILABLE", "DURABLE_HISTORY_UNVERIFIED"}
-            for e in observations
-        ):
+        # BLOCKED means CI evidence is not terminal, even when GitHub was
+        # reachable. Keep the signed wake-up until a fresh observation decides
+        # SUCCESS or FAILURE; checks may appear after the webhook arrives.
+        if any(e.verdict == "BLOCKED" for e in observations):
             return observations
         for notification in notifications:
             self.state.mark_processed(notification.delivery_id)
