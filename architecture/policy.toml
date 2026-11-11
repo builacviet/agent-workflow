@@ -1,0 +1,185 @@
+# Agent Workflow architecture import policy. Reviewed modifications require Owner/Tech Lead approval.
+# Exact legacy edges are quarantined; never add wildcard exemptions.
+version = 1
+
+[forbidden_imports]
+domain = ["agent_workflow.application", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "agent_workflow.paths", "coder_worker"]
+application = ["agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "coder_worker"]
+storage = ["agent_workflow.domain.service", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
+integrations = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
+runners = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
+mcp = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
+orchestration = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "coder_worker"]
+interfaces = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.infrastructure", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "coder_worker"]
+infrastructure = ["agent_workflow.mcp", "agent_workflow.interfaces", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "coder_worker"]
+coder_worker = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap"]
+
+[ownership]
+"src/agent_workflow/domain/**" = "domain"
+"src/agent_workflow/application/**" = "application"
+"src/agent_workflow/infrastructure/**" = "infrastructure"
+"src/agent_workflow/interfaces/**" = "interfaces"
+"src/agent_workflow/bootstrap/**" = "bootstrap"
+"src/agent_workflow/composition/**" = "bootstrap"
+"src/agent_workflow/storage/**" = "persistence-legacy"
+"src/agent_workflow/integrations/**" = "integration-legacy"
+"src/agent_workflow/runners/**" = "runtime-legacy"
+"src/agent_workflow/mcp/**" = "mcp-legacy"
+"src/agent_workflow/orchestration/**" = "orchestration-legacy"
+"src/coder_worker/**" = "trusted-worker"
+"architecture/**" = "architecture-governance"
+"docs/adr/AW-001-clean-architecture-governance.md" = "architecture-governance"
+
+# The single accepted runner cycle is retired during R2; any additional cycle fails CI.
+[cycles]
+legacy = [["agent_workflow.runners.coder_runtime", "agent_workflow.runners.sandbox"]]
+
+[[legacy_imports]]
+path = "src/agent_workflow/domain/service.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/domain/service.py"
+module = "agent_workflow.paths"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/domain/service.py"
+module = "agent_workflow.storage.repository"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/ci_state.py"
+module = "agent_workflow.domain.service"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/ci_state.py"
+module = "agent_workflow.integrations.ci_gate"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/ci_state.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/dispatch_repository.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/dispatch_repository.py"
+module = "agent_workflow.domain.service"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/repository.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/storage/workflow_migrations.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/integrations/ci_controller.py"
+module = "agent_workflow.storage.ci_state"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/integrations/github_webhook.py"
+module = "agent_workflow.storage.webhook_inbox"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/integrations/webhook_http.py"
+module = "agent_workflow.storage.webhook_inbox"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/coder_runtime.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/coder_runtime.py"
+module = "agent_workflow.domain.service"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/coder_runtime.py"
+module = "agent_workflow.storage.dispatch_repository"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/coder_runtime.py"
+module = "agent_workflow.storage.ci_state"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/runtime_plugins.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/sandbox.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/runners/sandbox_watchdog.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/mcp/tools.py"
+module = "agent_workflow.domain.service"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.domain.service"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.storage.dispatch_repository"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.runners.coder_runtime"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.integrations.ci_controller"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.integrations.github_app_checks"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/agent_workflow/orchestration/controller.py"
+module = "agent_workflow.storage.ci_state"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/coder_worker/app_auth.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
+
+[[legacy_imports]]
+path = "src/coder_worker/github.py"
+module = "agent_workflow.integrations.github"
+reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
