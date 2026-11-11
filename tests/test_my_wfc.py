@@ -351,6 +351,17 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
 
     engine, _, _ = env
     ready(engine)
+    # Production MCP composition now requires trusted exact-HEAD CI; create
+    # synthetic local evidence instead of disabling the gate for this test.
+    from agent_workflow.storage.ci_state import ControllerCiState
+    from agent_workflow.integrations.ci_gate import CiEvidence
+    ci = ControllerCiState(engine.db_path)
+    ci.track("TEST", 21, HEAD)
+    ci.record(CiEvidence(
+        "TEST", REPO, 17, 21, HEAD, HEAD, HEAD,
+        "Python tests", "github-actions", "SUCCESS", "REQUIRED_CHECK_PASSED",
+        71, 72, 1, "2026-11-11T00:00:00Z", "2026-11-11T00:01:00Z",
+    ))
     monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
     monkeypatch.setenv("WFC_REVIEWER_ID", "http-test-reviewer")
     monkeypatch.setenv("WFC_DB_PATH", engine.db_path)

@@ -113,7 +113,8 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         return _ci_operator(config, watch=bool(getattr(args, "ci_watch", False)))
     from agent_workflow.runners.coder_runtime import CoderRuntime
 
-    service = WorkflowService(config["database"])
+    # Operational Controller must never inherit the optional legacy CI env flag.
+    service = WorkflowService(config["database"], require_ci=True)
     ledger = DispatchLedger(service)
     runtime = CoderRuntime(config, service)
     if args.acknowledge:
