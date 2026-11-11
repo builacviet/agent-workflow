@@ -63,5 +63,8 @@ jobs:
           : > .runtime/controller-webhook.env
           : > .runtime/ngrok.env
 
+      - name: Enforce architecture import and cycle policy
+        run: python -m pytest -q tests/test_architecture_policy.py
+
       - name: Run pytest
         run: python -m pytest -q

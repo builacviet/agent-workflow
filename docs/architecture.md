@@ -1,56 +1,41 @@
-# Architecture — CURRENT code and Phase 3.1 baseline
+# Agent Workflow architecture — canonical entrypoint
 
-> **Scope:** This document describes the existing source/package and Phase 3.1 POC behavior; a particular running deployment requires separate verification. The **Owner-selected TARGET design** is in [CL-12 consolidated ADR](adr/CL-12-architecture.md) with [security](adr/CL-12-executor-security.md) and [deployment](adr/CL-12-deployment.md) details. Rootless Podman/Linux-host Executor, four isolated stage containers, GHCR and Grafana are **not claimed implemented here**. Read the [agent documentation map](INDEX.md) to select only task-relevant sections.
+**CURRENT source baseline:** main@81f9bf10d3bcb2752cd6010f8821ae7c7872c87d (merged PR #37, 2026-11-11). This is a source fact, **not** proof of production deployment. Recheck GitHub before treating it as current.
 
-`models.py` contains frozen `OrderItem` and `Order` values with validation and computed `Decimal` totals. `service.py` owns a per-instance dictionary, creates validated orders with sequential string IDs and looks them up. `__init__.py` exports the public API. Tests depend only on that API and pytest.
+**TARGET (PROPOSED, pending Owner PR approval):** [ADR-AW-001 Clean Architecture + Multi-Agent Governance](adr/AW-001-clean-architecture-governance.md). The [machine-readable import/debt policy](../architecture/policy.toml), [Worker Adapter contract](architecture/worker-runtime-plugins.md) and [Agent Task Contract](templates/agent-task-contract.md) define the R0 governance proposal.
 
-## Invariants and boundaries
+## CURRENT — as-built
 
-- Product/order IDs must be nonblank strings. Quantities are positive integers; booleans are rejected. Prices must be finite, nonnegative `Decimal` values; free items are allowed.
-- An order contains at least one valid item in an immutable tuple. The service copies the incoming iterable before storing an order. Invalid creation does not store anything or consume an ID.
-- Line total is quantity times unit price; order total is the sum of line totals. No taxes, discounts, currency conversion or quantization are implied. Calculations use the caller's Decimal context (default precision 28); extreme magnitudes are outside this small POC's guarantees.
-- Domain models do not depend on the service or external systems. The service depends on models and Python's standard library only. There is no persistence, network access or workflow implementation.
-- IDs and storage are scoped to one service instance. Data is lost on restart; concurrent access is unsupported. Repeated valid creation calls currently produce distinct orders. Idempotency is a proposed future task only.
-
-## Errors and verification
-
-Use `TypeError` for unsupported input types, `ValueError` for invalid values and `KeyError` for unknown order IDs. Do not suppress errors or mutate storage before validation succeeds.
-
-Deterministic unit tests cover totals, validation (including NaN/infinities and booleans), immutable snapshots, independent storage, missing IDs and failure atomicity. Review must preserve these invariants and dependency boundaries. No integration infrastructure is needed for Phase 1.
-
-## Historical Phase 2.2 `my_wfc` baseline (superseded where noted)
-
-The preceding application invariants describe order_service only; its source and baseline tests are unchanged. my_wfc is a separate package with an optional MCP SDK dependency and no imports to/from order_service. At Phase 2.2 this documentation described the service, five-table SQLite schema version 1, atomic transitions, lease recovery, **historical in-service remote-SHA verification (superseded in CURRENT Phase 3.1)**, two completed-review-round limit and immutable review/finding history. **CURRENT `agent_workflow/integrations/github.py` only validates SHA formatting; WFC does not contact GitHub to verify remote heads. Tech Lead performs remote verification separately via GitHub.** **By default**, all seven workflow tools require authentication. **CURRENT MCP auth is mode-dependent**: `WFC_AUTH_MODE=bearer` is the default and retains legacy tool-level public `ping/get_server_info`; `WFC_AUTH_MODE=auth0` is opt-in and the OAuth HTTP middleware requires a bearer token for the **entire `/mcp` endpoint, including ping/info**. **Unsafe, opt-in Bearer-mode POC exception:** if `WFC_POC_NO_AUTH=1` and `WFC_DB_PATH` is an absolute path whose filename is exactly `workflow-poc-unauth.sqlite3`, all seven workflow tools (including handoff/verdict mutations) can run without credentials. This is **not authentication** and must not be exposed through a public endpoint; Phase 3.1 Compose explicitly sets `WFC_POC_NO_AUTH: "0"`. Verify the actual running environment before concluding any MCP endpoint is protected. These are source/configuration facts, not proof of deployment settings; see [OAuth runbook](auth0-oauth.md), `src/agent_workflow/mcp/security.py`, `src/agent_workflow/mcp/server.py` and `compose.yaml`. Verified-effort approval stays fail-closed without trusted evidence.
-
-See my-wfc.md for the complete workflow architecture and migration-my-wfc.md for provenance, stable data paths, packaged resources and fixture strategy. SQLite belongs to ignored local data, never the Git repository. TASK-001 is imported ESCALATED at 2/2 rounds with its original references; no task implementation changes are part of migration. The new synthetic seed pins its real baseline through poc/review-baseline so advancing main does not invalidate a new fixture. Existing copied metadata is never silently retargeted.
-
-## Current Phase 3.1 boundaries (owner-authorized 2026-11-05)
-
-- `order_service` remains independent and unchanged.
-- `WorkflowService` implements domain rules using `WorkflowRepository` / `WorkflowUnit` Protocols. SQL, schema initialization and SQLite transaction/connection management live in `storage/repository.py`. Tests can inject a memory implementation without SQLite. Existing schema/data/history remain compatible; no new evidence table.
-- `storage/dispatch_repository.py` owns atomic SQLite dispatch storage. The **CURRENT trusted host Controller invokes Docker CLI against the host engine directly**, coordinates one task at a time and validates local results; it never runs Git or calls GitHub. This broad engine authority is a **CURRENT risk**, not the TARGET restricted Executor IPC. See [CURRENT incident evidence guide](guides/dispatch-recovery.md).
-- `coder_worker` owns GitHub App auth, cancellable HTTP, Git clone/commit/ordinary push and draft PR. It runs only inside the independent worker image in prepare/publish phases. Source editing and credential-free tests see only a snapshot, not Git metadata, result files, PEM or DB. No Docker socket is mounted.
-- WFC **normally authenticates** handoff/verdict submissions (Bearer or Auth0) and matches their SHA against task/claim/round in SQLite; the explicitly unsafe Bearer-mode POC bypass above can disable credential checks for **all seven workflow tools** when enabled with its special disposable DB path. Check the effective runtime mode before treating handoff/verdict callers as authenticated. Tech Lead independently checks remote SHA via GitHub plugin. WFC never claims current remote approval freshness and has no GitHub credential or adapter dependency.
-- GitHub App/model live checks remain operator work when credentials are provisioned. **Auth0 OAuth is available as an optional MCP authentication mode**, not asserted active; no v2 Executor, Notion integration, automatic verdict or merge is implied by Phase 3.1.
-
-## V1-R02 source layout
-
-The `agent_workflow` package groups the current implementation by responsibility.
-
-| Package | Responsibility |
+| Package/process | Actual responsibility and known limitations |
 | --- | --- |
-| `domain` | Task and review contracts and workflow transitions |
-| `storage` | SQLite workflow and dispatch repositories and the version 1 schema |
-| `orchestration` | Host Controller, including dispatch and reconciliation coordination |
-| `runners` | Docker/Codex runtime and stage lifecycle |
-| `integrations` | GitHub repository identity, legacy slug handling and SHA validation |
-| `mcp` | Streamable HTTP server, tool adapters, Bearer security and Auth0 verification |
+| agent_workflow/domain | Public workflow contracts; service.py still combines application use cases and SQLite default composition |
+| agent_workflow/storage | SQLite workflow, dispatch, CI and webhook ledgers/migrations; adapters import concrete service/integration in places |
+| agent_workflow/integrations | GitHub identity, read-only Controller GitHub App Checks, CI coordination and signed webhook HTTP handling |
+| agent_workflow/mcp | MCP server and nine tools (7 workflow + ping/info), Auth0 OAuth and legacy Bearer options |
+| agent_workflow/orchestration | Trusted host Dev Controller and independent CI-only watcher CLI |
+| agent_workflow/runners | Docker phase coordination, sandbox/watchdog, Codex and approved Dev/Code runtime plugin selection |
+| coder_worker | Trusted worker for Prepare/Publish, separate GitHub App credentials and Git operations |
+| my_wfc and flat agent_workflow wrappers | Legacy CLI/import compatibility, not a new architectural layer |
+| order_service | Independent in-memory POC sample; removal requires dependency check |
 
-The MCP tools and local admin share the domain's default service factory. The Controller
-uses the same service with the dispatch ledger and runner. GitHub App network
-operations stay in `coder_worker`, which owns Prepare and Publish. The root
-`admin.py`, `budget.py`, `paths.py` and `resources/` remain shared as before.
-Existing flat Python imports and the `agent_workflow` and `my_wfc` CLI entrypoints
-forward to the modular implementation.
+**CURRENT Compose:** mcp, webhook, nginx router, optional ngrok tunnel; shared SQLite persistence. No merged Controller or PostgreSQL Compose service. Controllers run as host CLIs; no deployed systemd unit files are claimed. Worker stages (Prepare → Code → Test → Publish) are ephemeral Docker containers; Code/Test are credential-free.
 
-See docs/phase-3.1.md for current operator instructions. Earlier remote-verification descriptions above are historical migration evidence superseded by this boundary and docs/review-policy.md.
+PR #37 merged CI/webhook wiring. Local supervised smoke previously checked OAuth discovery, anonymous MCP denial, signed/unsigned webhook responses and read-only GitHub App Checks. Full trusted worker → CI tracking → Controller verdict → review E2E remains deferred and no production stack is proven. Exact-SHA GitHub Actions tests are **test evidence**, not deployment evidence.
+
+**Known correctness debt:** CI gate remains opt-in in application composition; READY_IN_REVIEW rejects a different repair HEAD even after trusted CI failure; Controller/Worker external publication cannot be atomically committed with the DB. Source modules have cross-layer dependencies and one runner import cycle. See Kimi's read-only audit and validate against source/HEAD before treating findings as fixed.
+
+## TARGET — subject to ADR and stage-specific acceptance
+
+- PostgreSQL-backed modular monolith with Domain, Application/Ports, Infrastructure Adapters, Interfaces and composition roots.
+- Linux/systemd trusted Controller and CI watcher; Docker Compose MCP/webhook/router/PostgreSQL; ephemeral Docker Worker stages.
+- PostgreSQL row locks, uniqueness, leases, fencing, idempotency, explicit publication intent/reconciliation; one V1 dispatch slot.
+- Plug-and-play Worker Runtime adapters with approved versioned manifests and a **separate** execution backend abstraction; future Podman/other roles are optional, not implemented.
+- Mandatory import-boundary CI, scoped task contracts and separate Owner gate for contracts, schemas and credential boundaries.
+
+## Documentation precedence
+
+- CURRENT: source/merged commit and independently verified runtime evidence, then this overview and [Phase 3.1 runbook](phase-3.1.md) for applicable historical operations.
+- Approved V1 scope: [V1 scope and gates](v1-scope-and-gates.md) and the task's Owner approval.
+- Proposed target: ADR-AW-001 **only after Owner merge/acceptance**; it does not authorize a production cutover.
+- HISTORICAL: CL-12 target design for SQLite/Compose Controller/Podman Executor, including [CL-12 architecture](adr/CL-12-architecture.md), [deployment](adr/CL-12-deployment.md) and [persistence](adr/CL-12-persistence.md), now superseded in the proposed target by Owner's PostgreSQL decision. Historical ADRs are not erased.
+- Legacy POC references: [my-wfc](my-wfc.md), [order_service](../src/order_service/) and [historical notes](migration-my-wfc.md). Do not read them for new-workflow architectural authority.

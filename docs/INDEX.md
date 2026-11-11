@@ -1,5 +1,7 @@
 # Documentation map — agent fast start
 
+**R0 architecture governance proposal (pending Owner merge):** [Canonical as-built and target routing](architecture.md) → [ADR-AW-001](adr/AW-001-clean-architecture-governance.md) → [AST import policy](../architecture/policy.toml) → [Worker Adapter contract](architecture/worker-runtime-plugins.md). The Owner has selected PostgreSQL as the target; older CL-12 SQLite/Compose Controller/Podman target assumptions are historical, not current production instructions. Exact merged code and runtime evidence still take precedence.
+
 **Purpose:** Find enough trustworthy project context for one authorized task without loading the whole repository. This index is a *router*, not a substitute for reading the relevant contract, source code and tests. Last reconciled for merged baseline: 2026-11-07, after DOC-02 [PR #16](https://github.com/builacviet/agent-workflow/pull/16) (merge `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`). Later documentation proposals are not assumed merged.
 
 **V1 delivery route (Owner-approved in PR #22):** [V1 scope and gate contract](v1-scope-and-gates.md) is the implementation scope authority for V1. It takes precedence over CL-12/M01 *target implementation decisions* for V1 only; it does **not** imply that V1 runtime gates are already implemented. Executor/Podman are not part of V1.
@@ -18,7 +20,7 @@
 | Class | Source of truth | Interpretation |
 | --- | --- | --- |
 | **CURRENT (as-built)** | [`architecture.md`](architecture.md), [Phase 3.1 runbook](phase-3.1.md), relevant code/tests | What the repository currently implements; deployments need separate verification |
-| **TARGET (Owner-selected development design)** | [CL-12 consolidated ADR](adr/CL-12-architecture.md), with [Executor security](adr/CL-12-executor-security.md) and [deployment](adr/CL-12-deployment.md) | Rootless Podman Linux-host Executor, authenticated typed IPC, ephemeral Prepare/Coder/Test/Publish, GHCR digest cache and staged observability. **Not implemented or production-approved by merging an ADR** |
+| **TARGET (proposed new governance, pending Owner approval)** | [ADR-AW-001](adr/AW-001-clean-architecture-governance.md), [Worker adapters](architecture/worker-runtime-plugins.md) | PostgreSQL-backed modular monolith, host-systemd Controller/CI watcher, Compose ingress/DB, approved plugin ports. Not deployed. |
 | **EVIDENCE / HISTORY** | [ADR inventory](adr/CL-12-current-state.md), [historical handoffs](history/handoff-log.md), [old workflow notes](poc-workflow.md), reviewed PRs | Dated snapshots, decisions, limitations; not automatically today's running state |
 
 **As of 2026-11-07:** CL-12.5 [PR #11](https://github.com/builacviet/agent-workflow/pull/11), CL-12.6 [PR #12](https://github.com/builacviet/agent-workflow/pull/12) and CL-12.7 [PR #13](https://github.com/builacviet/agent-workflow/pull/13) are **merged as documentation**. Controller→Executor IPC transport and crash/job idempotency are *pending implementation/test*, not settled runtime facts. P1 [PR #14](https://github.com/builacviet/agent-workflow/pull/14) is a 2026-11-06 **BLOCKED read-only preflight**; later WSL2 P2/P3 are limited feasibility reports, with P3 source evidence review outstanding. Before making a time-sensitive claim, re-check GitHub and the active Notion status.
@@ -32,12 +34,12 @@
 | Existing WFC/MCP/Controller bug or operation | Start at the [CURRENT Phase 3.1 runbook](phase-3.1.md) and only the affected source/tests; [my-wfc.md](my-wfc.md) contains **historical pre-Phase-3.1 assumptions** and is reference-only for older WFC behavior |
 | **Controller timeout / Docker CLI disconnect / uncertain GitHub publish** | Go **directly** to the [CURRENT dispatch/recovery evidence + source/test map](guides/dispatch-recovery.md), then [Phase 3.1 runbook](phase-3.1.md) and selected code/test symbols; do **not** load the full ADR set by default |
 | Auth0/OAuth | [Active OAuth runbook](auth0-oauth.md); [superseded notes](oauth-auth0.md) **only** for historical context |
-| SQLite/schema/migration | [CL-12 persistence ADR](adr/CL-12-persistence.md), [consolidated ADR](adr/CL-12-architecture.md) relevant sections, live source/tests; do not infer migration is deployed |
+| SQLite/schema/migration | [Current code + target route](architecture.md), [proposed PostgreSQL ADR-AW-001](adr/AW-001-clean-architecture-governance.md), actual storage tests; older [SQLite ADR](adr/CL-12-persistence.md) is historical |
 | Executor / worker security / Podman | [CL-12 consolidated ADR](adr/CL-12-architecture.md), [Executor security](adr/CL-12-executor-security.md), [deployment](adr/CL-12-deployment.md), applicable approved task and negative-test plan |
 | CI images / GHCR / telemetry | [Deployment ADR §§9–10](adr/CL-12-deployment.md), [consolidated ADR](adr/CL-12-architecture.md); future implementation requires explicit authorization |
 | Manual local development / Codex task setup | [Local worktree guide](guides/local-worktrees.md) for branch, base, path and handoff checks |
 | Tech Lead review or Coder handoff | [Review policy](review-policy.md), [short handoff template](templates/handoff.md), exact PR diff/AC and actual test results; history only if comparison matters |
-| Architecture change / cross-module refactor | [Consolidated ADR](adr/CL-12-architecture.md), [module boundaries](adr/CL-12-module-boundaries.md), [current-state inventory](adr/CL-12-current-state.md) only where needed |
+| Architecture change / cross-module refactor | [Canonical architecture](architecture.md), [proposed ADR-AW-001](adr/AW-001-clean-architecture-governance.md), [import policy](../architecture/policy.toml), [Agent Task Contract](templates/agent-task-contract.md); historical CL-12 ADRs only if needed |
 | Deployment / migration operations | [Current Phase 3.1 runbook](phase-3.1.md), [V1-03C local integration](guides/v1-03c-local-webhook.md); [retired Docker MCP POC](docker-mcp.md) is history only, then target [deployment ADR](adr/CL-12-deployment.md) **as proposal**, not run instructions |
 
 ## Navigation by purpose
@@ -45,7 +47,7 @@
 - **V1 delivery:** [V1 scope and gates](v1-scope-and-gates.md) → Owner-approved planning package / task AC → exact-HEAD evidence → per-PR Owner merge gate.
 - **Contracts:** [`AGENTS.md`](../AGENTS.md) → [review policy](review-policy.md) → [handoff template](templates/handoff.md) → relevant authorized task (for example, [CL-12](tasks/CL-12.md)).
 - **As-built:** [architecture](architecture.md) → [Phase 3.1 CURRENT runbook](phase-3.1.md) → [scenario-specific source/test map](guides/dispatch-recovery.md) when relevant. [my-wfc](my-wfc.md) is partly historical, not the default dispatch authority.
-- **Target:** [CL-12 summary](adr/CL-12-architecture.md) → open the exact linked ADR section relevant to the current task.
+- **Target:** [proposed AW-001](adr/AW-001-clean-architecture-governance.md) → approved task; older CL-12 decisions are historical/superseded for PostgreSQL and runtime placement.
 - **Historical:** [old handoff log](history/handoff-log.md), [migration notes](migration-my-wfc.md), [POC workflow](poc-workflow.md), [historical TASK-001](tasks/TASK-001.md). These are not general startup reading.
 
 ## Token and evidence discipline

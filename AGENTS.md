@@ -28,3 +28,11 @@
 - The previous Phase 2.2 no-Controller/scheduler scope had a narrowly authorized **Phase 3.1 exception**. Read the actual task and [Phase 3.1 AC](docs/tasks/PHASE-3.1.md) rather than interpreting old prohibitions as a ban on already authorized functionality. No Phase 3.2, production Executor, new CI/registry or Grafana deployment is implied.
 
 **Missing, contradictory or stale context?** Follow the [documentation index](docs/INDEX.md), recheck current source, accepted ADR/PR SHA and active Owner decision; report uncertainty rather than guessing or expanding the task.
+
+## Architecture governance (ADR-AW-001 Draft PR, pending Owner merge)
+
+- Canonical architecture navigation: [docs/architecture.md](docs/architecture.md). Proposed Clean Architecture and multi-agent rules: [ADR-AW-001](docs/adr/AW-001-clean-architecture-governance.md). Read only task-relevant sections; historical CL-12 design is not an executable V1 authorization.
+- Source imports are checked by Python AST against [architecture/policy.toml](architecture/policy.toml). Listed legacy import edges and the one runner cycle are an exact baseline, **not approved patterns for new code**. Every removed edge must also be deleted from the policy; adding exemptions or changing boundary rules requires independent Tech Lead and Owner review.
+- Each task uses the [Agent Task Contract](docs/templates/agent-task-contract.md), declaring module owner, allowed paths, exact base SHA, interfaces, security impacts and AC. Path-scope enforcement is human-reviewed until a separately authorized trusted CI mechanism exists.
+- Worker Runtime Plug-and-Play is a required extension capability: keep provider selection out of Domain/Application business logic; preserve approved manifests, independent image evidence and the credential-free Code/Test trust boundary. See [Worker runtime contract](docs/architecture/worker-runtime-plugins.md). Current implementation supports Dev/Code only; do not claim multi-role adapters or a Podman backend already exist.
+- PostgreSQL is the Owner-selected target; SQLite migration, Controller concurrency, systemd/Compose rollout and legacy removal need separate approved PRs and proof. Creating this governance PR does not approve a DB cutover or auto-merge.
