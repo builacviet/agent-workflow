@@ -238,7 +238,6 @@ class ControllerChecksClient:
                 or not isinstance(repo, Mapping)
                 or repo.get("full_name") != repository
                 or run.get("status") != "completed"
-                or run.get("conclusion") not in {"success", "failure"}
             ):
                 raise OSError("trusted push workflow provenance unavailable")
 
@@ -276,9 +275,24 @@ class ControllerChecksClient:
                     or check.get("head_sha") != sha
                     or check.get("status") != job.get("status")
                     or check.get("conclusion") != job.get("conclusion")
-                    or (run["conclusion"] == "success" and job.get("conclusion") != "success")
                 ):
                     raise OSError("trusted push job/check identity mismatch")
+                if job.get("status") != "completed":
+                    raise OSError("trusted push job not completed")
+                conclusion = job.get("conclusion")
+                if conclusion not in {"success", "failure"}:
+                    # Cancelled/timed-out/skipped jobs are not verdict evidence.
+                    # Validate their identity above, but do not poison all
+                    # later successful attempts on the same immutable SHA.
+                    continue
+                if run["conclusion"] not in {"success", "failure"}:
+                    # A cancelled latest run can still contain a previously
+                    # completed failed job. Keep that failure sticky, but
+                    # never promote a success from a non-verdict workflow.
+                    if conclusion != "failure":
+                        continue
+                elif job_attempt == attempt and conclusion != run["conclusion"]:
+                    raise OSError("latest push job/workflow verdict mismatch")
                 verified.append({
                     **check,
                     "event": "push",
@@ -287,6 +301,6 @@ class ControllerChecksClient:
                     "run_attempt": job_attempt,
                     "tested_sha": job["head_sha"],
                 })
-            if not matched:
+            if not matched and run["conclusion"] in {"success", "failure"}:
                 raise OSError("trusted push workflow missing required job")
         return {"total_count": len(verified), "check_runs": verified}
