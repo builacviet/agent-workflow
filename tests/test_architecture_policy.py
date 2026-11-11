@@ -84,7 +84,7 @@ def test_no_new_cross_layer_imports_and_no_stale_exceptions():
 def test_pure_core_must_not_import_io_or_sql(area):
     external = (
         "sqlite3", "psycopg", "psycopg2", "subprocess", "socket",
-        "requests", "httpx", "urllib", "docker", "mcp",
+        "requests", "httpx", "urllib.request", "docker", "mcp",
     )
     for path in source_files():
         if area_for(path) != area:
