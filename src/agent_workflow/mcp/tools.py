@@ -1,7 +1,7 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
 from mcp.server.fastmcp import Context
 
-from agent_workflow.ci_gate_config import load_ci_gate_required
+from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.service import default_service
 from agent_workflow.mcp.security import authorize_context
@@ -9,7 +9,7 @@ from agent_workflow.mcp.security import authorize_context
 
 def configured_service_factory():
     """Read ENV only when constructing a service, not inside domain/use cases."""
-    return default_service(require_ci=load_ci_gate_required())
+    return default_service(require_ci=AppConfig.from_env().ci_gate_required)
 
 
 def register_tools(mcp, service_factory=configured_service_factory):

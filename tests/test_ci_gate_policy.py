@@ -1,4 +1,4 @@
-"""R1-01: one strict CI Gate env loader at MCP/Controller boundaries.
+"""R1-01: immutable Pydantic AppConfig at MCP/Controller boundaries.
 
 Tests never access live GitHub, Docker, credentials or production state.
 """
@@ -7,7 +7,9 @@ from argparse import Namespace
 
 import pytest
 
-from agent_workflow.ci_gate_config import load_ci_gate_required
+from pydantic import ValidationError
+
+from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.service import WorkflowService, default_service
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
@@ -63,14 +65,14 @@ def test_loader_defaults_to_ci_required_and_parses_literal_bit(
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
-    assert load_ci_gate_required() is expected
+    assert AppConfig.from_env().ci_gate_required is expected
 
 
 @pytest.mark.parametrize("invalid", ["", "false", "true", "yes", "2", " 1", "-1"])
 def test_loader_rejects_nonliteral_values(monkeypatch, invalid):
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", invalid)
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED must be 0 or 1"):
-        load_ci_gate_required()
+        AppConfig.from_env()
 
 
 @pytest.mark.parametrize(
@@ -193,3 +195,16 @@ def test_invalid_service_ci_policy_type_fails_before_database(tmp_path, invalid)
     with pytest.raises(ValueError, match="require_ci"):
         WorkflowService(path, require_ci=invalid)
     assert not path.exists()
+
+
+def test_app_config_can_validate_supplied_mapping_without_reading_process_env(monkeypatch):
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+    local_config = AppConfig.from_env({"WFC_CI_GATE_REQUIRED": "0"})
+    assert local_config.ci_gate_required is False
+    assert AppConfig.from_env().ci_gate_required is True
+    with pytest.raises(ValidationError):
+        AppConfig(ci_gate_required="false")
+    with pytest.raises(ValidationError):
+        AppConfig(unexpected_option=True)
+    with pytest.raises(ValidationError):
+        local_config.ci_gate_required = True
