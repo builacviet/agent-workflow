@@ -18,6 +18,9 @@ from urllib.request import (
 )
 
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, validate_sha
+from agent_workflow.integrations.github_ci_types import (
+    DECISIVE_CONCLUSIONS, GitHubCheckConclusion, GitHubRunStatus,
+)
 
 _API = "https://api.github.com"
 _MAX_BODY = 2_000_000
@@ -237,7 +240,7 @@ class ControllerChecksClient:
                 or run.get("name") != "V1 CI"
                 or not isinstance(repo, Mapping)
                 or repo.get("full_name") != repository
-                or run.get("status") != "completed"
+                or run.get("status") != GitHubRunStatus.COMPLETED
             ):
                 raise OSError("trusted push workflow provenance unavailable")
 
@@ -276,7 +279,7 @@ class ControllerChecksClient:
                     or check.get("conclusion") != job.get("conclusion")
                 ):
                     raise OSError("trusted push job/check identity mismatch")
-                if job.get("status") != "completed":
+                if job.get("status") != GitHubRunStatus.COMPLETED:
                     raise OSError("trusted push job not completed")
                 conclusion = job.get("conclusion")
                 if job_attempt == attempt:
@@ -284,20 +287,20 @@ class ControllerChecksClient:
                     # The latest run must not reuse an older successful job.
                     # Check before skipping cancelled/timed-out/skipped jobs.
                     if (
-                        run["conclusion"] in {"success", "failure"}
+                        run["conclusion"] in DECISIVE_CONCLUSIONS
                         and conclusion != run["conclusion"]
                     ):
                         raise OSError("latest push job/workflow verdict mismatch")
-                if conclusion not in {"success", "failure"}:
+                if conclusion not in DECISIVE_CONCLUSIONS:
                     # Cancelled/timed-out/skipped jobs are not verdict evidence.
                     # Validate their identity above, but do not poison all
                     # later successful attempts on the same immutable SHA.
                     continue
-                if run["conclusion"] not in {"success", "failure"}:
+                if run["conclusion"] not in DECISIVE_CONCLUSIONS:
                     # A cancelled latest run can still contain a previously
                     # completed failed job. Keep that failure sticky, but
                     # never promote a success from a non-verdict workflow.
-                    if conclusion != "failure":
+                    if conclusion != GitHubCheckConclusion.FAILURE:
                         continue
                 verified.append({
                     **check,
@@ -308,7 +311,7 @@ class ControllerChecksClient:
                     "tested_sha": job["head_sha"],
                 })
             if (
-                run["conclusion"] in {"success", "failure"}
+                run["conclusion"] in DECISIVE_CONCLUSIONS
                 and not latest_required_job
             ):
                 raise OSError("trusted push workflow missing latest required job")

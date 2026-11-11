@@ -5,6 +5,9 @@ from agent_workflow.integrations.ci_gate import CiRequest, verify_ci
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken, ControllerChecksClient,
 )
+from agent_workflow.integrations.github_ci_types import (
+    DECISIVE_CONCLUSIONS, GitHubCheckConclusion, GitHubRunStatus,
+)
 
 SHA = "a" * 40
 REPO = "builacviet/agent-workflow"
@@ -304,3 +307,15 @@ def test_n1_completed_success_without_latest_required_job_cannot_reuse_old():
     }
     ev = _n1_history_verdict([run])
     assert (ev.verdict, ev.reason) == ("BLOCKED", "GITHUB_READ_UNAVAILABLE")
+
+
+def test_github_ci_wire_enum_contract_and_decisive_policy():
+    # API fixtures deliberately use raw strings: production receives JSON text.
+    assert isinstance(GitHubCheckConclusion.SUCCESS, str)
+    assert GitHubCheckConclusion.SUCCESS == "success"
+    assert GitHubCheckConclusion.FAILURE == "failure"
+    assert GitHubRunStatus.COMPLETED == "completed"
+    assert DECISIVE_CONCLUSIONS == {"success", "failure"}
+    assert GitHubCheckConclusion.CANCELLED not in DECISIVE_CONCLUSIONS
+    assert GitHubCheckConclusion.TIMED_OUT not in DECISIVE_CONCLUSIONS
+    assert GitHubCheckConclusion.SKIPPED not in DECISIVE_CONCLUSIONS
