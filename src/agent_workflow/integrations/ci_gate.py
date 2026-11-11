@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from typing import Literal, Mapping, Protocol
 
 from agent_workflow.integrations.github import WorkflowError, validate_sha
+from agent_workflow.integrations.github_ci_types import (
+    GitHubCheckConclusion, GitHubRunStatus,
+)
 
 Verdict = Literal["SUCCESS", "FAILURE", "BLOCKED"]
-_FAILURE_CONCLUSIONS = frozenset({"failure"})
 
 
 class ReadOnlyChecks(Protocol):
@@ -103,6 +105,13 @@ def _check_run(run: object, sha: str, request: CiRequest) -> bool:
         and app.get("slug") == request.check_app_slug
         and type(run.get("id")) is int
         and run["id"] > 0
+        and run.get("event") == "push"
+        and run.get("workflow_path") == ".github/workflows/v1-ci.yml"
+        and run.get("tested_sha") == sha
+        and type(run.get("workflow_run_id")) is int
+        and run["workflow_run_id"] > 0
+        and type(run.get("run_attempt")) is int
+        and run["run_attempt"] > 0
     )
 
 
@@ -173,7 +182,7 @@ def verify_ci(
             return evidence("BLOCKED", "REQUIRED_CHECK_MISSING")
         if len({r["id"] for r in relevant}) != len(relevant):
             return evidence("BLOCKED", "CHECK_ID_AMBIGUOUS")
-        if any(run.get("status") != "completed" for run in relevant):
+        if any(run.get("status") != GitHubRunStatus.COMPLETED for run in relevant):
             return evidence("BLOCKED", "CHECK_PENDING")
         if any(not isinstance(run.get("completed_at"), str) or not run["completed_at"] for run in relevant):
             return evidence("BLOCKED", "COMPLETION_UNVERIFIED")
@@ -183,29 +192,21 @@ def verify_ci(
             request.repository, request.pr_number,
         ) != seen_head:
             return evidence("BLOCKED", "PR_HEAD_CHANGED_DURING_QUERY")
-        tested = seen_head
         latest = max(relevant, key=lambda run: (run["completed_at"], run["id"]))
+        tested = latest["tested_sha"]
         check_id, completed = latest["id"], latest["completed_at"]
-        # The Checks API does not always expose Actions run/attempt metadata.
-        # A trusted Actions adapter may enrich the observation.
-        raw_workflow, raw_attempt = latest.get("workflow_run_id"), latest.get("run_attempt")
-        if raw_workflow is not None or raw_attempt is not None:
-            if (
-                type(raw_workflow) is not int or raw_workflow <= 0
-                or type(raw_attempt) is not int or raw_attempt <= 0
-            ):
-                return evidence("BLOCKED", "WORKFLOW_PROVENANCE_UNVERIFIED")
-            workflow_run_id, run_attempt = raw_workflow, raw_attempt
+        workflow_run_id, run_attempt = latest["workflow_run_id"], latest["run_attempt"]
         conclusions = {run.get("conclusion") for run in relevant}
         if not failure_history_complete:
             return evidence("BLOCKED", "DURABLE_HISTORY_UNVERIFIED")
         if previous_failure_for_sha or (
-            "success" in conclusions and bool(conclusions & _FAILURE_CONCLUSIONS)
+            GitHubCheckConclusion.SUCCESS in conclusions
+            and GitHubCheckConclusion.FAILURE in conclusions
         ):
             return evidence("BLOCKED", "SAME_SHA_FAILURE_CONFLICT")
-        if conclusions == {"success"}:
+        if conclusions == {GitHubCheckConclusion.SUCCESS}:
             return evidence("SUCCESS", "REQUIRED_CHECK_PASSED")
-        if conclusions == {"failure"}:
+        if conclusions == {GitHubCheckConclusion.FAILURE}:
             return evidence("FAILURE", "REQUIRED_CHECK_FAILED")
         return evidence("BLOCKED", "CHECK_CONCLUSION_UNVERIFIED")
     except (OSError, TimeoutError, KeyError, ValueError, TypeError, AttributeError):

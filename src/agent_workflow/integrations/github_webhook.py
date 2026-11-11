@@ -18,6 +18,19 @@ from agent_workflow.storage.webhook_inbox import (
 WEBHOOK_PATH = "/webhooks/github"
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
 _ACTIONS = {"workflow_run": "completed", "pull_request": "synchronize"}
+# Valid subscribed GitHub actions (only completed/synchronize wake the watcher).
+# Unknown actions for these event types indicate malformed/mislabeled payloads.
+_VALID_ACTIONS = {
+    "workflow_run": frozenset({"requested", "in_progress", "completed"}),
+    "pull_request": frozenset({
+        "assigned", "auto_merge_disabled", "auto_merge_enabled", "closed",
+        "converted_to_draft", "demilestoned", "dequeued", "edited",
+        "enqueued", "labeled", "locked", "milestoned", "opened",
+        "ready_for_review", "reopened", "review_request_removed",
+        "review_requested", "synchronize", "unassigned", "unlabeled",
+        "unlocked",
+    }),
+}
 _SIGNATURE = re.compile(r"sha256=[0-9a-f]{64}")
 _DELIVERY = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", re.I)
 _WEBHOOK_HEADERS = frozenset({
@@ -109,7 +122,7 @@ class GitHubWebhookReceiver:
 
         event = selected.get("x-github-event", "")
         delivery = selected.get("x-github-delivery", "")
-        if event not in _ACTIONS or not _DELIVERY.fullmatch(delivery):
+        if not event or not _DELIVERY.fullmatch(delivery):
             return HTTPStatus.BAD_REQUEST
         try:
             payload = json.loads(
@@ -119,10 +132,14 @@ class GitHubWebhookReceiver:
             )
         except (ValueError, RecursionError):
             return HTTPStatus.BAD_REQUEST
-
-        action = _ACTIONS[event]
-        if not isinstance(payload, dict) or payload.get("action") != action:
+        if not isinstance(payload, dict):
             return HTTPStatus.BAD_REQUEST
+
+        # GitHub App ping is signed but has no task identity or action.
+        # Acknowledging it never authorizes CI or mutates the inbox.
+        if event == "ping":
+            return HTTPStatus.OK
+
         repository, installation = payload.get("repository"), payload.get("installation")
         if (
             not isinstance(repository, dict)
@@ -133,7 +150,24 @@ class GitHubWebhookReceiver:
         ):
             return HTTPStatus.FORBIDDEN
 
+        # Registered GitHub App event subscriptions deliver many actions.
+        # Only the two wake-up signals are queued; all other valid signed
+        # events/actions are acknowledged without writing or deciding CI.
+        if event not in _ACTIONS:
+            return HTTPStatus.OK
+        action = payload.get("action")
+        if not isinstance(action, str) or not action:
+            return HTTPStatus.BAD_REQUEST
+        # Even a no-op action must belong to the signed event type;
+        # a mislabeled body must not be silently acknowledged.
         subject = payload.get(event)
+        if not isinstance(subject, dict):
+            return HTTPStatus.BAD_REQUEST
+        if action not in _VALID_ACTIONS[event]:
+            return HTTPStatus.BAD_REQUEST
+        if action != _ACTIONS[event]:
+            return HTTPStatus.OK
+
         if not isinstance(subject, dict):
             return HTTPStatus.BAD_REQUEST
         if event == "workflow_run":

@@ -621,6 +621,17 @@ class CoderRuntime:
                 task["handoff_path"],
                 envelope["test_summary"] + "; worker PR: " + result["pr_url"],
             )
+            # This host-side registration is not an authorization to review:
+            # CI remains BLOCKED until the separate Controller App re-verifies
+            # GitHub's current PR HEAD and complete named Checks history.
+            if os.environ.get("WFC_CI_GATE_REQUIRED") == "1":
+                from agent_workflow.storage.ci_state import ControllerCiState
+
+                ControllerCiState(self.service.db_path).track(
+                    context["task_id"],
+                    int(result["pr_url"].rsplit("/", 1)[1]),
+                    result["head_sha"],
+                )
             return result["head_sha"]
         finally:
             self.stop(claim["dispatch_id"])

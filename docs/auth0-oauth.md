@@ -28,7 +28,8 @@ or live ChatGPT login is claimed by this code commit.
 
 Use a local ignored env file, e.g. copy
 `.runtime/controller-mcp.env.example` to `.runtime/controller-mcp.env`.
-The standalone `compose.controller.yaml` uses this ignored file. This is for an **isolated test deployment**, not a direction to
+The controller-stack template selects `auth0` by default; populate the verified Auth0 values before starting MCP. The Python server's fallback remains legacy static Bearer when no mode is provided. See the [.runtime inventory](../.runtime/README.md).
+The standalone `compose.yaml` uses this ignored file. This is for an **isolated test deployment**, not a direction to
 overwrite an already-running Compose service.
 
 - `WFC_AUTH_MODE=auth0`: enable OAuth mode. Omitted or `bearer` keeps
@@ -103,9 +104,9 @@ ChatGPT shows `Authentication succeeded, action discovery failed` and
 1. Set `WFC_AUTH0_DIAGNOSTICS=1` **temporarily** in the ignored
    `.runtime/controller-mcp.env` file (never commit this value).
 2. Rebuild/restart **only** the OAuth test MCP:
-   `docker compose -f compose.controller.yaml up -d --build mcp`.
+   `docker compose -f compose.yaml up -d --build mcp`.
 3. Retry one ChatGPT tool discovery/connection. Read the MCP log using
-   `docker compose -f compose.controller.yaml logs --tail=80 mcp`.
+   `docker compose -f compose.yaml logs --tail=80 mcp`.
 4. Look for `auth0_oauth_validation code=...`. Codes are fixed categories,
    not JWT contents or identifying values. Useful examples:
    `jwt_audience_mismatch` (wrong Auth0 API audience),

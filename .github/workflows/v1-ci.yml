@@ -60,6 +60,7 @@ jobs:
         run: |
           mkdir -p .runtime
           : > .runtime/controller-mcp.env
+          : > .runtime/controller-webhook.env
           : > .runtime/ngrok.env
 
       - name: Run pytest

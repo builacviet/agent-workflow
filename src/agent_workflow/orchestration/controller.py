@@ -90,13 +90,18 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--acknowledge", metavar="DISPATCH_ID")
     parser.add_argument("--reconciled", action="store_true")
+    parser.add_argument("--ci-once", action="store_true", help="reconcile CI only, never dispatch agents")
+    parser.add_argument("--ci-watch", action="store_true", help="consume local inbox, never dispatch agents")
     args = parser.parse_args()
     config = json.loads(
         args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
     )
     from agent_workflow.runners.coder_runtime import validate_config
 
-    validate_config(config)
+    if not (args.ci_once or args.ci_watch):
+        validate_config(config)
+    elif args.ci_once and args.ci_watch:
+        raise WorkflowError("choose one CI-only mode")
     with process_lock(
         Path(config["database"]).with_suffix(".controller.lock")
     ):
@@ -104,6 +109,8 @@ def main() -> None:
 
 
 def operate(config: dict, args: argparse.Namespace) -> None:
+    if getattr(args, "ci_once", False) or getattr(args, "ci_watch", False):
+        return _ci_operator(config, watch=bool(getattr(args, "ci_watch", False)))
     from agent_workflow.runners.coder_runtime import CoderRuntime
 
     service = WorkflowService(config["database"])
@@ -143,6 +150,53 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         if args.once:
             return
         time.sleep(60)
+
+
+def _ci_operator(config: dict, *, watch: bool) -> None:
+    """Explicit CI-only path: cannot launch Codex or touch worker credentials."""
+    from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
+    from agent_workflow.integrations.github_app_checks import (
+        ControllerAppToken, ControllerChecksClient,
+    )
+    from agent_workflow.storage.ci_state import ControllerCiState
+
+    gate = config.get("controller_github_app")
+    if not isinstance(gate, dict):
+        raise WorkflowError("separate read-only Controller GitHub App config required")
+    app_id, installation_id, pem = (
+        gate.get("app_id"), gate.get("installation_id"), gate.get("pem"),
+    )
+    if type(app_id) is not int or type(installation_id) is not int or not pem:
+        raise WorkflowError("invalid Controller GitHub App config")
+    if config.get("pem") and Path(config["pem"]).resolve() == Path(pem).resolve():
+        raise WorkflowError("Controller GitHub App must not use worker App PEM")
+    token = ControllerAppToken(
+        app_id=app_id, installation_id=installation_id, pem_path=pem,
+    )
+    checks = ControllerChecksClient(
+        installation_id=installation_id, token_provider=token,
+    )
+    ci = ControllerCiCoordinator(
+        ControllerCiState(config["database"]), checks, installation_id=installation_id,
+    )
+    observations = ci.reconcile_once(startup=True)
+    print("CI reconciliation: " + str(len(observations)) + " tracked observations", flush=True)
+    if not watch:
+        return
+    delay = 2
+    while True:
+        try:
+            observations = ci.reconcile_once()
+            # A retained BLOCKED inbox may require multiple GitHub reads.
+            # Bound retries for missing/pending checks as well as API errors.
+            if any(e.verdict == "BLOCKED" for e in observations):
+                delay = min(60, delay * 2)
+            else:
+                delay = 2
+        except (WorkflowError, OSError, sqlite3.Error):
+            print("CI reconciliation blocked; inbox retained", flush=True)
+            delay = min(60, delay * 2)
+        time.sleep(delay)
 
 
 if __name__ == "__main__":

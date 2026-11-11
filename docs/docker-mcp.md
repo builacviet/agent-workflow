@@ -1,3 +1,12 @@
+> **HISTORICAL / RETIRED — DO NOT RUN.** This document describes the original
+> standalone MCP/ngrok POC, whose original Compose definition and
+> `.runtime/mcp.env.example` have been retired. The root `compose.yaml`
+> now defines the **different V1 Controller stack**, not the old POC. The commands below are
+> preserved **for historical context only** and will not work from the current
+> checkout. For the supported V1 setup, see
+> [V1-03C local integration](guides/v1-03c-local-webhook.md) and
+> [runtime configuration inventory](../.runtime/README.md).
+>
 > Current Phase 3.1 architecture supersedes remote verification/gh setup below: WFC is local-only, worker owns GitHub, Tech Lead verifies via plugin. See [current runbook](phase-3.1.md) and review-policy.md. Earlier sections retain historical POC context.
 
 # Containerize MCP + ngrok — isolated Tech Lead POC
