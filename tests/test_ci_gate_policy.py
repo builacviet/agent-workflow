@@ -1,16 +1,17 @@
-"""R1-01: mandatory operational CI gate, explicit legacy local compatibility.
+"""R1-01: one strict CI Gate env loader at MCP/Controller boundaries.
 
-All tests use disposable SQLite and synthetic CI observations. No GitHub App,
-Docker, public endpoint, real credentials or production data are accessed.
+Tests never access live GitHub, Docker, credentials or production state.
 """
 
 from argparse import Namespace
 
 import pytest
 
+from agent_workflow.ci_gate_config import load_ci_gate_required
 from agent_workflow.domain.service import WorkflowService, default_service
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.mcp.tools import configured_service_factory
 from agent_workflow.orchestration import controller
 from agent_workflow.storage.ci_state import ControllerCiState
 
@@ -51,70 +52,106 @@ def _ci_success(path):
     ))
 
 
-@pytest.mark.parametrize("legacy_flag", [None, "0", "false", "1"])
-def test_operational_mcp_factory_requires_ci_independent_of_legacy_env(
-    tmp_path, monkeypatch, legacy_flag,
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [(None, True), ("0", False), ("1", True)],
+)
+def test_loader_defaults_to_ci_required_and_parses_literal_bit(
+    monkeypatch, env_value, expected,
+):
+    if env_value is None:
+        monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
+    else:
+        monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
+    assert load_ci_gate_required() is expected
+
+
+@pytest.mark.parametrize("invalid", ["", "false", "true", "yes", "2", " 1", "-1"])
+def test_loader_rejects_nonliteral_values(monkeypatch, invalid):
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", invalid)
+    with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED must be 0 or 1"):
+        load_ci_gate_required()
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [(None, True), ("0", False), ("1", True)],
+)
+def test_mcp_factory_injects_policy_and_exact_head_check(
+    tmp_path, monkeypatch, env_value, expected,
 ):
     path = tmp_path / "workflow.db"
     monkeypatch.setenv("WFC_DB_PATH", str(path))
-    if legacy_flag is None:
+    if env_value is None:
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
     else:
-        monkeypatch.setenv("WFC_CI_GATE_REQUIRED", legacy_flag)
-    service = default_service()
-    _ready(service)
+        monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
 
-    # Neither missing gate schema nor an opt-out string can open review.
-    assert service.list_review_queue() == []
-    with pytest.raises(WorkflowError, match="exact-HEAD CI"):
-        service.claim_review("R101", HEAD, "reviewer")
-    _ci_success(path)
+    service = configured_service_factory()
+    assert service.require_ci is expected
+    _ready(service)
+    if expected:
+        assert service.list_review_queue() == []
+        with pytest.raises(WorkflowError, match="exact-HEAD CI"):
+            service.claim_review("R101", HEAD, "reviewer")
+        _ci_success(path)
+    else:
+        # Deliberate local bypass without fake GitHub checks.
+        assert len(service.list_review_queue()) == 1
+
     assert service.list_review_queue()[0]["head_sha"] == HEAD
     assert service.claim_review("R101", HEAD, "reviewer")["reviewed_sha"] == HEAD
 
 
-def test_explicit_test_opt_out_cannot_weaken_independent_production_instance(
+def test_direct_service_is_fail_closed_even_when_env_requests_bypass(
     tmp_path, monkeypatch,
 ):
     path = tmp_path / "workflow.db"
     monkeypatch.setenv("WFC_DB_PATH", str(path))
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
-    local = WorkflowService(path, require_ci=False)
-    _ready(local)
-
-    # Local compatibility is explicit and per-instance, not process-wide.
-    assert len(local.list_review_queue()) == 1
-    production = default_service()
-    assert production.list_review_queue() == []
-    with pytest.raises(WorkflowError, match="exact-HEAD CI"):
-        production.claim_review("R101", HEAD, "reviewer")
-
-    # Env changes after composition never disable the strict instance.
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    assert production.list_review_queue() == []
+    default = WorkflowService(path)
+    _ready(default)
+    assert default.require_ci is True
+    assert default.list_review_queue() == []
+    assert default_service().require_ci is True
+
+    local = WorkflowService(path, require_ci=False)
+    assert local.require_ci is False
+    assert len(local.list_review_queue()) == 1
+    # The service policy is captured at construction; no hidden ENV lookups.
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+    assert len(local.list_review_queue()) == 1
+    assert default.list_review_queue() == []
 
 
-def test_controller_dispatch_composition_forces_ci_without_loading_docker(
-    tmp_path, monkeypatch,
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [(None, True), ("0", False), ("1", True)],
+)
+def test_controller_injects_same_policy_without_docker_launch(
+    tmp_path, monkeypatch, env_value, expected,
 ):
     from agent_workflow.runners import coder_runtime
 
-    captured = []
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    def fake_run_once(service, ledger, task_ids, execute, timeout, **kwargs):
-        captured.append(service._ci_gate_required())
-        return False
+    if env_value is None:
+        monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
+    else:
+        monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
+    seen = []
 
-    # The fake runtime has to expose execute when the Controller composes it.
     class StubRuntime:
         def __init__(self, config, service):
             pass
 
         def execute(self, claim, context):
-            raise AssertionError("never execute")
+            raise AssertionError("fake Controller never executes Docker")
 
         def release_engine(self, dispatch_id):
-            raise AssertionError("never release")
+            raise AssertionError("fake Controller never releases engines")
+
+    def fake_run_once(service, ledger, task_ids, execute, timeout, **kwargs):
+        seen.append(service.require_ci)
+        return False
 
     monkeypatch.setattr(coder_runtime, "CoderRuntime", StubRuntime)
     monkeypatch.setattr(controller, "run_once", fake_run_once)
@@ -122,11 +159,36 @@ def test_controller_dispatch_composition_forces_ci_without_loading_docker(
         {"database": str(tmp_path / "controller.db"), "tasks": []},
         Namespace(ci_once=False, ci_watch=False, acknowledge=None, once=True),
     )
-    assert captured == [True]
+    assert seen == [expected]
 
 
-@pytest.mark.parametrize("invalid", ["true", 1, 0, [], {}])
-def test_invalid_ci_policy_type_fails_before_creating_database(tmp_path, invalid):
+def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
+    tmp_path, monkeypatch,
+):
+    from agent_workflow.runners import coder_runtime
+
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "false")
+    path = tmp_path / "controller.db"
+    monkeypatch.setenv("WFC_DB_PATH", str(path))
+    with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
+        configured_service_factory()
+    assert not path.exists()
+
+    class MustNotLaunch:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("invalid config must not launch worker")
+
+    monkeypatch.setattr(coder_runtime, "CoderRuntime", MustNotLaunch)
+    with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
+        controller.operate(
+            {"database": str(path), "tasks": []},
+            Namespace(ci_once=False, ci_watch=False, acknowledge=None, once=True),
+        )
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("invalid", [None, "true", "0", 1, 0, [], {}])
+def test_invalid_service_ci_policy_type_fails_before_database(tmp_path, invalid):
     path = tmp_path / "workflow.db"
     with pytest.raises(ValueError, match="require_ci"):
         WorkflowService(path, require_ci=invalid)

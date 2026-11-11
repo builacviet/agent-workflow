@@ -31,7 +31,7 @@ class Remote:
 def env(tmp_path):
     remote = Remote()
     now = [1000.0]
-    service = WorkflowService(tmp_path / "state.db", clock=lambda: now[0], lease_seconds=10)
+    service = WorkflowService(tmp_path / "state.db", clock=lambda: now[0], lease_seconds=10, require_ci=False)
     return service, remote, now
 
 
@@ -72,7 +72,7 @@ def test_restart_persistence_and_queue_filter(env):
     service, remote, now = env
     ready(service)
     ready(service, "HIGH", "high", True)
-    restarted = WorkflowService(service.db_path)
+    restarted = WorkflowService(service.db_path, require_ci=False)
     assert [t["task_id"] for t in restarted.list_review_queue("high")] == ["HIGH"]
     assert len(restarted.list_review_queue()) == 2
     assert restarted.list_review_queue("instant") == []
@@ -362,6 +362,7 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
         "Python tests", "github-actions", "SUCCESS", "REQUIRED_CHECK_PASSED",
         71, 72, 1, "2026-11-11T00:00:00Z", "2026-11-11T00:01:00Z",
     ))
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
     monkeypatch.setenv("WFC_REVIEWER_ID", "http-test-reviewer")
     monkeypatch.setenv("WFC_DB_PATH", engine.db_path)

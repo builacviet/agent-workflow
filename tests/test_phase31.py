@@ -40,7 +40,7 @@ def provision(service, task_id="P31"):
 
 @pytest.fixture
 def state(tmp_path):
-    service = WorkflowService(tmp_path / "workflow.sqlite3")
+    service = WorkflowService(tmp_path / "workflow.sqlite3", require_ci=False)
     provision(service)
     return service
 
@@ -49,7 +49,7 @@ def test_atomic_global_slot_across_connections(state):
     provision(state, "OTHER")
 
     def claim(_):
-        service = WorkflowService(state.db_path)
+        service = WorkflowService(state.db_path, require_ci=False)
         return DispatchLedger(service).claim({"P31", "OTHER"}, 60)
 
     with ThreadPoolExecutor(max_workers=8) as pool:

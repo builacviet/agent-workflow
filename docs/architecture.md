@@ -22,7 +22,7 @@
 
 PR #37 merged CI/webhook wiring. Local supervised smoke previously checked OAuth discovery, anonymous MCP denial, signed/unsigned webhook responses and read-only GitHub App Checks. Full trusted worker → CI tracking → Controller verdict → review E2E remains deferred and no production stack is proven. Exact-SHA GitHub Actions tests are **test evidence**, not deployment evidence.
 
-**Known correctness debt:** R1-01 enforces exact-HEAD CI at operational MCP and Controller composition roots; direct `WorkflowService` callers retain a temporary legacy opt-in mode for local tests, to be removed during R2. READY_IN_REVIEW still rejects a different repair HEAD even after trusted CI failure; Controller/Worker external publication cannot be atomically committed with the DB. Source modules have cross-layer dependencies and one runner import cycle. See Kimi's read-only audit and validate against source/HEAD before treating findings as fixed.
+**Known correctness debt:** R1-01 makes exact-HEAD CI enabled by default and reads `WFC_CI_GATE_REQUIRED` (`0`/`1`, default `1`) only at MCP/Controller composition boundaries. An explicit `0` bypasses CI for an isolated local test but must never be used with real GitHub publishing or public MCP deployments. `WorkflowService` does not read ENV; direct callers default to requiring CI. READY_IN_REVIEW still rejects a different repair HEAD even after trusted CI failure; Controller/Worker external publication cannot be atomically committed with the DB. Source modules have cross-layer dependencies and one runner import cycle. See Kimi's read-only audit and validate against source/HEAD before treating findings as fixed.
 
 ## TARGET — subject to ADR and stage-specific acceptance
 
