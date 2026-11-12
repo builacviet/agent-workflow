@@ -907,3 +907,21 @@ def test_dsn_override_cannot_hide_repository_legacy_fences(monkeypatch, tmp_path
         CoderRuntime({"database": dsn}, service)
     assert "secret-password" not in str(error.value)
     assert record.read_text(encoding="ascii") == "pending"
+
+
+
+def test_runtime_rejects_dangling_legacy_fence_link(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from agent_workflow.runners.coder_runtime import CoderRuntime
+
+    database = tmp_path / "state.sqlite"
+    legacy = tmp_path / "state.sqlite.sandbox-fences"
+    try:
+        legacy.symlink_to(tmp_path / "missing-legacy-fences", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
+    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    with pytest.raises(WorkflowError, match="operator recovery"):
+        CoderRuntime({}, service)
+    assert legacy.is_symlink()

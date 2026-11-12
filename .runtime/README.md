@@ -57,6 +57,7 @@ aliases, and deprecation before deleting the old names.
 | `WFC_WEBHOOK_DB_PATH`, `WFC_WEBHOOK_SECRET_FILE`, `WFC_WEBHOOK_PORT` | Webhook receiver database, HMAC secret path, listening port | Compose, not operator env file |
 | `WFC_DB_PATH`, `WFC_MCP_HOST`, `WFC_PUBLIC_HOST` | MCP database path, bind host, externally allowed host | Compose for the Controller stack |
 | `WFC_CI_GATE_REQUIRED` | Explicit gate requiring trusted exact-HEAD CI for reviewer workflow | All relevant trusted processes |
+| `WFC_SANDBOX_STATE_DIR` | Stable local directory for sandbox fence, Docker endpoint and recovery records; independent of database | Trusted host Controller environment only |
 | `NGROK_AUTHTOKEN` | ngrok's own named authtoken variable (not a WFC credential) | Operator, `ngrok.env` |
 | `NGROK_DOMAIN` | Optional Compose hostname override (external to service env files) | Shell / Compose project `.env` |
 
@@ -72,3 +73,12 @@ not environment variables and therefore do not use `WFC_`.
 4. Keep the Controller App's **PEM** and **webhook secret** under `.secret/`, distinct from the Worker App.
 5. Check `docker compose -f compose.yaml config --quiet`, then restart only services whose configuration was intentionally changed.
 6. To check auth, test `/mcp` with a real OAuth request and no credentials (expected 401 in Auth0 mode); never rely on a GET 400/406 alone.
+
+
+## Sandbox state directory (R1-03)
+
+Set `WFC_SANDBOX_STATE_DIR` for the trusted host Controller to a private, persistent, absolute **local** directory. Unset means `~/.agent-workflow/sandbox-fences` for the **current process user**, so changing HOME/service identity can change the default and hide previous records. Pin the explicit value for operations and retain its contents across restarts. Do not store it inside a disposable worktree or ephemeral container layer.
+
+Windows permits fixed local drives only; it rejects UNC shares, mapped network/removable drives, device paths, symlink/junction/reparse redirection and ambiguous path components. Linux uses the current mount namespace to reject known remote, virtual share, volatile and unknown filesystems (NFS, CIFS, 9p, tmpfs, etc.). The validation checks the directory at startup; it **cannot** defend against a privileged actor remounting or swapping parents afterward. Keep directory parents under trusted host ownership/ACLs.
+
+Do not delete, rename or copy unresolved legacy SQLite fences to bypass a blocked startup. Review the [Phase 3.1 recovery procedure](../docs/phase-3.1.md) and the [dispatch recovery matrix](../docs/guides/dispatch-recovery.md) before a cutover. The new implementation cannot infer unknown old SQLite locations from a PostgreSQL DSN.

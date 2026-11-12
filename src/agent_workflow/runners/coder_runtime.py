@@ -307,7 +307,13 @@ class CoderRuntime:
                 continue
             try:
                 legacy = Path(str(Path(database).resolve()) + ".sandbox-fences")
-                legacy_pending = legacy.exists() and any(legacy.iterdir())
+                # Even a dangling legacy link/junction is unresolved evidence.
+                redirected = legacy.is_symlink() or (
+                    getattr(legacy, "is_junction", lambda: False)()
+                )
+                legacy_pending = redirected or (
+                    legacy.exists() and any(legacy.iterdir())
+                )
             except (OSError, ValueError):
                 raise WorkflowError("unable to inspect legacy sandbox fences") from None
             if legacy_pending:
