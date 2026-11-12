@@ -13,9 +13,7 @@ import sqlite3
 import time
 from typing import Iterator
 
-from agent_workflow.domain.service import WorkflowService
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError, validate_sha
-from agent_workflow.integrations.publication_receipt import PublicationReceipt
+from agent_workflow.storage.repository import SQLiteWorkflowRepository
 from agent_workflow.storage.migrations import (
     Migration, migrate, table_names, validate_schema,
 )
@@ -65,6 +63,15 @@ def _legacy(db: sqlite3.Connection) -> int:
     return 0
 
 
+class PublicationError(ValueError):
+    """Fail-closed local publication state or authorization error."""
+
+
+def _validate_sha(value: str) -> None:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise PublicationError("invalid publication commit SHA")
+
+
 class PublicationIntentStore:
     """SQLite foundation for R1-04B; later PG adapter needs atomic fencing.
 
@@ -75,7 +82,7 @@ class PublicationIntentStore:
     def __init__(self, path: str | Path, *, clock=time.time) -> None:
         self.path = Path(path).resolve()
         self.clock = clock
-        WorkflowService(self.path)  # Ensure tasks/dispatch schema exists.
+        SQLiteWorkflowRepository(self.path)  # Ensure tasks/dispatch schema exists.
         with closing(self._connect()) as db:
             migrate(
                 db, "publication_intent", _MIGRATIONS,
@@ -104,7 +111,7 @@ class PublicationIntentStore:
     @staticmethod
     def _dispatch_id(value: str) -> None:
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
-            raise WorkflowError("invalid publication dispatch identifier")
+            raise PublicationError("invalid publication dispatch identifier")
 
     def prepare(
         self, dispatch_id: str, task_id: str, branch: str,
@@ -118,15 +125,15 @@ class PublicationIntentStore:
         confuse a replay with authorization to repeat a remote write.
         """
         self._dispatch_id(dispatch_id)
-        validate_sha(base_sha)
-        validate_sha(input_sha)
-        validate_sha(expected_head_sha)
+        _validate_sha(base_sha)
+        _validate_sha(input_sha)
+        _validate_sha(expected_head_sha)
         if (
             expected_head_sha == input_sha
             or not isinstance(tested_digest, str)
             or not re.fullmatch(r"[0-9a-f]{64}", tested_digest)
         ):
-            raise WorkflowError("invalid publication evidence")
+            raise PublicationError("invalid publication evidence")
         with self._transaction() as db:
             row = db.execute(
                 "SELECT d.task_id,d.input_sha,d.status,d.slot,"
@@ -137,21 +144,20 @@ class PublicationIntentStore:
             if (
                 row is None or row["status"] != "ACTIVE" or row["slot"] != 1
                 or row["task_id"] != task_id or row["input_sha"] != input_sha
-                or row["repository"] != REPOSITORY
                 or row["branch"] != branch or row["base_sha"] != base_sha
             ):
-                raise WorkflowError("publication intent differs from active authorization")
+                raise PublicationError("publication intent differs from active authorization")
             if db.execute(
                 "SELECT 1 FROM publication_intents WHERE dispatch_id=?",
                 (dispatch_id,),
             ).fetchone():
-                raise WorkflowError("publication intent already exists; never retry automatically")
+                raise PublicationError("publication intent already exists; never retry automatically")
             db.execute(
                 "INSERT INTO publication_intents "
                 "(dispatch_id,task_id,repository,branch,base_sha,input_sha,"
                 "expected_head_sha,tested_digest,state,created_at) "
                 "VALUES(?,?,?,?,?,?,?,?,'PREPARED',?)",
-                (dispatch_id, task_id, REPOSITORY, branch, base_sha, input_sha,
+                (dispatch_id, task_id, row["repository"], branch, base_sha, input_sha,
                  expected_head_sha, tested_digest, self.clock()),
             )
 
@@ -164,14 +170,14 @@ class PublicationIntentStore:
                 (dispatch_id,),
             ).fetchone()
             if record is None or record["state"] not in {"PREPARED", "UNCERTAIN"}:
-                raise WorkflowError("publication intent unavailable for uncertainty")
+                raise PublicationError("publication intent unavailable for uncertainty")
             updated = db.execute(
                 "UPDATE coder_dispatches SET status='BLOCKED' "
                 "WHERE dispatch_id=? AND slot=1 AND status IN ('ACTIVE','BLOCKED')",
                 (dispatch_id,),
             ).rowcount
             if updated != 1:
-                raise WorkflowError("publication ambiguity lost its dispatch slot")
+                raise PublicationError("publication ambiguity lost its dispatch slot")
             db.execute(
                 "UPDATE publication_intents SET state='UNCERTAIN' "
                 "WHERE dispatch_id=? AND state='PREPARED'", (dispatch_id,),
@@ -185,32 +191,37 @@ class PublicationIntentStore:
                 (dispatch_id,),
             ).fetchone()
         if row is None:
-            raise WorkflowError("unknown publication intent")
+            raise PublicationError("unknown publication intent")
         return dict(row)
 
-    def record_verified(self, dispatch_id: str, receipt: PublicationReceipt) -> None:
+    def record_verified(
+        self, dispatch_id: str, head_sha: str, pr_number: int, pr_url: str,
+    ) -> None:
         """Persist *independently verified* remote receipt, NEVER unblock slot."""
         self._dispatch_id(dispatch_id)
-        if not isinstance(receipt, PublicationReceipt):
-            raise WorkflowError("trusted publication receipt required")
+        __validate_sha(head_sha)
+        if type(pr_number) is not int or pr_number <= 0 or not isinstance(pr_url, str):
+            raise PublicationError("invalid publication receipt")
         with self._transaction() as db:
             row = db.execute(
-                "SELECT i.state,i.expected_head_sha,d.status,d.slot "
+                "SELECT i.state,i.expected_head_sha,i.repository,d.status,d.slot "
                 "FROM publication_intents i JOIN coder_dispatches d "
                 "ON d.dispatch_id=i.dispatch_id WHERE i.dispatch_id=?",
                 (dispatch_id,),
             ).fetchone()
             if (
                 row is None or row["state"] != "UNCERTAIN"
-                or row["expected_head_sha"] != receipt.head_sha
+                or row["expected_head_sha"] != head_sha
                 or row["status"] != "BLOCKED" or row["slot"] != 1
             ):
-                raise WorkflowError("publication receipt lacks blocked matching intent")
+                raise PublicationError("publication receipt lacks blocked matching intent")
+            if pr_url != f"https://github.com/{row['repository']}/pull/{pr_number}":
+                raise PublicationError("publication PR reference differs from intent")
             changed = db.execute(
                 "UPDATE publication_intents SET state='VERIFIED', "
                 "pr_number=?,pr_url=?,verified_at=? "
                 "WHERE dispatch_id=? AND state='UNCERTAIN'",
-                (receipt.pr_number, receipt.pr_url, self.clock(), dispatch_id),
+                (pr_number, pr_url, self.clock(), dispatch_id),
             ).rowcount
             if changed != 1:
-                raise WorkflowError("publication receipt update failed")
+                raise PublicationError("publication receipt update failed")
