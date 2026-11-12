@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from typing import Protocol
 from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.domain.states import CiVerdict
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.workflow_migrations import migrate_workflow
 
@@ -32,6 +33,8 @@ class WorkflowUnit(Protocol):
     def list_events(self, values: tuple = ()) -> list[dict]: ...
     def find_claim(self, values: tuple = ()) -> dict | None: ...
     def ci_approved(self, values: tuple = ()) -> bool: ...
+    def find_head_handoff(self, task_id: str, head_sha: str | None) -> dict | None: ...
+    def advance_failed_ci_head(self, task_id: str, old_head: str, new_head: str) -> int: ...
 
 
 class WorkflowRepository(Protocol):
@@ -168,6 +171,48 @@ class SQLiteUnit:
             ).fetchone() is not None
         except sqlite3.DatabaseError:
             return False
+
+    def find_head_handoff(self, task_id: str, head_sha: str | None) -> dict | None:
+        row = self.db.execute(
+            "SELECT action, metadata FROM task_events WHERE task_id=? AND sha=? "
+            "AND action IN ('HANDOFF', 'CI_REPAIR_HANDOFF') "
+            "ORDER BY event_id DESC LIMIT 1",
+            (task_id, head_sha),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def advance_failed_ci_head(self, task_id: str, old_head: str, new_head: str) -> int:
+        """Advance the pinned CI row under the caller's write transaction."""
+        if new_head == old_head:
+            raise WorkflowError("CI repair requires a different HEAD")
+        try:
+            row = self.db.execute(
+                "SELECT c.pr_number FROM controller_ci_tasks c "
+                "WHERE c.task_id=? AND c.head_sha=? AND c.verdict=? "
+                "AND c.pr_number>0 AND c.repair_heads<2 "
+                "AND EXISTS (SELECT 1 FROM controller_ci_observations o "
+                "WHERE o.task_id=c.task_id AND o.pr_number=c.pr_number "
+                "AND o.head_sha=c.head_sha AND o.verdict=c.verdict "
+                "AND o.reason='REQUIRED_CHECK_FAILED' AND o.check_run_id>0 "
+                "AND o.workflow_run_id>0 AND o.run_attempt>0) "
+                "AND NOT EXISTS (SELECT 1 FROM controller_ci_observations o "
+                "WHERE o.task_id=c.task_id AND o.head_sha=?)",
+                (task_id, old_head, CiVerdict.FAILURE, new_head),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if not str(exc).startswith(("no such table:", "no such column:")):
+                raise
+            raise WorkflowError("CI repair evidence is unavailable") from exc
+        if row is None:
+            raise WorkflowError("CI repair HEAD not authorized")
+        changed = self.db.execute(
+            "UPDATE controller_ci_tasks SET head_sha=?, verdict=?, "
+            "repair_heads=repair_heads+1 WHERE task_id=?",
+            (new_head, CiVerdict.BLOCKED, task_id),
+        ).rowcount
+        if changed != 1:
+            raise WorkflowError("CI repair update failed")
+        return row["pr_number"]
 
     def import_historical_head(self, values: tuple) -> None:
         self.db.execute(

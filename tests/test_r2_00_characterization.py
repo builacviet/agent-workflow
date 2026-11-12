@@ -1,8 +1,7 @@
 """R2-00 frozen V1 behavior before Clean Architecture refactors.
 
 All evidence is local and synthetic: no GitHub, Docker, network, credentials or
-production state. The one strict expected failure documents an R1 correctness
-blocker; it is not an accepted long-term contract.
+production state.
 """
 
 from dataclasses import replace
@@ -250,13 +249,8 @@ def test_public_workflow_contract_field_names_remain_stable():
         TaskSpec.model_validate({**task_spec(), "unapproved_extension": True})
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=WorkflowError,
-    reason="R1-02 blocker: public handoff rejects a CI-failed repair HEAD",
-)
-def test_known_gap_ci_failed_head_can_be_replaced_via_public_handoff(tmp_path):
-    """Desired R1 contract; update/remove xfail when repaired, never use raw SQL."""
+def test_ci_failed_head_can_be_replaced_via_public_handoff(tmp_path):
+    """Public handoff advances trusted CI tracking before track is replayed."""
     path = tmp_path / "workflow.db"
     service = WorkflowService(path, require_ci=True)
     service.provision_task(task_spec())
@@ -267,5 +261,6 @@ def test_known_gap_ci_failed_head_can_be_replaced_via_public_handoff(tmp_path):
     assert state.previous_failure("R200", HEAD)
 
     assert handoff(service, sha=REPAIR)["head_sha"] == REPAIR
-    state.track("R200", 31, REPAIR)
     assert state.tracked()[0]["head_sha"] == REPAIR
+    state.track("R200", 31, REPAIR)
+    assert state.tracked()[0]["repair_heads"] == 1

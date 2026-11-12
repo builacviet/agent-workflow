@@ -11,11 +11,13 @@ import re
 import sqlite3
 
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, validate_sha
 from agent_workflow.storage.migrations import (
     Migration, migrate, table_names, validate_schema,
 )
+from agent_workflow.storage.repository import SQLiteUnit
 from agent_workflow.storage.webhook_inbox import WebhookInbox, WebhookNotification
 
 
@@ -110,39 +112,29 @@ class ControllerCiState:
                 (task_id,),
             ).fetchone()
             if (
-                task is None or task["status"] != "READY_IN_REVIEW"
+                task is None or task["status"] != WorkflowStatus.READY_IN_REVIEW
                 or task["current_head_sha"] != head_sha
                 or task["repository"] != REPOSITORY
             ):
                 raise WorkflowError("CI tracking requires authorized exact task HEAD")
             row = db.execute(
-                "SELECT pr_number,head_sha,verdict,repair_heads "
+                "SELECT pr_number,head_sha "
                 "FROM controller_ci_tasks WHERE task_id=?", (task_id,),
             ).fetchone()
             if row is None:
                 inserted = db.execute(
-                    "INSERT INTO controller_ci_tasks VALUES(?, ?, ?, 'BLOCKED', 0)",
-                    (task_id, pr_number, head_sha),
+                    "INSERT INTO controller_ci_tasks VALUES(?, ?, ?, ?, 0)",
+                    (task_id, pr_number, head_sha, CiVerdict.BLOCKED),
                 )
                 if inserted.rowcount != 1:
                     raise WorkflowError("CI tracking insert failed")
                 return
-            if row["head_sha"] == head_sha and row["pr_number"] == pr_number:
+            if row["pr_number"] != pr_number:
+                raise WorkflowError("CI tracking PR differs from persisted binding")
+            if row["head_sha"] == head_sha:
                 return
-            if (
-                row["pr_number"] != pr_number
-                or row["head_sha"] == head_sha
-                or row["verdict"] != "FAILURE"
-                or row["repair_heads"] >= 2
-            ):
-                raise WorkflowError("CI repair HEAD not authorized")
-            changed = db.execute(
-                "UPDATE controller_ci_tasks SET head_sha=?, verdict='BLOCKED', "
-                "repair_heads=repair_heads+1 WHERE task_id=?",
-                (head_sha, task_id),
-            ).rowcount
-            if changed != 1:
-                raise WorkflowError("CI tracking update failed")
+            # Retain tracking for legacy callers that already moved the task HEAD.
+            SQLiteUnit(db).advance_failed_ci_head(task_id, row["head_sha"], head_sha)
 
     def tracked(self, limit: int = 32) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 32:
@@ -175,8 +167,12 @@ class ControllerCiState:
             or evidence.installation_id <= 0
         ):
             raise WorkflowError("CI evidence source is not authorized")
-        if evidence.verdict == "SUCCESS" and (
-            evidence.reason != "REQUIRED_CHECK_PASSED"
+        terminal_reasons = {
+            CiVerdict.SUCCESS: "REQUIRED_CHECK_PASSED",
+            CiVerdict.FAILURE: "REQUIRED_CHECK_FAILED",
+        }
+        if evidence.verdict in terminal_reasons and (
+            evidence.reason != terminal_reasons[evidence.verdict]
             or evidence.observed_head_sha != evidence.expected_head_sha
             or evidence.tested_sha != evidence.expected_head_sha
             or type(evidence.check_run_id) is not int
@@ -186,7 +182,9 @@ class ControllerCiState:
             or type(evidence.run_attempt) is not int
             or evidence.run_attempt <= 0
         ):
-            raise WorkflowError("CI success lacks exact-HEAD trusted evidence")
+            raise WorkflowError(
+                f"CI {evidence.verdict.lower()} lacks exact-HEAD trusted evidence"
+            )
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
