@@ -1,5 +1,10 @@
 import importlib.util
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import uuid
 
 import pytest
 
@@ -57,8 +62,69 @@ def test_invalid_config_never_invokes_docker(tmp_path, monkeypatch, capsys):
     path = tmp_path / "config"
     path.write_text("PG_DEV_PASSWORD=secret\n", encoding="utf-8")
     monkeypatch.setattr(module, "ENV_FILE", path)
-    monkeypatch.setattr(module.subprocess, "call", lambda *a, **k: pytest.fail("Docker invoked"))
+    monkeypatch.setattr(module.sys, "argv", ["preflight", "down"])
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: pytest.fail("Docker invoked"))
     assert module.main() == 2
+    assert "secret" not in capsys.readouterr().err
+
+
+def compose_test_environment():
+    env = os.environ.copy()
+    env.update(
+        PG_DEV_DB="test_db", PG_DEV_USER="test_user",
+        PG_DEV_PASSWORD="test_password", PG_DEV_PORT="55432",
+    )
+    for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"):
+        env.pop(key, None)
+    return env
+
+
+@pytest.mark.parametrize("args", [
+    [], ["--project-name", "other", "down"], ["-f", "other.yml", "down"],
+    ["--env-file", "other.env", "down"], ["down", "--volumes"],
+    ["down", "-v"], ["down", "--project-name", "other"],
+    ["run", "postgres", "sh"], ["up", "--wait-timeout", "999"],
+])
+def test_unapproved_commands_never_invoke_docker(args, monkeypatch):
+    monkeypatch.setattr(module.sys, "argv", ["preflight", *args])
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: pytest.fail("Docker invoked"))
+    assert module.main() == 2
+
+
+def test_approved_command_uses_validated_environment(tmp_path, monkeypatch):
+    path = tmp_path / "config"
+    path.write_text(BASE, encoding="utf-8")
+    monkeypatch.setattr(module, "ENV_FILE", path)
+    monkeypatch.setattr(module.sys, "argv", ["preflight", "up", "-d", "--wait", "--wait-timeout", "120"])
+    monkeypatch.setenv("PG_DEV_PASSWORD", "ambient")
+    monkeypatch.setenv("COMPOSE_FILE", "other.yml")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert module.main() == 0
+    command, options = calls[0]
+    assert command == ["docker", "compose", "--project-name", "agent-workflow-pg-dev",
+                       "--file", str(ROOT / "compose.postgres.dev.yaml"),
+                       "up", "-d", "--wait", "--wait-timeout", "120"]
+    assert options["env"]["PG_DEV_PASSWORD"] == " pass $literal # "
+    assert "COMPOSE_FILE" not in options["env"]
+    assert options["timeout"] == 180
+
+
+def test_timeout_is_reported_without_secrets(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "config"
+    path.write_text(BASE, encoding="utf-8")
+    monkeypatch.setattr(module, "ENV_FILE", path)
+    monkeypatch.setattr(module.sys, "argv", ["preflight", "down"])
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("secret", 180)
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    assert module.main() == 1
     assert "secret" not in capsys.readouterr().err
 
 
@@ -71,17 +137,14 @@ def test_compose_boundaries():
 
 
 def test_effective_compose_config():
-    import json
-    import os
-    import shutil
-    import subprocess
     if not shutil.which("docker"):
         pytest.skip("Docker CLI unavailable")
-    env = os.environ.copy()
-    env.update(PG_DEV_DB="test_db", PG_DEV_USER="test_user", PG_DEV_PASSWORD="test_password", PG_DEV_PORT="55432")
-    for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"):
-        env.pop(key, None)
-    result = subprocess.run(["docker", "compose", "-p", "pgdevconfigtest", "-f", str(ROOT / "compose.postgres.dev.yaml"), "config", "--format", "json"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+    env = compose_test_environment()
+    result = subprocess.run(
+        ["docker", "compose", "-p", "pgdevconfigtest", "-f",
+         str(ROOT / "compose.postgres.dev.yaml"), "config", "--format", "json"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=30,
+    )
     assert result.returncode == 0, "Compose config failed"
     config = json.loads(result.stdout)
     service = config["services"]["postgres"]
@@ -95,21 +158,24 @@ def test_effective_compose_config():
 
 def test_disposable_compose_lifecycle():
     """Opt-in integration test; all resources use a random test-only project."""
-    import os
-    import subprocess
-    import uuid
     if os.environ.get("PG_DEV_LIVE_TEST") != "1":
         pytest.skip("Set PG_DEV_LIVE_TEST=1 on a disposable Docker host")
     project = "pgdevtest" + uuid.uuid4().hex[:12]
-    env = os.environ.copy()
-    env.update(PG_DEV_DB="test_db", PG_DEV_USER="test_user", PG_DEV_PASSWORD="test_password", PG_DEV_PORT="55432")
-    for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"):
-        env.pop(key, None)
+    env = compose_test_environment()
     base = ["docker", "compose", "-p", project, "-f", str(ROOT / "compose.postgres.dev.yaml")]
+
     def run(*args):
-        return subprocess.run([*base, *args], env=env, cwd=ROOT, capture_output=True, text=True, timeout=180, check=True)
+        return subprocess.run(
+            [*base, *args], env=env, cwd=ROOT, capture_output=True,
+            text=True, timeout=180, check=True,
+        )
+
     def sql(statement):
-        return run("exec", "-T", "postgres", "psql", "-U", "test_user", "-d", "test_db", "-Atc", statement).stdout.strip()
+        return run(
+            "exec", "-T", "postgres", "psql", "-U", "test_user",
+            "-d", "test_db", "-Atc", statement,
+        ).stdout.strip()
+
     try:
         run("up", "-d", "--wait", "--wait-timeout", "120")
         sql("CREATE TABLE smoke (value integer); INSERT INTO smoke VALUES (42)")
@@ -123,9 +189,24 @@ def test_disposable_compose_lifecycle():
         run("up", "-d", "--wait", "--wait-timeout", "120")
         assert sql("SELECT value FROM smoke") == "42"
         container = run("ps", "-q", "postgres").stdout.strip()
-        address = subprocess.run(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", container], capture_output=True, text=True, timeout=30, check=True).stdout.strip()
+        address = subprocess.run(
+            ["docker", "inspect", "-f",
+             "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", container],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout.strip()
         assert address
-        denied = subprocess.run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "bash", "postgres:16", "-c", 'if timeout 5 bash -c "</dev/tcp/$1/5432"; then exit 1; else exit 0; fi', "_", address], capture_output=True, text=True, timeout=30)
-        assert denied.returncode == 0
+        probe = ["--entrypoint", "pg_isready", "postgres:16", "-h", address,
+                 "-p", "5432", "-U", "test_user", "-d", "test_db", "-t", "5"]
+        connected = subprocess.run(
+            ["docker", "run", "--rm", "--network", f"{project}_pg_dev", *probe],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert connected.returncode == 0, "Networked positive control failed"
+        denied = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", *probe],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert denied.returncode == 2, "Expected pg_isready no-response status"
+
     finally:
         run("down", "--volumes", "--remove-orphans")

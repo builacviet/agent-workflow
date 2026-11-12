@@ -8,6 +8,14 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".runtime" / "postgres-dev.env"
 KEYS = ("PG_DEV_DB", "PG_DEV_USER", "PG_DEV_PASSWORD", "PG_DEV_PORT")
+ALLOWED_COMMANDS = {
+    ("up", "-d", "--wait", "--wait-timeout", "120"),
+    ("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "120"),
+    ("stop",),
+    ("start",),
+    ("down",),
+    ("logs", "postgres"),
+}
 
 
 def load_config(path: Path) -> dict[str, str]:
@@ -30,23 +38,32 @@ def load_config(path: Path) -> dict[str, str]:
 
 
 def main() -> int:
+    args = tuple(sys.argv[1:])
+    if args not in ALLOWED_COMMANDS:
+        print("Unsupported operation; see the PostgreSQL development guide", file=sys.stderr)
+        return 2
     try:
         values = load_config(ENV_FILE)
     except (OSError, UnicodeError, ValueError) as exc:
         print(f"PostgreSQL dev configuration error: {exc}", file=sys.stderr)
         return 2
-    if not sys.argv[1:]:
-        print("Provide Docker Compose arguments", file=sys.stderr)
-        return 2
     env = os.environ.copy()
     env.update(values)
     for key in ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COMPOSE_PROFILES", "COMPOSE_ENV_FILES"):
         env.pop(key, None)
-    return subprocess.call(
-        ["docker", "compose", "--project-name", "agent-workflow-pg-dev",
-         "--file", str(ROOT / "compose.postgres.dev.yaml"), *sys.argv[1:]],
-        cwd=ROOT, env=env,
-    )
+    try:
+        return subprocess.run(
+            ["docker", "compose", "--project-name", "agent-workflow-pg-dev",
+             "--file", str(ROOT / "compose.postgres.dev.yaml"), *args],
+            cwd=ROOT, env=env, timeout=180,
+            check=False,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print("Docker Compose timed out; inspect project state before retrying", file=sys.stderr)
+        return 1
+    except OSError:
+        print("Could not start Docker Compose; check Docker installation", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
