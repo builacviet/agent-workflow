@@ -25,6 +25,12 @@
 
 **As of 2026-11-07:** CL-12.5 [PR #11](https://github.com/builacviet/agent-workflow/pull/11), CL-12.6 [PR #12](https://github.com/builacviet/agent-workflow/pull/12) and CL-12.7 [PR #13](https://github.com/builacviet/agent-workflow/pull/13) are **merged as documentation**. Controller→Executor IPC transport and crash/job idempotency are *pending implementation/test*, not settled runtime facts. P1 [PR #14](https://github.com/builacviet/agent-workflow/pull/14) is a 2026-11-06 **BLOCKED read-only preflight**; later WSL2 P2/P3 are limited feasibility reports, with P3 source evidence review outstanding. Before making a time-sensitive claim, re-check GitHub and the active Notion status.
 
+## CURRENT manual DEVELOPMENT review route
+
+- **Codex Dev before Draft PR:** [Implementation & Self-Review Checklist](templates/dev-self-review-checklist.md) — proactively fix Clean Code defects found within authorized task scope, rerun affected tests; escalate unsafe/out-of-scope fixes.
+- **ChatGPT Tech Lead on Draft PR:** [TL PR Review Checklist](templates/tl-review-checklist.md) — review scope, Clean Code, architecture, security, behavior, tests/CI and operations on exact PR HEAD.
+- Use [Engineering Quality Standards](conventions/engineering-standards.md) as the shared quality rubric. These two checklists apply to **current manual development only**, with no TARGET QC/MTP/independent Reviewer gates.
+
 ## Read by task type (pick a route, not the whole tree)
 
 | Task / role | Start with, after the first-read trio |

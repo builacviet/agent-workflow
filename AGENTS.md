@@ -15,6 +15,12 @@
 - **V1 architecture (Owner-approved in PR #22):** reuse the existing **trusted host Controller → Docker CLI** implementation with acknowledged broad engine authority; **do not build a new Executor or migrate to Podman in V1**. Neither technology is a V1 task dependency or an implicit V2 commitment. This never grants untrusted Codex, MCP or monitoring generic engine access or credentials, and does not verify production isolation. See the V1 scope contract for exact precedence.
 - Read [`docs/architecture.md`](docs/architecture.md) for **as-built** code; the [CL-12 architecture ADR](docs/adr/CL-12-architecture.md) documents a **historical non-V1 target proposal**, not the approved V1 design. In particular, Linux-host Rootless Podman Executor, GHCR and Grafana are **outside V1**, not required future tasks or evidence of active deployment.
 
+## Manual DEVELOPMENT code-quality checklists
+
+- **Manual Codex Dev:** Before opening any Draft PR, follow [Dev implementation & self-review checklist](docs/templates/dev-self-review-checklist.md). **Proactively fix Clean Code defects discovered during self-review within the authorized task scope, then rerun relevant tests**. If remediation requires out-of-scope edits, interface changes or risky refactoring, flag it to Tech Lead/Owner instead; never silently expand scope. Passing tests alone does not mean the code is clean.
+- **ChatGPT Tech Lead:** Review each Draft PR using the [TL PR review checklist](docs/templates/tl-review-checklist.md), covering Clean Code, architecture, security, correctness, tests, CI and operations on the exact PR HEAD. Log actionable findings with evidence and proportionate severity.
+- Both checklists operationalize [Engineering Quality Standards](docs/conventions/engineering-standards.md). They are **manual DEVELOPMENT** quality practices, not automated TARGET QC/MTP/Planning Package/independent Reviewer gates. Codex self-review never replaces TL review or Owner merge approval.
+
 ## Manual local worktrees
 
 - Keep the primary `main` checkout clean and update it only by fast-forward from `origin/main`. Verify `origin`, fetch, and record the `origin/main` SHA before creating a branch. Use and record the exact alternate base only when explicitly approved.
