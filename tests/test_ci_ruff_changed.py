@@ -1,4 +1,5 @@
 """Offline regression tests for the incremental Ruff CI selector."""
+
 from __future__ import annotations
 
 import subprocess

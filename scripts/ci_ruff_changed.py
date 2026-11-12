@@ -3,6 +3,7 @@
 The comparison uses the actual PR head, not a synthetic merge commit.
 A first branch push compares against its merge-base with origin/main.
 """
+
 from __future__ import annotations
 
 import os
@@ -40,9 +41,11 @@ def commit_range(environ: Mapping[str, str]) -> tuple[str, str]:
         branch = environ.get("RUFF_DEFAULT_BRANCH", "main")
         if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch):
             raise RuntimeError("Invalid default branch")
-        base = _git_bytes(
-            "merge-base", head, f"refs/remotes/origin/{branch}"
-        ).decode("ascii").strip()
+        base = (
+            _git_bytes("merge-base", head, f"refs/remotes/origin/{branch}")
+            .decode("ascii")
+            .strip()
+        )
         return _sha(base, "merge-base"), head
     raise RuntimeError("Ruff CI supports only push and pull_request events")
 
