@@ -6,7 +6,7 @@ startup: this check cannot prevent a privileged post-validation path swap.
 from __future__ import annotations
 
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 import sys
@@ -39,6 +39,10 @@ def _windows_fixed_drive(anchor: str) -> bool:
 
 def _linux_mount_type(path: Path, mountinfo: str) -> str:
     """Find the most specific mounted filesystem in our namespace."""
+    # Linux mountinfo always uses POSIX paths, even in Windows-hosted tests.
+    target = PurePosixPath(path.as_posix())
+    if not target.is_absolute():
+        raise ValueError("invalid Linux target path")
     best: tuple[int, str] | None = None
     for line in mountinfo.splitlines():
         sections = line.split(" - ", 1)
@@ -47,12 +51,12 @@ def _linux_mount_type(path: Path, mountinfo: str) -> str:
         left, right = sections[0].split(), sections[1].split()
         if len(left) < 5 or not right:
             raise ValueError("invalid Linux mount table")
-        mount = Path(_OCTAL_ESCAPE.sub(
+        mount = PurePosixPath(_OCTAL_ESCAPE.sub(
             lambda m: chr(int(m.group(1), 8)), left[4]
         ))
         if not mount.is_absolute():
             raise ValueError("invalid Linux mount point")
-        if path == mount or mount in path.parents:
+        if target == mount or mount in target.parents:
             specificity = len(mount.parts)
             if best is None or specificity > best[0]:
                 best = specificity, right[0]
