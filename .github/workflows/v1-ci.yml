@@ -104,7 +104,7 @@ jobs:
       - name: Install PostgreSQL migration and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e '.[test,postgres]'
+          python -m pip install -e '.[test,mcp,postgres]'
           python -m pip check
 
       - name: Apply Alembic baseline
@@ -112,6 +112,9 @@ jobs:
 
       - name: Check revision and PostgreSQL safety constraints
         run: python -m pytest -q tests/test_pg_migrations.py
+
+      - name: Test PostgreSQL runtime connections
+        run: python -m pytest -q tests/test_pg_connection.py
 
       - name: Verify rerunning head is idempotent
         run: python -m alembic -c alembic.ini upgrade head
