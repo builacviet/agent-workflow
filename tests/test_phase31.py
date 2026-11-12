@@ -543,10 +543,11 @@ def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
 
 
-def test_cleanup_remains_available_after_deadline(monkeypatch, state):
+def test_cleanup_remains_available_after_deadline(monkeypatch, state, tmp_path):
     import agent_workflow.budget as budget
     import agent_workflow.runners.coder_runtime as runtime
 
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])
 

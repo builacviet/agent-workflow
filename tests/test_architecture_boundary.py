@@ -20,6 +20,11 @@ from test_my_wfc import spec, payload
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 
+@pytest.fixture(autouse=True)
+def isolated_sandbox_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
+
+
 def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
     tmp_path, monkeypatch
 ):

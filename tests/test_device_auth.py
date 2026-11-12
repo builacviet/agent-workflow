@@ -17,6 +17,7 @@ from agent_workflow.runners.coder_runtime import CoderRuntime
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
     from agent_workflow.runners import coder_runtime as module, sandbox
 
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
     pem = tmp_path / "app.pem"

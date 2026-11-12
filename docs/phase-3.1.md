@@ -35,6 +35,14 @@ python tests/live_phase31_smoke.py
 
 The smoke uses disposable source/SQLite, local loopback tests and exact-name containers; no App/model calls or v2 resources. Worker CLI stays pinned to 0.161.0 / Node base digest. Non-root, read-only root, cap-drop, namespace seccomp hash and workspace sandbox remain required. `docker/coder-seccomp.json` derives from pinned Moby default plus seven namespace syscalls; license/provenance remain in repo. Rerun probe on each target host; do not use privileged/unconfined fallback.
 
+## R1-03 sandbox state migration gate (operator-owned)
+
+**Before restart or SQLite → PostgreSQL cutover**, stop the Controller, preserve all SQLite databases and `<sqlite-path>.sandbox-fences/` folders, identify every old SQLite location, and inspect `ACTIVE`/`BLOCKED` dispatches. Independently reconcile the original Docker daemon, scope/engine records and GitHub effects following the [dispatch recovery matrix](guides/dispatch-recovery.md). Never delete, rename, copy or overwrite an unresolved legacy fence merely to make startup pass; preserve evidence and escalate uncertain ownership.
+
+Configure `WFC_SANDBOX_STATE_DIR` in the **trusted host Controller process environment** as an absolute, stable, private, persistent local path. Keep its exact value and service identity across restarts. Do not use network drives, NFS/CIFS/9p, tmpfs, container scratch, worktrees, symlinks or reparse redirects. Startup blocks when *known* SQLite legacy fence directories contain unresolved files or links. A PostgreSQL DSN does not identify previously used SQLite paths; **unknown old state is an operator cutover blocker**, not proof of migration or recovery.
+
+Path validation is a preflight only: operator-controlled parent ACLs/mounts must remain trusted after startup. This change does not migrate records, release blocked slots, authorize additional Docker privileges or deploy PostgreSQL.
+
 ## Live operator setup (not performed by Coder)
 
 - Configure `.runtime/controller.json` from its example: explicit task IDs, canonical dedicated linked worktrees, write/handoff paths, same physical DB, image, model, timeout, App/installation IDs and ignored credential paths. Use the configured GitHub App PEM and `codex_auth_volume=techlead-review-poc_codex_auth`; no OpenAI API key is used. Controller mounts them only in their relevant phases; it does not read private contents or mint tokens. Never reuse v2 auth/data/images/volumes.
