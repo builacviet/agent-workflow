@@ -9,7 +9,6 @@ import pytest
 
 from scripts import ci_ruff_changed as gate
 
-
 A = "a" * 40
 B = "b" * 40
 C = "c" * 40
