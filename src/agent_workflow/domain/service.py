@@ -1,7 +1,6 @@
 """SQLite transactions own all workflow transitions; no AI review is performed here."""
 
 import json
-import os
 import time
 import uuid
 from urllib.parse import quote
@@ -17,13 +16,9 @@ from agent_workflow.paths import database_path
 from agent_workflow.storage.repository import SQLiteWorkflowRepository, WorkflowRepository
 
 
-def default_service() -> "WorkflowService":
-    return WorkflowService(database_path())
-
-
-def ci_gate_required() -> bool:
-    """Opt-in local gate: untracked and stale SHA always block review."""
-    return os.environ.get("WFC_CI_GATE_REQUIRED") == "1"
+def default_service(*, require_ci: bool = True) -> "WorkflowService":
+    """Legacy convenience constructor; CI is required unless explicitly overridden."""
+    return WorkflowService(database_path(), require_ci=require_ci)
 
 
 def encode(value):
@@ -43,7 +38,11 @@ class WorkflowService:
         allowed_repositories=None,
         effort_verifier=None,
         efforts=("instant", "medium", "high"),
+        require_ci: bool = True,
     ):
+        if type(require_ci) is not bool:
+            raise ValueError("require_ci must be a boolean")
+        self.require_ci = require_ci
         self.db_path = str(db_path)
         self.clock = clock
         self.lease_seconds = lease_seconds
@@ -225,7 +224,7 @@ class WorkflowService:
                 }
                 for t in rows
                 if (requested_effort is None or t["requested_effort"] == requested_effort)
-                and (not ci_gate_required() or db.ci_approved((t["task_id"], t["current_head_sha"])))
+                and (not self.require_ci or db.ci_approved((t["task_id"], t["current_head_sha"])))
             ]
 
     def claim_review(self, task_id, expected_head_sha, reviewer):
@@ -239,7 +238,7 @@ class WorkflowService:
                 raise WorkflowError("task is not reviewable")
             if expected_head_sha != task["current_head_sha"]:
                 raise WorkflowError("stale claim SHA")
-            if ci_gate_required() and not db.ci_approved((task_id, expected_head_sha)):
+            if self.require_ci and not db.ci_approved((task_id, expected_head_sha)):
                 raise WorkflowError("verified exact-HEAD CI is required before review")
             token = uuid.uuid4().hex
             now = self.clock()
@@ -345,7 +344,7 @@ class WorkflowService:
                 or data["reviewed_head_sha"] != attempt["expected_sha"]
             ):
                 raise WorkflowError("stale submission SHA")
-            if ci_gate_required() and not db.ci_approved((task["task_id"], data["reviewed_head_sha"])):
+            if self.require_ci and not db.ci_approved((task["task_id"], data["reviewed_head_sha"])):
                 raise WorkflowError("verified exact-HEAD CI is required for review submission")
             round_number = task["completed_review_rounds"] + 1
             if (

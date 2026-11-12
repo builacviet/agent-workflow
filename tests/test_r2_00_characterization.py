@@ -89,9 +89,8 @@ def test_public_workflow_review_roundtrip_is_durable_and_idempotent(
     tmp_path, monkeypatch
 ):
     """A migration must preserve public handoff, review and provenance behavior."""
-    monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)  # local POC mode
     path = tmp_path / "workflow.db"
-    service = WorkflowService(path)
+    service = WorkflowService(path, require_ci=False)
     service.provision_task(task_spec())
     assert handoff(service) == {
         "task_id": "R200", "status": "READY_IN_REVIEW", "head_sha": HEAD
@@ -103,7 +102,7 @@ def test_public_workflow_review_roundtrip_is_durable_and_idempotent(
 
     # Re-running a completed handoff against the same SHA must not duplicate it.
     handoff(service)
-    restarted = WorkflowService(path)
+    restarted = WorkflowService(path, require_ci=False)
     assert len(restarted.get_review_context("R200")["events"]) == 2
     assert restarted.get_review_context("R200")["github_references"]["complete_diff"].endswith(
         BASE + "..." + HEAD
@@ -114,9 +113,9 @@ def test_public_workflow_review_roundtrip_is_durable_and_idempotent(
     accepted = restarted.submit_review(payload, "synthetic-reviewer")
     assert accepted["verdict"] == "APPROVED"
     assert accepted["review_round"] == 1
-    duplicate = WorkflowService(path).submit_review(payload, "synthetic-reviewer")
+    duplicate = WorkflowService(path, require_ci=False).submit_review(payload, "synthetic-reviewer")
     assert duplicate["duplicate"] is True
-    result = WorkflowService(path).get_review_result("R200")
+    result = WorkflowService(path, require_ci=False).get_review_result("R200")
     assert result["status"] == "APPROVED"
     assert result["completed_review_rounds"] == 1
     assert result["latest_reviewed_sha"] == HEAD
@@ -129,9 +128,8 @@ def test_sticky_ci_failure_survives_success_rerun_and_restart(
     tmp_path, monkeypatch
 ):
     """A successful rerun on a previously failed SHA cannot enable review."""
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     path = tmp_path / "workflow.db"
-    service = WorkflowService(path)
+    service = WorkflowService(path, require_ci=True)
     service.provision_task(task_spec())
     handoff(service)
     state = ControllerCiState(path)
@@ -141,7 +139,7 @@ def test_sticky_ci_failure_survives_success_rerun_and_restart(
     state.record(evidence("SUCCESS", check_id=44))
 
     restarted_state = ControllerCiState(path)
-    restarted_service = WorkflowService(path)
+    restarted_service = WorkflowService(path, require_ci=True)
     assert restarted_state.previous_failure("R200", HEAD)
     assert not restarted_state.approved("R200", HEAD)
     assert restarted_state.tracked()[0]["verdict"] == "FAILURE"
@@ -154,9 +152,8 @@ def test_review_submission_rechecks_ci_and_does_not_consume_round(
     tmp_path, monkeypatch
 ):
     """A revoked CI observation after claim must not authorize submission."""
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     path = tmp_path / "workflow.db"
-    service = WorkflowService(path)
+    service = WorkflowService(path, require_ci=True)
     service.provision_task(task_spec())
     handoff(service)
     state = ControllerCiState(path)
@@ -167,7 +164,7 @@ def test_review_submission_rechecks_ci_and_does_not_consume_round(
     state.record(evidence("BLOCKED", check_id=52))
     with pytest.raises(WorkflowError, match="exact-HEAD CI"):
         service.submit_review(review_payload(claim), "synthetic-reviewer")
-    context = WorkflowService(path).get_review_context("R200")
+    context = WorkflowService(path, require_ci=True).get_review_context("R200")
     assert context["status"] == "IN_REVIEW"
     assert context["completed_review_rounds"] == 0
     assert context["previous_reviews"] == []
@@ -176,7 +173,7 @@ def test_review_submission_rechecks_ci_and_does_not_consume_round(
 def test_blocked_dispatch_retains_single_slot_across_restart(tmp_path):
     """Unknown external effects must not be retried by a new Controller."""
     path = tmp_path / "workflow.db"
-    service = WorkflowService(path)
+    service = WorkflowService(path, require_ci=True)
     for task_id in ("R200", "R201"):
         service.provision_task(task_spec(task_id))
     ledger = DispatchLedger(service)
@@ -185,7 +182,7 @@ def test_blocked_dispatch_retains_single_slot_across_restart(tmp_path):
     assert ledger.is_pre_launch(claim["dispatch_id"])
     ledger.block(claim["dispatch_id"])
 
-    restarted = DispatchLedger(WorkflowService(path))
+    restarted = DispatchLedger(WorkflowService(path, require_ci=False))
     assert restarted.is_pre_launch(claim["dispatch_id"])
     assert restarted.claim({"R200", "R201"}, 60) is None
     with pytest.raises(WorkflowError, match="dispatch lease lost"):
@@ -261,7 +258,7 @@ def test_public_workflow_contract_field_names_remain_stable():
 def test_known_gap_ci_failed_head_can_be_replaced_via_public_handoff(tmp_path):
     """Desired R1 contract; update/remove xfail when repaired, never use raw SQL."""
     path = tmp_path / "workflow.db"
-    service = WorkflowService(path)
+    service = WorkflowService(path, require_ci=True)
     service.provision_task(task_spec())
     handoff(service)
     state = ControllerCiState(path)

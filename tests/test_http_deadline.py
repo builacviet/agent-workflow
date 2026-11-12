@@ -141,7 +141,7 @@ def test_fast_response_and_redirect_refusal(loopback):
 
 
 def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
-    service = WorkflowService(tmp_path / "workflow.sqlite3")
+    service = WorkflowService(tmp_path / "workflow.sqlite3", require_ci=False)
     service.provision_task(
         {
             "task_id": "HTTP-DEADLINE",

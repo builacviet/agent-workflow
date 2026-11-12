@@ -12,6 +12,7 @@ import os
 from typing import Callable
 
 from agent_workflow.budget import dispatch_budget
+from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.dispatch_repository import DispatchLedger
@@ -113,7 +114,8 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         return _ci_operator(config, watch=bool(getattr(args, "ci_watch", False)))
     from agent_workflow.runners.coder_runtime import CoderRuntime
 
-    service = WorkflowService(config["database"])
+    # Read validated configuration at the operational composition boundary.
+    service = WorkflowService(config["database"], require_ci=AppConfig.from_env().ci_gate_required)
     ledger = DispatchLedger(service)
     runtime = CoderRuntime(config, service)
     if args.acknowledge:

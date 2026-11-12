@@ -28,7 +28,7 @@ def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
 
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(subprocess, "Popen", denied)
-    service = WorkflowService(tmp_path / "state.db")
+    service = WorkflowService(tmp_path / "state.db", require_ci=False)
     service.provision_task(spec())
     head = "a" * 40
     service.register_task_handoff(
@@ -110,7 +110,7 @@ class MemoryRepository:
 
 def test_service_accepts_repository_interface_without_sqlite(tmp_path):
     repo = MemoryRepository()
-    service = WorkflowService(repository=repo)
+    service = WorkflowService(repository=repo, require_ci=False)
     service.provision_task(spec())
     service.provision_task(spec())
     assert len(repo.unit.tasks) == 1 and len(repo.unit.events) == 1
@@ -135,7 +135,7 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
 def test_controller_only_launches_phases_and_receives_result(
     tmp_path, monkeypatch, failure, runtime_name
 ):
-    service = WorkflowService(tmp_path / "state.db")
+    service = WorkflowService(tmp_path / "state.db", require_ci=False)
     service.provision_task(spec())
     task = {
         "worktree": str(tmp_path),
@@ -253,7 +253,7 @@ def test_controller_only_launches_phases_and_receives_result(
 @pytest.fixture
 def recovery_dispatch(tmp_path):
     database = tmp_path / "state.db"
-    service = WorkflowService(database)
+    service = WorkflowService(database, require_ci=False)
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     config = {"database": str(database), "tasks": {"TEST": {}}, "model": "gpt-6-luna"}
@@ -359,7 +359,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(recovery_disp
 def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, monkeypatch, definitive):
     database = tmp_path / "state.db"
     config = {"database": str(database)}
-    service = WorkflowService(database)
+    service = WorkflowService(database, require_ci=False)
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     ledger = DispatchLedger(service)
@@ -619,7 +619,7 @@ def test_controller_compose_parses_without_starting_services():
 
 
 def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
-    service = WorkflowService(tmp_path / "test.db")
+    service = WorkflowService(tmp_path / "test.db", require_ci=False)
     runtime = CoderRuntime({"image": "fixture"}, service)
     dispatch = "a" * 32
     host = "unix:///fixture.sock"
