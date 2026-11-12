@@ -15,6 +15,7 @@
 
 - [ ] **Correctness:** Map every applicable AC to behavior. Handle happy path, invalid input, boundaries, errors and backward compatibility.
 - [ ] **Clean Code:** Prefer descriptive names, small cohesive functions, explicit types/exceptions, readable flow and Python 3.11+/PEP 8. Apply DRY to real duplicated knowledge; SOLID only where it improves boundaries or testability. Remove dead code, debug leftovers, avoid needless magic values and overengineering.
+- [ ] **Ruff for changed Python:** Install the repo's `quality` extra, then run `python -m ruff check <changed Python files>` and `python -m ruff format --check <changed Python files>`. Use `python -m ruff format <authorized files>` to fix formatting before Draft PR. Do not auto-format the entire legacy tree.
 - [ ] **Architecture:** Respect module ownership, dependency direction and existing interfaces. Do not add coupling or expand the changed-path allowlist.
 - [ ] **Security:** Validate at trust boundaries; fail closed; protect credentials, paths, Docker/network permissions, SQL and subprocess arguments; use least privilege and no unjustified shell execution.
 - [ ] **Reliability (when applicable):** Check timeouts, transactions/rollback, idempotency, concurrency, cleanup, restart/recovery and bounded resource use.
