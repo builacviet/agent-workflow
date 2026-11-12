@@ -17,7 +17,6 @@ from agent_workflow.integrations.github import REPOSITORY, WorkflowError, valida
 from agent_workflow.storage.migrations import (
     Migration, migrate, table_names, validate_schema,
 )
-from agent_workflow.storage.repository import SQLiteUnit
 from agent_workflow.storage.webhook_inbox import WebhookInbox, WebhookNotification
 
 
@@ -101,7 +100,7 @@ class ControllerCiState:
         return db
 
     def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
-        """Register only after trusted worker handoff; at most 2 repair HEADs."""
+        """Create the initial CI binding or replay the persisted PR and HEAD."""
         validate_sha(head_sha)
         if not isinstance(task_id, str) or not task_id or type(pr_number) is not int or pr_number < 1:
             raise WorkflowError("invalid CI tracking identity")
@@ -131,10 +130,8 @@ class ControllerCiState:
                 return
             if row["pr_number"] != pr_number:
                 raise WorkflowError("CI tracking PR differs from persisted binding")
-            if row["head_sha"] == head_sha:
-                return
-            # Retain tracking for legacy callers that already moved the task HEAD.
-            SQLiteUnit(db).advance_failed_ci_head(task_id, row["head_sha"], head_sha)
+            if row["head_sha"] != head_sha:
+                raise WorkflowError("CI tracking HEAD differs from persisted binding")
 
     def tracked(self, limit: int = 32) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 32:
