@@ -6,6 +6,7 @@ import uuid
 from urllib.parse import quote
 
 from agent_workflow.domain.contracts import Submission, TaskSpec
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.integrations.github import (
     REPOSITORY,
     WorkflowError,
@@ -161,24 +162,45 @@ class WorkflowService:
             if (
                 task["status"]
                 not in {
-                    "AWAITING_HANDOFF",
-                    "CHANGES_REQUESTED",
-                    "READY_IN_REVIEW",
+                    WorkflowStatus.AWAITING_HANDOFF,
+                    WorkflowStatus.CHANGES_REQUESTED,
+                    WorkflowStatus.READY_IN_REVIEW,
                 }
                 or task["completed_review_rounds"] >= 2
             ):
                 raise WorkflowError("handoff is not permitted in this state")
-            if task["status"] == "READY_IN_REVIEW":
-                if new_head_sha != task["current_head_sha"]:
-                    raise WorkflowError("pending handoff cannot be replaced")
-                return {
-                    "task_id": task_id,
-                    "status": "READY_IN_REVIEW",
-                    "head_sha": new_head_sha,
-                }
+            old_head = task["current_head_sha"]
+            result = {
+                "task_id": task_id,
+                "status": WorkflowStatus.READY_IN_REVIEW,
+                "head_sha": new_head_sha,
+            }
+            metadata = {
+                "handoff_file_path": handoff_file_path,
+                "test_summary": test_summary,
+                "verification": "reporter_supplied_not_remotely_verified",
+            }
+            action = "HANDOFF"
+            if task["status"] == WorkflowStatus.READY_IN_REVIEW:
+                prior = db.find_head_handoff(task_id, old_head)
+                if (
+                    prior
+                    and json.loads(prior["metadata"]).get("handoff_file_path")
+                    != handoff_file_path
+                ):
+                    raise WorkflowError("handoff path differs from current handoff")
+                if new_head_sha == old_head:
+                    return result
+                if prior is None or old_head is None or new_head_sha == base_sha:
+                    raise WorkflowError("CI repair requires a new SHA and current handoff")
+                if db.find_head_handoff(task_id, new_head_sha):
+                    raise WorkflowError("stale CI repair SHA")
+                pr_number = db.advance_failed_ci_head(task_id, old_head, new_head_sha)
+                action = "CI_REPAIR_HANDOFF"
+                metadata.update(previous_head_sha=old_head, pr_number=pr_number)
             if (
-                task["status"] == "CHANGES_REQUESTED"
-                and new_head_sha == task["current_head_sha"]
+                task["status"] == WorkflowStatus.CHANGES_REQUESTED
+                and new_head_sha == old_head
             ):
                 raise WorkflowError("correction requires a new pushed SHA")
             db.set_head((new_head_sha, task_id))
@@ -186,19 +208,18 @@ class WorkflowService:
             self.event(
                 db,
                 task,
-                "READY_IN_REVIEW",
-                "HANDOFF",
-                {
-                    "handoff_file_path": handoff_file_path,
-                    "test_summary": test_summary,
-                    "verification": "reporter_supplied_not_remotely_verified",
-                },
+                WorkflowStatus.READY_IN_REVIEW,
+                action,
+                metadata,
             )
-            return {
-                "task_id": task_id,
-                "status": "READY_IN_REVIEW",
-                "head_sha": new_head_sha,
-            }
+            return result
+
+    def review_ci_allows(self, db, task_id: str, head_sha: str) -> bool:
+        if not self.require_ci:
+            handoff = db.find_head_handoff(task_id, head_sha)
+            if not handoff or handoff["action"] != "CI_REPAIR_HANDOFF":
+                return True
+        return db.ci_approved((task_id, head_sha))
 
     def recover_expired(self, db, task):
         active = db.find_active_claim((task["task_id"],))
@@ -224,7 +245,7 @@ class WorkflowService:
                 }
                 for t in rows
                 if (requested_effort is None or t["requested_effort"] == requested_effort)
-                and (not self.require_ci or db.ci_approved((t["task_id"], t["current_head_sha"])))
+                and self.review_ci_allows(db, t["task_id"], t["current_head_sha"])
             ]
 
     def claim_review(self, task_id, expected_head_sha, reviewer):
@@ -238,7 +259,7 @@ class WorkflowService:
                 raise WorkflowError("task is not reviewable")
             if expected_head_sha != task["current_head_sha"]:
                 raise WorkflowError("stale claim SHA")
-            if self.require_ci and not db.ci_approved((task_id, expected_head_sha)):
+            if not self.review_ci_allows(db, task_id, expected_head_sha):
                 raise WorkflowError("verified exact-HEAD CI is required before review")
             token = uuid.uuid4().hex
             now = self.clock()
@@ -344,7 +365,7 @@ class WorkflowService:
                 or data["reviewed_head_sha"] != attempt["expected_sha"]
             ):
                 raise WorkflowError("stale submission SHA")
-            if self.require_ci and not db.ci_approved((task["task_id"], data["reviewed_head_sha"])):
+            if not self.review_ci_allows(db, task["task_id"], data["reviewed_head_sha"]):
                 raise WorkflowError("verified exact-HEAD CI is required for review submission")
             round_number = task["completed_review_rounds"] + 1
             if (
