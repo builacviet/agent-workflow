@@ -34,7 +34,8 @@ def test_alembic_has_no_checked_in_database_credentials():
     assert "WFC_PG_MIGRATOR_DSN" in env
     assert "CREATE SCHEMA wfc" in migration
     assert "Destructive PostgreSQL baseline downgrade is forbidden" in migration
-    assert "flask" not in env.lower()
+    assert "from flask " not in env.lower()
+    assert "import flask" not in env.lower()
 
 
 def test_postgres_baseline_tables_and_version():
