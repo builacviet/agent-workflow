@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
+from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, canonical_repository
 from agent_workflow.domain.service import WorkflowService
@@ -295,13 +296,22 @@ class CoderRuntime:
     ) -> None:
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
-        database = config.get("database") or getattr(service.repository, "db_path", None)
-        fence_dir = (
-            Path(str(Path(database).resolve()) + ".sandbox-fences")
-            if database is not None
-            else None
+        state_dir = AppConfig.from_env().sandbox_state_dir
+        database = config.get("database") or getattr(
+            getattr(service, "repository", None), "db_path", None
         )
-        self.sandbox = SandboxManager(fence_dir=fence_dir)
+        # Only inspect a known SQLite path; never interpret a DSN as a path.
+        if database is not None and "://" not in str(database):
+            try:
+                legacy = Path(str(Path(database).resolve()) + ".sandbox-fences")
+                legacy_pending = legacy.exists() and any(legacy.iterdir())
+            except (OSError, ValueError):
+                raise WorkflowError("unable to inspect legacy sandbox fences") from None
+            if legacy_pending:
+                raise WorkflowError(
+                    "legacy sandbox fences require operator recovery before startup"
+                )
+        self.sandbox = SandboxManager(fence_dir=state_dir)
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
         runtime = self.config.get("runtime", "codex")

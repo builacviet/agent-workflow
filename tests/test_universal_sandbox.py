@@ -844,3 +844,48 @@ def test_live_sandbox_suppresses_docker_proxy_defaults(live_sandbox, tmp_path, m
         "import os, sys; assert all(os.environ.get(k) == '' for k in sys.argv[1:]); print('ok')",
         *sandbox._PROXY_NAMES,
     ).strip() == b"ok"
+
+
+def test_runtime_state_is_independent_of_database_and_survives_restart(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from agent_workflow.runners.coder_runtime import CoderRuntime
+
+    state = tmp_path / "sandbox-state"
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(state))
+    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(tmp_path / "db.sqlite")))
+    first = CoderRuntime({}, service)
+    assert first.sandbox._fence_dir == state
+    dispatch = "a" * 32
+    first.sandbox.record_engine(dispatch, "unix:///fixture.sock", "fixture-daemon-a")
+    dsn = "postgresql://user:secret-password@localhost/database"
+    second = CoderRuntime({"database": dsn}, service)
+    assert second.sandbox._fence_dir == state
+    assert second.sandbox.has_launch_records(dispatch)
+    assert second.sandbox.recovery_engine(dispatch) == (
+        "unix:///fixture.sock", "fixture-daemon-a"
+    )
+    assert "secret-password" not in str(second.sandbox._fence_dir)
+
+
+def test_runtime_refuses_to_abandon_legacy_fences(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from agent_workflow.runners.coder_runtime import CoderRuntime
+    from agent_workflow.integrations.github import WorkflowError
+
+    database = tmp_path / "state.sqlite"
+    legacy = tmp_path / "state.sqlite.sandbox-fences"
+    legacy.mkdir()
+    (legacy / "pending.scope").write_text("pending", encoding="ascii")
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
+    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    with pytest.raises(WorkflowError, match="operator recovery"):
+        CoderRuntime({}, service)
+    assert (legacy / "pending.scope").read_text() == "pending"
+
+
+def test_runtime_without_state_uses_stable_default(monkeypatch):
+    from agent_workflow.runners.coder_runtime import CoderRuntime
+
+    monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
+    runtime = CoderRuntime({}, None)
+    assert runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"

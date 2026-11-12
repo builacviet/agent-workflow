@@ -46,3 +46,16 @@ def test_nginx_dynamic_service_dns_preserves_routes() -> None:
     assert "proxy_pass http://mcp:8000;" not in config
     assert "location = /webhooks/github" in config
     assert "location / {" in config
+
+
+def test_sandbox_state_config_rejects_unsafe_paths(tmp_path):
+    import pytest
+    from agent_workflow.app_config import AppConfig
+
+    assert AppConfig.from_env({}).sandbox_state_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
+    assert AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": str(tmp_path)}).sandbox_state_dir == tmp_path
+    for value in ("", "relative/path", str(tmp_path / ".." / "escape"),
+                  "postgresql://user:secret-password@host/db", "bad\x00path"):
+        with pytest.raises(ValueError) as error:
+            AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": value})
+        assert "secret-password" not in str(error.value)
