@@ -297,11 +297,14 @@ class CoderRuntime:
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
         state_dir = AppConfig.from_env().sandbox_state_dir
-        database = config.get("database") or getattr(
-            getattr(service, "repository", None), "db_path", None
+        databases = (
+            config.get("database"),
+            getattr(getattr(service, "repository", None), "db_path", None),
         )
-        # Only inspect a known SQLite path; never interpret a DSN as a path.
-        if database is not None and "://" not in str(database):
+        # Check every known SQLite path; never interpret a DSN as a path.
+        for database in databases:
+            if database is None or "://" in str(database):
+                continue
             try:
                 legacy = Path(str(Path(database).resolve()) + ".sandbox-fences")
                 legacy_pending = legacy.exists() and any(legacy.iterdir())

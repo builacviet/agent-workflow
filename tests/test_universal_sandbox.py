@@ -889,3 +889,21 @@ def test_runtime_without_state_uses_stable_default(monkeypatch):
     monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
     runtime = CoderRuntime({}, None)
     assert runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
+
+
+def test_dsn_override_cannot_hide_repository_legacy_fences(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from agent_workflow.runners.coder_runtime import CoderRuntime
+
+    database = tmp_path / "state.sqlite"
+    legacy = tmp_path / "state.sqlite.sandbox-fences"
+    legacy.mkdir()
+    record = legacy / "pending.scope"
+    record.write_text("pending", encoding="ascii")
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
+    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    dsn = "postgresql://user:secret-password@localhost/database"
+    with pytest.raises(WorkflowError, match="operator recovery") as error:
+        CoderRuntime({"database": dsn}, service)
+    assert "secret-password" not in str(error.value)
+    assert record.read_text(encoding="ascii") == "pending"

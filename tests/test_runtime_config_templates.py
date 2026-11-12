@@ -59,3 +59,58 @@ def test_sandbox_state_config_rejects_unsafe_paths(tmp_path):
         with pytest.raises(ValueError) as error:
             AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": value})
         assert "secret-password" not in str(error.value)
+
+
+
+def test_sandbox_state_rejects_windows_remote_and_device_paths():
+    import pytest
+    from agent_workflow.app_config import AppConfig
+
+    for path in (
+        r"\\server\share\fences",
+        r"\\?\C:\private\fences",
+        r"\\.\C:\private\fences",
+        "//server/share/fences",
+    ):
+        with pytest.raises(ValueError, match="safe absolute local path"):
+            AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": path})
+
+
+def test_sandbox_state_rejects_redirecting_components(tmp_path, monkeypatch):
+    import stat
+    from types import SimpleNamespace
+    import pytest
+    from agent_workflow.app_config import AppConfig
+
+    parent = tmp_path / "redirect"
+    parent.mkdir()
+    target = parent / "fences"
+    original = Path.lstat
+    for mode, attributes in ((stat.S_IFLNK, 0), (stat.S_IFDIR, 0x400)):
+        def fake_lstat(path, *args, **kwargs):
+            if path == parent:
+                return SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
+            return original(path, *args, **kwargs)
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "lstat", fake_lstat)
+            with pytest.raises(ValueError, match="safe absolute local path"):
+                AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": str(target)})
+
+
+def test_sandbox_default_resolves_home_at_instantiation(tmp_path, monkeypatch):
+    from agent_workflow.app_config import AppConfig
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert AppConfig.from_env({}).sandbox_state_dir == tmp_path / ".agent-workflow" / "sandbox-fences"
+
+
+def test_sandbox_state_rejects_remote_mapped_drive(tmp_path, monkeypatch):
+    import os
+    import pytest
+    from agent_workflow import app_config
+
+    if os.name != "nt":
+        pytest.skip("Windows drive classification")
+    monkeypatch.setattr(app_config, "_windows_local_drive", lambda anchor: False)
+    with pytest.raises(ValueError, match="safe absolute local path"):
+        app_config.AppConfig.from_env({"WFC_SANDBOX_STATE_DIR": str(tmp_path)})
