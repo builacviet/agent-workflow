@@ -6,16 +6,21 @@ revision = "pg01_baseline"
 down_revision = None
 branch_labels = None
 depends_on = None
-SCHEMA = "wfc"
-
-
 def create(name: str, *columns) -> None:
-    op.create_table(name, *columns, schema=SCHEMA)
+    op.create_table(name, *columns)
 
 
 def upgrade() -> None:
-    # Fail closed if an unversioned or unexpected wfc schema already exists.
-    op.execute("CREATE SCHEMA wfc")
+    # Alembic may already have created public.alembic_version in this transaction.
+    # Reject every other pre-existing table; this is a fresh development baseline,
+    # never an implicit schema adoption or in-place upgrade.
+    existing = op.get_bind().execute(sa.text(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' "
+        "AND table_name <> 'alembic_version' LIMIT 1"
+    )).scalar_one_or_none()
+    if existing is not None:
+        raise RuntimeError("PostgreSQL public schema must be empty for baseline")
     create(
         "tasks",
         sa.Column("task_id", sa.Text(), primary_key=True),
@@ -42,7 +47,7 @@ def upgrade() -> None:
     create(
         "review_attempts",
         sa.Column("token", sa.Text(), primary_key=True),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("expected_sha", sa.Text(), nullable=False),
         sa.Column("reviewer", sa.Text(), nullable=False),
         sa.Column("claimed_at", sa.Float(precision=53), nullable=False),
@@ -53,12 +58,12 @@ def upgrade() -> None:
     )
     op.create_index(
         "one_active_claim", "review_attempts", ["task_id"],
-        unique=True, schema=SCHEMA, postgresql_where=sa.text("status = 'ACTIVE'"),
+        unique=True, postgresql_where=sa.text("status = 'ACTIVE'"),
     )
     create(
         "reviews",
         sa.Column("review_id", sa.Text(), primary_key=True),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("round_number", sa.Integer(), nullable=False),
         sa.Column("base_sha", sa.Text(), nullable=False),
         sa.Column("reviewed_head_sha", sa.Text(), nullable=False),
@@ -77,9 +82,9 @@ def upgrade() -> None:
     )
     create(
         "review_findings",
-        sa.Column("review_id", sa.Text(), sa.ForeignKey("wfc.reviews.review_id"), nullable=False),
+        sa.Column("review_id", sa.Text(), sa.ForeignKey("reviews.review_id"), nullable=False),
         sa.Column("finding_id", sa.Text(), nullable=False),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("severity", sa.Text(), nullable=False),
         sa.Column("acceptance_criterion", sa.Text(), nullable=False),
         sa.Column("file_path", sa.Text(), nullable=False),
@@ -92,7 +97,7 @@ def upgrade() -> None:
     create(
         "task_events",
         sa.Column("event_id", sa.BigInteger(), sa.Identity(), primary_key=True),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("previous_status", sa.Text()),
         sa.Column("next_status", sa.Text(), nullable=False),
         sa.Column("action", sa.Text(), nullable=False),
@@ -103,7 +108,7 @@ def upgrade() -> None:
     create(
         "coder_dispatches",
         sa.Column("dispatch_id", sa.Text(), primary_key=True),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("round_number", sa.Integer(), nullable=False),
         sa.Column("input_sha", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
@@ -120,7 +125,7 @@ def upgrade() -> None:
         "coder_runtime_evidence",
         sa.Column(
             "dispatch_id", sa.Text(),
-            sa.ForeignKey("wfc.coder_dispatches.dispatch_id"), primary_key=True,
+            sa.ForeignKey("coder_dispatches.dispatch_id"), primary_key=True,
         ),
         sa.Column("task_id", sa.Text(), nullable=False),
         sa.Column("input_sha", sa.Text(), nullable=False),
@@ -143,10 +148,10 @@ def upgrade() -> None:
         sa.Column("head_sha", sa.Text(), nullable=False),
         sa.Column("body_digest", sa.Text(), nullable=False),
     )
-    op.create_index("webhook_inbox_body_digest", "webhook_inbox", ["body_digest"], schema=SCHEMA)
+    op.create_index("webhook_inbox_body_digest", "webhook_inbox", ["body_digest"])
     create(
         "controller_ci_tasks",
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), primary_key=True),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), primary_key=True),
         sa.Column("pr_number", sa.Integer(), nullable=False),
         sa.Column("head_sha", sa.Text(), nullable=False),
         sa.Column("verdict", sa.Text(), nullable=False),
@@ -158,7 +163,7 @@ def upgrade() -> None:
     create(
         "controller_ci_observations",
         sa.Column("id", sa.BigInteger(), sa.Identity(), primary_key=True),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.controller_ci_tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("controller_ci_tasks.task_id"), nullable=False),
         sa.Column("pr_number", sa.Integer(), nullable=False),
         sa.Column("head_sha", sa.Text(), nullable=False),
         sa.Column("verdict", sa.Text(), nullable=False),
@@ -171,13 +176,13 @@ def upgrade() -> None:
     )
     op.create_index(
         "controller_ci_observation_lookup", "controller_ci_observations",
-        ["task_id", "head_sha", "verdict"], schema=SCHEMA,
+        ["task_id", "head_sha", "verdict"],
     )
     create(
         "controller_ci_processed",
         sa.Column(
             "delivery_id", sa.Text(),
-            sa.ForeignKey("wfc.webhook_inbox.delivery_id"), primary_key=True,
+            sa.ForeignKey("webhook_inbox.delivery_id"), primary_key=True,
         ),
         sa.Column(
             "processed_at", sa.Float(precision=53), nullable=False,
@@ -190,9 +195,9 @@ def upgrade() -> None:
         "publication_intents",
         sa.Column(
             "dispatch_id", sa.Text(),
-            sa.ForeignKey("wfc.coder_dispatches.dispatch_id"), primary_key=True,
+            sa.ForeignKey("coder_dispatches.dispatch_id"), primary_key=True,
         ),
-        sa.Column("task_id", sa.Text(), sa.ForeignKey("wfc.tasks.task_id"), nullable=False),
+        sa.Column("task_id", sa.Text(), sa.ForeignKey("tasks.task_id"), nullable=False),
         sa.Column("repository", sa.Text(), nullable=False),
         sa.Column("branch", sa.Text(), nullable=False),
         sa.Column("base_sha", sa.Text(), nullable=False),

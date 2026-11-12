@@ -12,15 +12,15 @@ target_metadata = None
 
 
 def _dsn() -> str:
-    value = os.environ.get("WFC_PG_MIGRATOR_DSN")
+    value = os.environ.get("PG_MIGRATOR_DSN")
     if not value:
-        raise RuntimeError("WFC_PG_MIGRATOR_DSN is required")
+        raise RuntimeError("PG_MIGRATOR_DSN is required")
     try:
         url = sa.engine.make_url(value)
         if url.drivername != "postgresql+psycopg" or not url.username or not url.database:
             raise ValueError
     except (sa.exc.ArgumentError, ValueError):
-        raise RuntimeError("WFC_PG_MIGRATOR_DSN must be an explicit PostgreSQL psycopg DSN") from None
+        raise RuntimeError("PG_MIGRATOR_DSN must be an explicit PostgreSQL psycopg DSN") from None
     return value
 
 

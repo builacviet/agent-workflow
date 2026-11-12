@@ -88,8 +88,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
-      WFC_PG_MIGRATOR_DSN: postgresql+psycopg://postgres:ci-local-only@127.0.0.1:5432/workflow_ci
-      WFC_PG_TEST_DSN: postgresql+psycopg://postgres:ci-local-only@127.0.0.1:5432/workflow_ci
+      PG_MIGRATOR_DSN: postgresql+psycopg://postgres:ci-local-only@127.0.0.1:5432/workflow_ci
+      PG_TEST_DSN: postgresql+psycopg://postgres:ci-local-only@127.0.0.1:5432/workflow_ci
     steps:
       - name: Checkout exact triggering ref
         uses: actions/checkout@v6
