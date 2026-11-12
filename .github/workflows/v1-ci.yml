@@ -59,6 +59,12 @@ jobs:
           RUFF_PUSH_BEFORE_SHA: ${{ github.event.before }}
           RUFF_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: python scripts/ci_ruff_changed.py
+
+      # Temporary diagnosis; remove in follow-up commit.
+      - name: Show expected Ruff import order on failure
+        if: failure()
+        run: python -m ruff check --diff tests/test_ci_ruff_changed.py || true
+
       - name: Compile Python source and tests
         run: python -m compileall -q src tests alembic
 
