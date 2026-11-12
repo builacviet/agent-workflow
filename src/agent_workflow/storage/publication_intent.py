@@ -199,7 +199,7 @@ class PublicationIntentStore:
     ) -> None:
         """Persist *independently verified* remote receipt, NEVER unblock slot."""
         self._dispatch_id(dispatch_id)
-        __validate_sha(head_sha)
+        _validate_sha(head_sha)
         if type(pr_number) is not int or pr_number <= 0 or not isinstance(pr_url, str):
             raise PublicationError("invalid publication receipt")
         with self._transaction() as db:
