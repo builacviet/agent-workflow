@@ -6,8 +6,6 @@ publication intent, real GitHub races, or atomicity across SQLite and GitHub.
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from agent_workflow.domain.service import WorkflowService
@@ -110,7 +108,7 @@ def test_ambiguous_publish_keeps_durable_dispatch_blocked_after_restart(tmp_path
     """An unknown external effect must never auto-release the dispatch slot."""
     path = tmp_path / "synthetic-workflow.db"
     service = WorkflowService(path)
-    service.provision_task({
+    task_spec = {
         "task_id": "R104",
         "title": "Publication ambiguity",
         "description": "Synthetic failure only",
@@ -124,7 +122,9 @@ def test_ambiguous_publish_keeps_durable_dispatch_blocked_after_restart(tmp_path
         "require_verified_effort": False,
         "context_paths": [HANDOFF],
         "synthetic": True,
-    })
+    }
+    service.provision_task(task_spec)
+    service.provision_task({**task_spec, "task_id": "R105"})
     ledger = DispatchLedger(service)
     invocations = []
 
@@ -140,6 +140,7 @@ def test_ambiguous_publish_keeps_durable_dispatch_blocked_after_restart(tmp_path
     resumed_ledger = DispatchLedger(restarted)
     assert len(invocations) == 1
     assert resumed_ledger.claim({"R104"}, 60) is None
+    assert resumed_ledger.claim({"R105"}, 60) is None  # Global slot stays blocked
     with restarted.repository.raw_connection() as db:
         statuses = [
             row["status"]
