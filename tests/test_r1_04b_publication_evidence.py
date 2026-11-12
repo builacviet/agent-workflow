@@ -15,7 +15,7 @@ from agent_workflow.integrations.publication_receipt import (
     verify_remote_publication,
 )
 from agent_workflow.storage.dispatch_repository import DispatchLedger
-from agent_workflow.storage.publication_intent import PublicationIntentStore
+from agent_workflow.storage.publication_intent import PublicationError, PublicationIntentStore
 
 
 BASE = "a" * 40
@@ -84,7 +84,7 @@ def test_intent_survives_restart_before_any_remote_side_effect(publication):
     restarted = PublicationIntentStore(path)
     assert restarted.get(claim["dispatch_id"])["state"] == "PREPARED"
     # A crash before a response is not permission to reattempt a push.
-    with pytest.raises(WorkflowError, match="never retry"):
+    with pytest.raises(PublicationError, match="never retry"):
         _prepare(restarted, claim)
     assert ledger.claim({"NEXT"}, 60) is None
 
@@ -100,7 +100,7 @@ def test_uncertain_remote_write_remains_blocked_even_after_valid_receipt(publica
     assert intent["state"] == "UNCERTAIN"
     assert ledger.claim({"NEXT"}, 60) is None
     receipt = verify_remote_publication(intent, *_remote(intent))
-    restarted.record_verified(dispatch, receipt)
+    restarted.record_verified(dispatch, receipt.head_sha, receipt.pr_number, receipt.pr_url)
     assert PublicationIntentStore(path).get(dispatch)["state"] == "VERIFIED"
     assert ledger.claim({"NEXT"}, 60) is None
     with ledger.service.repository.raw_connection() as db:
@@ -109,8 +109,8 @@ def test_uncertain_remote_write_remains_blocked_even_after_valid_receipt(publica
             (dispatch,),
         ).fetchone()
     assert (row["status"], row["slot"]) == ("BLOCKED", 1)
-    with pytest.raises(WorkflowError, match="receipt"):
-        restarted.record_verified(dispatch, receipt)
+    with pytest.raises(PublicationError, match="receipt"):
+        restarted.record_verified(dispatch, receipt.head_sha, receipt.pr_number, receipt.pr_url)
 
 
 def test_receipt_cannot_be_recorded_without_uncertainty_and_held_slot(publication):
@@ -124,8 +124,8 @@ def test_receipt_cannot_be_recorded_without_uncertainty_and_held_slot(publicatio
     receipt = verify_remote_publication(intent, *_remote(intent))
     # Simulate an unexpected external operator release; never trust stale slot.
     ledger.acknowledge(claim["dispatch_id"])
-    with pytest.raises(WorkflowError, match="blocked matching intent"):
-        store.record_verified(claim["dispatch_id"], receipt)
+    with pytest.raises(PublicationError, match="blocked matching intent"):
+        store.record_verified(claim["dispatch_id"], receipt.head_sha, receipt.pr_number, receipt.pr_url)
 
 
 @pytest.mark.parametrize("mutation", [
@@ -186,15 +186,15 @@ def test_only_active_authorized_dispatch_can_prepare_intent(publication, invalid
         args[6] = "short"
     elif invalid == "missing_dispatch":
         args[0] = "0" * 32
-    with pytest.raises(WorkflowError):
+    with pytest.raises(PublicationError):
         store.prepare(*args)
-    with pytest.raises(WorkflowError, match="unknown publication intent"):
+    with pytest.raises(PublicationError, match="unknown publication intent"):
         store.get(claim["dispatch_id"])
 
 
 def test_unexpected_no_intent_cannot_mark_dispatch_uncertain(publication):
     _, ledger, claim, store = publication
-    with pytest.raises(WorkflowError, match="unavailable"):
+    with pytest.raises(PublicationError, match="unavailable"):
         store.mark_uncertain(claim["dispatch_id"])
     # The original active slot remains held.
     assert ledger.claim({"NEXT"}, 60) is None
