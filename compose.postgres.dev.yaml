@@ -1,0 +1,26 @@
+name: agent-workflow-pg-dev
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DEV_DB:?required}
+      POSTGRES_USER: ${PG_DEV_USER:?required}
+      POSTGRES_PASSWORD: ${PG_DEV_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:${PG_DEV_PORT:-55432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - pg_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+volumes:
+  pg_data:
+networks:
+  pg_dev:
+    driver: bridge
