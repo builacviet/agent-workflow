@@ -145,6 +145,17 @@ def test_lock_wait_is_bounded_and_retries(setup):
 def test_new_round_and_sha_are_new_identity(setup):
     ledger, _, factory, task_id = setup
     first = ledger.claim({task_id}, 60)
+    ledger.record_runtime_evidence(
+        first["dispatch_id"],
+        task_id,
+        first["input_sha"],
+        "codex",
+        "1",
+        None,
+        "UNVERIFIED",
+        "d" * 64,
+        HEAD,
+    )
     ledger.finish(first["dispatch_id"], HEAD)
     with factory.transaction() as conn:
         conn.execute(
@@ -244,27 +255,40 @@ def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
     assert ledger.claim({task_id}, 60) is not None
 
 
-def test_finish_without_evidence_matches_existing_dev_contract(setup):
+def test_finish_without_evidence_fails_and_retains_slot(setup):
     ledger, _, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
+    with pytest.raises(WorkflowError, match="runtime evidence required"):
+        ledger.finish(claim["dispatch_id"], HEAD)
+    with factory.transaction() as conn:
+        row = conn.execute(
+            text(
+                "SELECT status,slot,result_sha FROM agent_dispatches WHERE dispatch_id=:id"
+            ),
+            {"id": claim["dispatch_id"]},
+        ).one()
+        assert tuple(row) == ("ACTIVE", 1, None)
+    assert ledger.claim({task_id}, 60) is None
+    ledger.record_runtime_evidence(
+        claim["dispatch_id"],
+        task_id,
+        claim["input_sha"],
+        "codex",
+        "1",
+        None,
+        "UNVERIFIED",
+        "d" * 64,
+        HEAD,
+    )
     ledger.finish(claim["dispatch_id"], HEAD)
     with factory.transaction() as conn:
-        assert (
-            conn.execute(
-                text("SELECT status FROM agent_dispatches WHERE dispatch_id=:id"),
-                {"id": claim["dispatch_id"]},
-            ).scalar_one()
-            == "DONE"
-        )
-        assert (
-            conn.execute(
-                text(
-                    "SELECT count(*) FROM agent_execution_evidence WHERE dispatch_id=:id"
-                ),
-                {"id": claim["dispatch_id"]},
-            ).scalar_one()
-            == 0
-        )
+        row = conn.execute(
+            text(
+                "SELECT status,slot,result_sha FROM agent_dispatches WHERE dispatch_id=:id"
+            ),
+            {"id": claim["dispatch_id"]},
+        ).one()
+        assert tuple(row) == ("DONE", None, HEAD)
 
 
 def test_tampered_evidence_identity_keeps_slot(setup):

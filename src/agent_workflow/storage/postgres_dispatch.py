@@ -235,16 +235,19 @@ class PostgresDispatchLedger:
                 raise WorkflowError("dispatch lease lost")
             self._timeout(session)
             evidence = session.get(AgentExecutionEvidence, dispatch_id)
-            if evidence is not None:
-                if (
-                    evidence.evidence_kind,
-                    evidence.trusted_writer,
-                    evidence.task_id,
-                    evidence.input_sha,
-                ) != ("dev_runtime", "host", row.task_id, row.input_sha):
-                    raise WorkflowError("runtime evidence identity mismatch")
-                if evidence.published_head_sha != sha:
-                    raise WorkflowError("runtime evidence HEAD mismatch")
+            if evidence is None:
+                raise WorkflowError(
+                    "runtime evidence required before dispatch completion"
+                )
+            if (
+                evidence.evidence_kind,
+                evidence.trusted_writer,
+                evidence.task_id,
+                evidence.input_sha,
+            ) != ("dev_runtime", "host", row.task_id, row.input_sha):
+                raise WorkflowError("runtime evidence identity mismatch")
+            if evidence.published_head_sha != sha:
+                raise WorkflowError("runtime evidence HEAD mismatch")
             row.status, row.slot, row.result_sha = "DONE", None, sha
             self._timeout(session)
             session.flush()
