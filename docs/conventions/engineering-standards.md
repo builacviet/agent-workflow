@@ -29,6 +29,28 @@
 - **Reliability:** Prefer explicit timeouts and bounded retries only for safe, idempotent operations. Respect crash/reconciliation behavior; an ambiguous publish must be `BLOCKED`, never automatically repeated. Avoid hidden global state, unbounded queues or nondeterministic tests.
 - **Scope/compatibility:** Preserve existing nine MCP tool names/signatures/auth behavior, project packaging and service entrypoints. V1 does not introduce Executor/Podman, parallel dispatch, automated merge, or live credential/DB migrations.
 
+## PostgreSQL ORM and DTO conventions
+
+For new PostgreSQL adapters, use SQLAlchemy 2.x typed declarative mappings (`DeclarativeBase`, `Mapped`, `mapped_column`) with repository-scoped `Session` and transactions. Alembic revisions are the schema authority: map the existing columns, nullability, keys and constraints; never call `create_all()` or perform implicit migrations at startup. Define relationships only where useful and keep business rules in services. Use explicit ORM/Core projections and named insert fields; never use wildcard selects or positional whole-row inserts.
+
+Use Pydantic DTOs with `ConfigDict(from_attributes=True)` when transferring ORM records across a boundary. Declare fields explicitly and convert to the existing contract at the repository boundary; preserve JSON text, nulls and public keys. A mixin is optional. For SQLAlchemy's reserved `metadata`, map an alias and explicitly convert it back:
+
+```python
+class TaskRow(Base):
+    __tablename__ = "tasks"
+    task_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    metadata_text: Mapped[str] = mapped_column("metadata", Text, nullable=False)
+
+class TaskDTO(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    task_id: str
+    metadata: str = Field(validation_alias="metadata_text")
+
+record = TaskDTO.model_validate(row).model_dump()
+```
+
+Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is acceptable for PostgreSQL-specific operations such as advisory locks or transaction settings, and narrowly justified atomic operations; never interpolate user-controlled SQL fragments or identifiers. Bound lock and statement waits to the operation's deadline, roll back failures, and close resources. Apply these conventions to subsequent PG02 adapters within their authorized scopes; they do not add a DEVELOPMENT review gate.
+
 ## Dev implementation and self-check
 
 Before coding, map each AC to observable behavior and related tests; note unchanged invariants and permitted paths. While coding, prefer clear control flow and single-responsibility units; avoid needless generalization. After coding, inspect diff for unrelated changes, duplicated business rules, accidental secret handling, unsafe defaults and breaks in dependency direction. Run permitted deterministic pytest and negative tests; report actual commands, environment, exit status, skipped cases and limitations. Do not self-approve.

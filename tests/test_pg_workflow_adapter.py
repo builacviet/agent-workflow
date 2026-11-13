@@ -1,15 +1,18 @@
 """Live PostgreSQL workflow contract checks on a disposable database."""
 
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_my_wfc import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.postgres_connection import PostgresFactory
@@ -222,3 +225,101 @@ def test_second_round_history_and_order(setup):
     assert result["previous_reviews"][1]["prior_resolutions"] == {"F-1": "FIXED"}
     assert result["previous_reviews"][1]["actual_effort"] is None
     assert result["status"] == "APPROVED"
+
+
+def test_service_result_matches_sqlite(setup, tmp_path, monkeypatch):
+    pg, _, task_id, _ = setup
+    sqlite = WorkflowService(
+        tmp_path / "workflow.sqlite", require_ci=False, clock=lambda: 1000.0
+    )
+    monkeypatch.setattr(
+        "agent_workflow.domain.service.uuid.uuid4",
+        lambda: SimpleNamespace(hex="fixed-id"),
+    )
+    for service in (sqlite, pg):
+        ready(service, task_id)
+        claim = service.claim_review(task_id, HEAD, "lead")
+        service.submit_review(payload(claim), "lead")
+    left, right = sqlite.get_review_context(task_id), pg.get_review_context(task_id)
+    # PostgreSQL identity sequences are database-wide; SQLite IDs are file-local.
+    for context in (left, right):
+        for event in context["events"]:
+            event.pop("event_id")
+    assert left == right
+    assert (
+        type(left["require_verified_effort"])
+        is type(right["require_verified_effort"])
+        is int
+    )
+    assert right["previous_reviews"][0]["actual_effort"] is None
+
+
+def test_adversarial_text_is_stored_as_data(setup):
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    attack = "lead' OR 1=1 --"
+    claim = service.claim_review(task_id, HEAD, attack)
+    service.submit_review(payload(claim, summary=attack), attack)
+    context = service.get_review_context(task_id)
+    assert context["previous_reviews"][0]["summary"] == attack
+    with repo.read() as db:
+        assert db.find_claim(("' OR 1=1 --", task_id)) is None
+        assert len(db.list_reviews((task_id,))) == 1
+
+
+def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup):
+    service, repo, task_id, factory = setup
+    ready(service, task_id)
+    rolled_back_id = task_id + "-rollback"
+    with factory.transaction() as holder:
+        holder.execute(
+            text("SELECT task_id FROM tasks WHERE task_id=:id FOR UPDATE"),
+            {"id": task_id},
+        )
+        start = time.monotonic()
+        with pytest.raises(DBAPIError) as exc:
+            with dispatch_budget(time.time() + 0.6):
+                with repo.transaction() as db:
+                    db.insert_task(
+                        (
+                            rolled_back_id,
+                            "{}",
+                            REPO,
+                            "branch",
+                            BASE,
+                            "medium",
+                            0,
+                            "AWAITING_HANDOFF",
+                            1.0,
+                            1.0,
+                        )
+                    )
+                    db.find_task((task_id,))
+        assert getattr(exc.value.orig, "sqlstate", None) in {"55P03", "57014"}
+        assert time.monotonic() - start < 3.0
+    with repo.read() as db:
+        assert db.find_task((rolled_back_id,)) is None
+    with repo.transaction() as db:
+        assert db.find_task((task_id,))["current_head_sha"] == HEAD
+        db.set_head((NEXT, task_id))
+    with repo.read() as db:
+        assert db.find_task((task_id,))["current_head_sha"] == NEXT
+
+
+def test_null_handoff_sha_does_not_match(setup):
+    service, repo, task_id, _ = setup
+    service.provision_task(spec(task_id))
+    with repo.transaction() as db:
+        db.insert_event(
+            (
+                task_id,
+                "AWAITING_HANDOFF",
+                "AWAITING_HANDOFF",
+                "HANDOFF",
+                None,
+                1.0,
+                "{}",
+            )
+        )
+        assert db.find_head_handoff(task_id, None) is None
+        assert isinstance(db.find_authorization((task_id,))["metadata"], str)
