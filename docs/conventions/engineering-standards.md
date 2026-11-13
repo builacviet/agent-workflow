@@ -88,6 +88,10 @@ For a grouped Workflow Unit of Work, keep all member operations inside the *same
 
 Before coding, map each AC to observable behavior and related tests; note unchanged invariants and permitted paths. While coding, prefer clear control flow and single-responsibility units; avoid needless generalization. After coding, inspect diff for unrelated changes, duplicated business rules, accidental secret handling, unsafe defaults and breaks in dependency direction. Run permitted deterministic pytest and negative tests; report actual commands, environment, exit status, skipped cases and limitations. Do not self-approve.
 
+### Manual Dev completion evidence (required for code tasks)
+
+The manual Codex agent must create **one filled, committed per-task file** at `docs/evidence/<TASK-ID>-dev-checklist.md` by copying [the evidence template](../templates/dev-task-evidence.md). Add the exact path to the approved task allowlist **before** work; the documentation rule does not grant an unsanctioned changed path. The file lists the inspected checklist items, explicit `PASS|FAIL|N/A|NOT VERIFIED` per item, test commands and exit codes, actual pass/skip counts, code diff/architecture and security observations, known gaps and self-review fixes. A tick means reviewed, not PASS. No missing command/CI/DB test may be reported PASS. A Dev self-report does not prove an assertion; the Tech Lead must independently check the diff and GitHub CI on the final PR HEAD after the evidence commit. The file must be linked in the handoff; absent file or unverified mandatory checks block TL approval. Docs-only tasks are exempt unless separately specified. Keep the report minimal and sanitized, not a parallel QC/MTP/independent reviewer gate.
+
 ## QC testing and evidence standard
 
 Prioritize tests by **impact × likelihood** and trust-boundary risk. Design from AC and failure modes, not implementation details alone:
