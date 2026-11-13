@@ -6,12 +6,27 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.storage.postgres_connection import PostgresFactory, PostgresUnavailableError
+from agent_workflow.storage.postgres_connection import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 
 DSN = "postgresql+psycopg://user:secret@localhost:5432/db"
 
 
-@pytest.mark.parametrize("value", ["", "postgresql://u:secret@host/db", "postgresql+psycopg://u@host/db", "postgresql+psycopg://u:secret@host/", "postgresql+psycopg://u:secret@host/db?host=other", "postgresql+psycopg://u:secret@host:0/db", "postgresql+psycopg://u:secret@host/db#x", "postgresql+psycopg://u:secret@host/db%ZZ"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "postgresql://u:secret@host/db",
+        "postgresql+psycopg://u@host/db",
+        "postgresql+psycopg://u:secret@host/",
+        "postgresql+psycopg://u:secret@host/db?host=other",
+        "postgresql+psycopg://u:secret@host:0/db",
+        "postgresql+psycopg://u:secret@host/db#x",
+        "postgresql+psycopg://u:secret@host/db%ZZ",
+    ],
+)
 def test_invalid_dsn_is_safe(value):
     with pytest.raises(ValueError) as exc:
         AppConfig.from_env({"PG_RUNTIME_DSN": value})
@@ -25,7 +40,9 @@ def test_opt_in_and_repr():
     assert "secret" not in repr(config)
 
 
-@pytest.mark.parametrize("rows", [[], ["other"], ["pg01_baseline", "other"]])
+@pytest.mark.parametrize(
+    "rows", [[], ["other"], ["pg01_baseline"], ["pg02c_agent_dispatch", "other"]]
+)
 def test_bad_revision_disposes(rows):
     engine = MagicMock()
     connection = engine.connect.return_value.__enter__.return_value
@@ -39,7 +56,10 @@ def test_bad_revision_disposes(rows):
 def test_unreachable_is_safe_and_disposes(monkeypatch):
     engine = MagicMock()
     engine.connect.side_effect = RuntimeError(DSN)
-    monkeypatch.setattr("agent_workflow.storage.postgres_connection.create_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr(
+        "agent_workflow.storage.postgres_connection.create_engine",
+        lambda *a, **kw: engine,
+    )
     with pytest.raises(PostgresUnavailableError) as exc:
         PostgresFactory.open(AppConfig(pg_runtime_dsn=DSN))
     assert "secret" not in str(exc.value)
@@ -48,7 +68,9 @@ def test_unreachable_is_safe_and_disposes(monkeypatch):
 
 def test_missing_version_table_fails_closed():
     engine = MagicMock()
-    engine.connect.return_value.__enter__.return_value.execute.side_effect = RuntimeError("missing table")
+    engine.connect.return_value.__enter__.return_value.execute.side_effect = (
+        RuntimeError("missing table")
+    )
     with pytest.raises(PostgresUnavailableError):
         PostgresFactory(engine)
     engine.dispose.assert_called_once()
@@ -56,9 +78,13 @@ def test_missing_version_table_fails_closed():
 
 def test_open_uses_bounded_timeout_and_checks_revision(monkeypatch):
     engine = MagicMock()
-    engine.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = ["pg01_baseline"]
+    engine.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = [
+        "pg02c_agent_dispatch"
+    ]
     create = MagicMock(return_value=engine)
-    monkeypatch.setattr("agent_workflow.storage.postgres_connection.create_engine", create)
+    monkeypatch.setattr(
+        "agent_workflow.storage.postgres_connection.create_engine", create
+    )
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=DSN)):
         assert create.call_args.kwargs["connect_args"] == {"connect_timeout": 5}
     engine.dispose.assert_called_once()
@@ -68,7 +94,9 @@ def test_transaction_commit_rollback_and_close():
     engine = create_engine("sqlite://")
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num text)"))
-        conn.execute(text("INSERT INTO alembic_version VALUES ('pg01_baseline')"))
+        conn.execute(
+            text("INSERT INTO alembic_version VALUES ('pg02c_agent_dispatch')")
+        )
         conn.execute(text("CREATE TABLE items (value integer)"))
     factory = PostgresFactory(engine)
     with factory.transaction() as conn:
@@ -100,7 +128,9 @@ def test_disposable_live_transactions():
                     conn.execute(text(f"INSERT INTO {table} VALUES (2)"))
                     raise RuntimeError("rollback")
             with factory.transaction() as conn:
-                assert conn.execute(text(f"SELECT value FROM {table}")).scalars().all() == [1]
+                assert conn.execute(
+                    text(f"SELECT value FROM {table}")
+                ).scalars().all() == [1]
         finally:
             with factory.transaction() as conn:
                 conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
