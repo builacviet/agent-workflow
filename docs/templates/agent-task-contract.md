@@ -17,6 +17,7 @@ Copy this template into an Owner/Tech Lead-authorized task. Approval is required
 | Worker adapter / trust impact | Explicit list or none |
 | Dependencies / blocker PRs | |
 | Required unit/integration/architecture/security tests | |
+| Required committed Dev completion evidence | `docs/evidence/<TASK-ID>-dev-checklist.md` (for code tasks; include in allowed changed paths) |
 | Review & rollback plan | |
 
 ## Coordination
