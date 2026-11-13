@@ -11,7 +11,7 @@ from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 
-EXPECTED_REVISION = "pg02c_agent_dispatch"
+EXPECTED_REVISION = "pg02d_webhook_digest"
 
 
 class PostgresUnavailableError(RuntimeError):

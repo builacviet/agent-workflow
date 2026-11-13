@@ -67,13 +67,93 @@ def test_postgres_baseline_tables_and_version():
             idx["name"] == "one_active_claim" and idx["unique"]
             for idx in inspector.get_indexes("review_attempts", schema="public")
         )
+        assert any(
+            idx["name"] == "webhook_inbox_body_digest"
+            and idx["unique"]
+            and idx["column_names"] == ["body_digest"]
+            for idx in inspector.get_indexes("webhook_inbox", schema="public")
+        )
         with engine.connect() as conn:
             assert (
                 conn.execute(
                     sa.text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                == "pg02c_agent_dispatch"
+                == "pg02d_webhook_digest"
             )
+    finally:
+        engine.dispose()
+
+
+def test_webhook_digest_upgrade_rejects_duplicates_and_preserves_history():
+    import uuid
+
+    from alembic.config import Config
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[1]
+    config = Config()
+    config.set_main_option("script_location", str(root / "alembic"))
+    revision = ScriptDirectory.from_config(config).get_revision("pg02d_webhook_digest")
+    assert revision.down_revision == "pg02c_agent_dispatch"
+
+    schema = "pg02d_" + uuid.uuid4().hex
+    engine = _test_engine()
+    assert engine.url.database in {"workflow_test", "workflow_ci"}
+    try:
+        with engine.connect() as conn, conn.begin() as transaction:
+            conn.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+            conn.execute(sa.text(f'SET LOCAL search_path TO "{schema}"'))
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE webhook_inbox (delivery_id TEXT PRIMARY KEY, "
+                    "body_digest TEXT NOT NULL)"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE INDEX webhook_inbox_body_digest ON webhook_inbox (body_digest)"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO webhook_inbox VALUES ('first', 'body'), ('second', 'body')"
+                )
+            )
+            with pytest.raises(RuntimeError, match="duplicate body digests"):
+                with (
+                    conn.begin_nested(),
+                    Operations.context(MigrationContext.configure(conn)),
+                ):
+                    revision.module.upgrade()
+            assert conn.execute(
+                sa.text(
+                    "SELECT delivery_id, body_digest FROM webhook_inbox ORDER BY delivery_id"
+                )
+            ).all() == [("first", "body"), ("second", "body")]
+            assert not sa.inspect(conn).get_indexes("webhook_inbox", schema=schema)[0][
+                "unique"
+            ]
+
+            conn.execute(
+                sa.text(
+                    "UPDATE webhook_inbox SET body_digest='different' WHERE delivery_id='second'"
+                )
+            )
+            with Operations.context(MigrationContext.configure(conn)):
+                revision.module.upgrade()
+            assert conn.execute(
+                sa.text(
+                    "SELECT delivery_id, body_digest FROM webhook_inbox ORDER BY delivery_id"
+                )
+            ).all() == [("first", "body"), ("second", "different")]
+            with pytest.raises(sa.exc.IntegrityError):
+                with conn.begin_nested():
+                    conn.execute(
+                        sa.text("INSERT INTO webhook_inbox VALUES ('third', 'body')")
+                    )
+            transaction.rollback()
     finally:
         engine.dispose()
 

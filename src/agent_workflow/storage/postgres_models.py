@@ -19,6 +19,20 @@ class Base(DeclarativeBase):
     pass
 
 
+class WebhookInboxRow(Base):
+    __tablename__ = "webhook_inbox"
+    __table_args__ = (Index("webhook_inbox_body_digest", "body_digest", unique=True),)
+
+    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    repository: Mapped[str] = mapped_column(Text, nullable=False)
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    subject_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    head_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    body_digest: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
