@@ -174,6 +174,19 @@ class CIObservation(Base):
     run_attempt: Mapped[int | None] = mapped_column(Integer)
 
 
+class CIProcessedDelivery(Base):
+    __tablename__ = "controller_ci_processed"
+
+    delivery_id: Mapped[str] = mapped_column(
+        ForeignKey("webhook_inbox.delivery_id"), primary_key=True
+    )
+    processed_at: Mapped[float] = mapped_column(
+        Float(precision=53),
+        nullable=False,
+        server_default=text("EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)"),
+    )
+
+
 class AgentDispatch(Base):
     __tablename__ = "agent_dispatches"
     __table_args__ = (
