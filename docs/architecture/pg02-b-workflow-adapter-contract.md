@@ -1,8 +1,10 @@
 # PG02-B — Workflow/Review PostgreSQL adapter: implementation contract (preparation)
 
-**Status:** TECH LEAD PREPARATION — docs-only; **not** approved PG02-B code execution, a completed adapter, or proof of PostgreSQL runtime cutover. Task: [PG02-B on Notion](https://app.notion.com/p/416f92014abd818cb9deeb1522729b1b).
+**Status:** PG02-B is authorized for implementation on Draft PR #55; the adapter is opt-in and is not evidence of a merged implementation or runtime cutover. The original preparation baseline below is historical. Task: [PG02-B on Notion](https://app.notion.com/p/416f92014abd818cb9deeb1522729b1b).
 
-**Baseline inspected:** `main@bbb17d22b5d1dff0b4378c1627551c3c8b09b3b3` after PG02-0 merge. [PG02-A PR #52](https://github.com/builacviet/agent-workflow/pull/52) provides an opt-in connection factory, but is **not** considered merged here. Reconcile its **merged** API and latest `main` before approving PG02-B code paths, base SHA and tests.
+**Historical preparation baseline:** `main@bbb17d22b5d1dff0b4378c1627551c3c8b09b3b3`, before PG02-A merged. The authorized PG02-B base is `fb676390ad75862791f21f8a9c50e09d3f175a1b`, which includes the PG02-A connection factory.
+
+The Owner-approved PostgreSQL standard is SQLAlchemy 2.x typed ORM with repository-scoped sessions, explicit Pydantic DTO conversion, and Alembic as schema authority. See the [canonical conventions](../conventions/engineering-standards.md#postgresql-orm-and-dto-conventions). Preserve the existing dictionary port and do not create or migrate schema at adapter startup. Fixed bound PostgreSQL-specific SQL is appropriate for advisory locks and timeout settings.
 
 This is the **manual DEVELOPMENT** flow: ChatGPT TL task/architecture → Codex Dev/self-review → Draft PR → exact-HEAD CI → ChatGPT TL review → Owner merge. Do not insert the TARGET product's QC/MTP, immutable-package or independent-reviewer gates.
 
@@ -12,9 +14,9 @@ Implement the `WorkflowRepository` / `WorkflowUnit` port for workflow tasks, rev
 
 **Source of truth for behavior:** `src/agent_workflow/storage/repository.py` (protocol + `SQLiteUnit` and its transaction/read semantics), `src/agent_workflow/domain/service.py` (use-case/state-machine validation), `alembic/versions/pg01_baseline.py` (PostgreSQL schema), current characterization tests, and the accepted Notion PG02-B task. These take precedence over this preparatory note if they have changed.
 
-**Likely owned files, to confirm after PG02-A merge:**
+**Authorized implementation paths:**
 
-- NEW `src/agent_workflow/storage/postgres_workflow.py` — SQLAlchemy PostgreSQL adapter implementing existing repository/unit contract.
+- NEW `src/agent_workflow/storage/postgres_workflow.py` and `postgres_models.py` — typed PostgreSQL mappings, DTOs and adapter implementing the existing repository/unit contract.
 - EXISTING `src/agent_workflow/storage/repository.py` — change **only** if essential for protocol compatibility; retain SQLite paths and service behavior.
 - NEW `tests/test_pg_workflow_adapter.py` — parity, negative, rollback, live PostgreSQL tests.
 - `.github/workflows/v1-ci.yml` — add tests to disposable PG CI **only if needed**; no removal of existing checks.
@@ -31,11 +33,11 @@ Implement the `WorkflowRepository` / `WorkflowUnit` port for workflow tasks, rev
 | Reviews and findings | `insert_review`, `list_reviews`, `insert_finding`, `list_findings` | `reviews`, `review_findings`; preserve round ordering, finding IDs and uniqueness, FK integrity, `None` and scalar types. |
 | Event/handoff history | `insert_event`, `list_events`, `find_head_handoff` | `task_events`; ordered event IDs, immutable reviewed/head SHA provenance, event metadata as JSON **text**. |
 | CI eligibility used by review | `ci_approved`, `advance_failed_ci_head` | Read/update `controller_ci_tasks` and `controller_ci_observations` only as required to satisfy existing `WorkflowUnit` call sites. Dedicated **CI ledger** ownership remains PG02-E; coordinate this seam before writing SQL. |
-| Legacy test/migration helpers | `import_historical_head`, `delete_synthetic_history` | SQLite-only historical fixtures/cleanup. **Unresolved:** locate actual callers and explicitly decide if PostgreSQL must implement guarded equivalent or safely reject; never silently port destructive history deletion. |
+| Legacy test/migration helpers | `import_historical_head`, `delete_synthetic_history` | SQLite-only historical fixtures/cleanup. The local admin helpers call these methods; PostgreSQL explicitly rejects both historical import and synthetic history deletion, which are outside this task. |
 
 `WorkflowRepository.transaction()` and `.read()` must return a `WorkflowUnit` context usable by the unmodified `WorkflowService`. Read results must be ordinary `dict` with current column labels, ordering, `None`, numeric/boolean conventions and JSON text semantics; do not leak SQLAlchemy `Row` or `RowMapping` objects into the domain.
 
-## Acceptance / test matrix for the future code PR
+## Acceptance / test matrix
 
 | ID | Required behavior | Evidence to prepare |
 | --- | --- | --- |
@@ -49,10 +51,10 @@ Implement the `WorkflowRepository` / `WorkflowUnit` port for workflow tasks, rev
 
 Implementation notes: parameterize SQL (SQLAlchemy named binds; never interpolate caller-controlled identifiers); preserve intentional uniqueness/FK error mapping to the public `WorkflowError` contract only where existing callers require it; make transactional isolation/concurrency guarantees explicit rather than inferring them from passing single-connection tests. Do not duplicate domain state transitions in PostgreSQL adapter.
 
-## Pre-code resolution checkpoints (not new manual gates)
+## Preparation checkpoints (historical; not new manual gates)
 
-1. **PG02-A must be Owner-merged.** Check its actual factory API and approved tests on `main`; then pin PG02-B base SHA, worktree and exact changed-path allowlist.
+1. PG02-A is merged in the authorized PG02-B base; the adapter reuses its factory API and revision guard.
 2. Resolve `WorkflowUnit` CI-method ownership versus PG02-E and legacy-only helper compatibility above, using concrete call sites. Only escalate a real conflict to Owner.
 3. Prefer a single focused Dev PR; report AC coverage and `PASS / FAIL / N/A / NOT VERIFIED` evidence; no automatic merge.
 
-**This document is implementation preparation only.** It can be reviewed and merged independently, but **does not** unblock PG02-B implementation until its dependency and API contract have been verified.
+**Implementation authority:** the current Owner task and final ORM/DTO decision authorize Draft PR #55. This document does not authorize deployment, cutover or merge.
