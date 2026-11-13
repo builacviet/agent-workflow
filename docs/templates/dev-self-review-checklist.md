@@ -31,6 +31,14 @@
 - [ ] Do **not** convert this rule into a broad style rewrite or speculative refactor. If a fix needs out-of-scope paths, changes a shared contract, increases risk, or conflicts with AC: **do not silently change it**; report the finding and request TL/Owner direction.
 - [ ] For every relevant category record **PASS / FAIL / N/A / NOT VERIFIED**, with a short reason/evidence for N/A or NOT VERIFIED. Resolve actionable blocking FAIL findings before handoff; do not label skipped checks PASS.
 
+## Required committed task completion report
+
+- [ ] **After finishing code and tests**, copy [Dev task evidence template](dev-task-evidence.md) to `docs/evidence/<TASK-ID>-dev-checklist.md`. A task-specific exact allowlist must explicitly include this path **before editing**; if missing, ask TL to update the task contract. Do not silently expand scope.
+- [ ] Fill **every applicable item** with a checked box only after inspecting it, a single `PASS|FAIL|N/A|NOT VERIFIED` verdict, and real file/line, test, command, exit, skip or CI evidence. State why N/A/NOT VERIFIED. A checkbox represents inspected, **not** successful. No invented command, fabricated count or blanket `PASS`.
+- [ ] Record authorized BASE and tested implementation SHA **before committing the report**. The evidence-file commit changes PR HEAD, so only the PR handoff and independently checked GitHub Actions can establish the final exact-HEAD CI verdict.
+- [ ] Include the filled file in the Draft PR changed paths and link it in the handoff. Report all outstanding FAIL/NOT VERIFIED items and limitations. A code PR without the file is incomplete for TL review.
+- [ ] For docs-only/research tasks this code-completion file is not required unless expressly requested; the normal scope/CI/Owner gates still apply.
+
 ## Handoff
 
 - [ ] Commit/push the authorized task branch and open **one Draft PR** to `main`; never self-approve, merge or force-push.
