@@ -28,6 +28,7 @@
 ## CURRENT manual DEVELOPMENT review route
 
 - **Codex Dev before Draft PR:** [Implementation & Self-Review Checklist](templates/dev-self-review-checklist.md) — proactively fix Clean Code defects found within authorized task scope, rerun affected tests; escalate unsafe/out-of-scope fixes.
+- **Mandatory code-task evidence:** Copy [Dev task evidence template](templates/dev-task-evidence.md) into the **authorized** `docs/evidence/<TASK-ID>-dev-checklist.md` file, fill checkboxes/verdicts/actual commands after coding and commit it with the PR. Tech Lead treats missing/unverified evidence as a review blocker, not as PASS.
 - **ChatGPT Tech Lead on Draft PR:** [TL PR Review Checklist](templates/tl-review-checklist.md) — review scope, Clean Code, architecture, security, behavior, tests/CI and operations on exact PR HEAD.
 - Use [Engineering Quality Standards](conventions/engineering-standards.md) as the shared quality rubric. These two checklists apply to **current manual development only**, with no TARGET QC/MTP/independent Reviewer gates.
 
