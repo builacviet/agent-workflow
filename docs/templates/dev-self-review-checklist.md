@@ -19,6 +19,7 @@
 - [ ] **Architecture:** Respect module ownership, dependency direction and existing interfaces. Do not add coupling or expand the changed-path allowlist.
 - [ ] **Security:** Validate at trust boundaries; fail closed; protect credentials, paths, Docker/network permissions, SQL and subprocess arguments; use least privilege and no unjustified shell execution.
 - [ ] **Reliability (when applicable):** Check timeouts, transactions/rollback, idempotency, concurrency, cleanup, restart/recovery and bounded resource use.
+- [ ] **PostgreSQL (when touched):** Read [Session/query/transaction ownership rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership). Verify factory-owned Session/commit/rollback/close (or documented pinned advisory connection exception), ORM vs Core vs bound `text()` choice, DTO boundary, timeout/isolation/deadline parity, and unchanged multi-call UoW atomicity. Do not copy legacy per-adapter `_transaction()` wrappers or use APIs from unmerged PRs. Record tested live PG behavior and any justified exception.
 - [ ] **Tests:** Add meaningful positive, negative, boundary and regression checks for changed behavior. Keep fixtures isolated; do not hide failures with blanket mocks or unexplained skips.
 - [ ] Run authorized scoped tests, architecture gate and full available suite; record real commands, exit codes, counts and environment. Mark unavailable Docker/OS/live tests **NOT VERIFIED**, never PASS.
 
