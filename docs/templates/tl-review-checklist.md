@@ -9,6 +9,7 @@
 - [ ] Record task ID, review round, base SHA, current PR HEAD SHA, changed-path allowlist and reviewer/evidence limitations.
 - [ ] Read the complete diff against the base, applicable task AC, relevant architecture/contracts and Dev self-review. Verify PR state and GitHub CI on the **exact reviewed HEAD**.
 - [ ] For changed Python files, verify Ruff lint and format CI evidence on the reviewed HEAD; distinguish changed-file enforcement from a whole-tree baseline cleanup.
+- [ ] For PostgreSQL changes, check the [mandatory Session/query/transaction ownership rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership). Flag duplicated per-adapter transaction ownership, nested commits, changed isolation/timeout/rollback, leaked ORM entities, unsafe SQL or misuse of pinned session vs transaction locks. Verify justified exceptions and live PG CI where required.
 - [ ] Check the following groups, recording **PASS / FAIL / N/A / NOT VERIFIED** with brief supporting evidence. An N/A or NOT VERIFIED needs a reason.
 
 | Area | Questions to verify |
