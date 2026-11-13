@@ -1,12 +1,8 @@
 """Opt-in PostgreSQL Controller CI evidence and inbox settlement."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-
-from pydantic import BaseModel, ConfigDict, ValidationError
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from agent_workflow.domain.ci_evidence import (
@@ -21,10 +17,7 @@ from agent_workflow.domain.workflow_identity import (
     WorkflowError,
     validate_sha,
 )
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
-)
+from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     CIObservation,
     CIProcessedDelivery,
@@ -32,6 +25,8 @@ from agent_workflow.storage.postgres_models import (
     Task,
     WebhookInboxRow,
 )
+
+_OPERATION_ERROR = "PostgreSQL Controller CI operation failed"
 
 
 class _TrackedTaskDTO(BaseModel):
@@ -62,24 +57,6 @@ class PostgresControllerCiState:
     def __init__(self, factory: PostgresFactory) -> None:
         self._factory = factory
 
-    @contextmanager
-    def _transaction(self) -> Iterator[Session]:
-        try:
-            with self._factory.transaction() as connection:
-                connection.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                )
-                connection.execute(text("SET LOCAL lock_timeout = '5s'"))
-                connection.execute(text("SET LOCAL statement_timeout = '5s'"))
-                connection.execute(text("SET LOCAL synchronous_commit = on"))
-                with Session(bind=connection) as session:
-                    yield session
-                    session.flush()
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(
-                "PostgreSQL Controller CI operation failed"
-            ) from None
-
     def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
         """Bind the initial PR or replay the exact persisted binding."""
         validate_sha(head_sha)
@@ -90,7 +67,9 @@ class PostgresControllerCiState:
             or not 1 <= pr_number < 2**31
         ):
             raise WorkflowError("invalid CI tracking identity")
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             # Workflow handoffs also lock tasks before touching the CI binding.
             task = session.get(Task, task_id, with_for_update=True)
             if (
@@ -119,7 +98,9 @@ class PostgresControllerCiState:
     def tracked(self, limit: int = 32) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError("bounded CI task scan required")
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             bindings = session.scalars(
                 select(CITask)
                 .join(Task, Task.task_id == CITask.task_id)
@@ -139,7 +120,9 @@ class PostgresControllerCiState:
             ]
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             return self._has_failure(session, task_id, head_sha)
 
     @staticmethod
@@ -161,7 +144,9 @@ class PostgresControllerCiState:
         validate_sha(evidence.expected_head_sha)
         if type(evidence.pr_number) is not int or evidence.pr_number < 1:
             raise WorkflowError("invalid CI evidence PR")
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             task = session.get(Task, evidence.task_id, with_for_update=True)
             binding = session.get(CITask, evidence.task_id, with_for_update=True)
             if (
@@ -198,7 +183,9 @@ class PostgresControllerCiState:
             validate_sha(head_sha)
         except WorkflowError:
             return False
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             success = (
                 select(CIObservation.id)
                 .where(
@@ -232,7 +219,9 @@ class PostgresControllerCiState:
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("bounded webhook scan required")
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             inbox, processed = WebhookInboxRow, CIProcessedDelivery
             rows = session.scalars(
                 select(inbox)
@@ -248,7 +237,9 @@ class PostgresControllerCiState:
 
     def mark_processed(self, delivery_id: str) -> None:
         validate_delivery_id(delivery_id)
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             inbox_id = session.scalar(
                 select(WebhookInboxRow.delivery_id)
                 .where(WebhookInboxRow.delivery_id == delivery_id)
@@ -256,10 +247,9 @@ class PostgresControllerCiState:
             )
             if inbox_id is None:
                 raise WorkflowError("unknown webhook delivery")
+            processed = CIProcessedDelivery.__table__
             session.execute(
-                insert(CIProcessedDelivery)
+                insert(processed)
                 .values(delivery_id=delivery_id)
-                .on_conflict_do_nothing(
-                    index_elements=[CIProcessedDelivery.delivery_id]
-                )
+                .on_conflict_do_nothing(index_elements=[processed.c.delivery_id])
             )

@@ -49,7 +49,42 @@ class TaskDTO(BaseModel):
 record = TaskDTO.model_validate(row).model_dump()
 ```
 
-Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is acceptable for PostgreSQL-specific operations such as advisory locks or transaction settings, and narrowly justified atomic operations; never interpolate user-controlled SQL fragments or identifiers. Bound lock and statement waits to the operation's deadline, roll back failures, and close resources. Apply these conventions to subsequent PG02 adapters within their authorized scopes; they do not add a DEVELOPMENT review gate.
+### Session and transaction ownership
+
+Use one factory-managed session per repository operation. For Webhook and CI-state operations, `PostgresFactory.repository_session()` sets READ COMMITTED, transaction-local 5-second lock and statement timeouts, and synchronous commit. It flushes pending ORM writes, closes the session, then commits the outer transaction. Exceptions roll back the operation and release the connection. Let the factory own commit, rollback and close, and build return values or DTOs inside the context. Use a fixed, safe operation message so database and DTO validation failures can be sanitized.
+
+Use the ORM for business CRUD. Load mapped rows with `session.get()` or `select()`, add new rows with `session.add()`, and update loaded rows through mapped attributes. Build the return value before the session closes.
+
+```python
+with factory.repository_session(error_message="PostgreSQL webhook inbox operation failed") as session:
+    row = session.get(WebhookInboxRow, delivery_id)
+    notification = _NotificationDTO.model_validate(row) if row is not None else None
+```
+
+Use SQLAlchemy Core for upserts and atomic statements. Name inserted fields and specify the intended conflict behavior.
+
+```python
+from sqlalchemy.dialects.postgresql import insert
+
+processed = CIProcessedDelivery.__table__
+with factory.repository_session(error_message="PostgreSQL Controller CI operation failed") as session:
+    session.execute(
+        insert(processed)
+        .values(delivery_id=delivery_id)
+        .on_conflict_do_nothing(index_elements=[processed.c.delivery_id])
+    )
+```
+
+Reserve `text()` for PostgreSQL-specific SQL, such as transaction settings and advisory locks. Bind all runtime values and keep the SQL structure and identifiers fixed. Apply transaction settings before repository queries and bound lock and statement waits to the operation's deadline.
+
+```python
+connection.execute(
+    text("SELECT set_config('lock_timeout', :timeout, true)"),
+    {"timeout": "5s"},
+)
+```
+
+Use `PostgresFactory.transaction()` for connection-based transactions. Session advisory locks require a caller-owned connection from `connect_session()` that stays pinned for the lock lifetime.
 
 ## Dev implementation and self-check
 
