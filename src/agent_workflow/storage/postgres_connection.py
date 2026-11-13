@@ -66,15 +66,18 @@ class PostgresFactory:
     @contextmanager
     def transaction(self) -> Iterator[Connection]:
         """Commit successful work, roll back exceptions, and always close."""
+        with self.connect_session() as connection:
+            with connection.begin():
+                yield connection
+
+    def connect_session(self) -> Connection:
+        """Check out a connection until the caller closes or invalidates it."""
         if self._closed:
             raise PostgresUnavailableError("PostgreSQL factory is closed")
         try:
-            connection = self._engine.connect()
+            return self._engine.connect()
         except Exception:
             raise PostgresUnavailableError("PostgreSQL connection failed") from None
-        with connection:
-            with connection.begin():
-                yield connection
 
     def close(self) -> None:
         if not self._closed:
