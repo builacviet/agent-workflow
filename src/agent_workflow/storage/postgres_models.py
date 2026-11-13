@@ -158,3 +158,72 @@ class CIObservation(Base):
     observed_at: Mapped[str] = mapped_column(Text, nullable=False)
     workflow_run_id: Mapped[int | None] = mapped_column(BigInteger)
     run_attempt: Mapped[int | None] = mapped_column(Integer)
+
+
+class AgentDispatch(Base):
+    __tablename__ = "agent_dispatches"
+    __table_args__ = (
+        UniqueConstraint("slot", name="only_one_global_dispatch_slot"),
+        UniqueConstraint(
+            "task_id", "round_number", "input_sha", name="dispatch_replay_guard"
+        ),
+        UniqueConstraint(
+            "role",
+            "phase",
+            "subject_type",
+            "subject_id",
+            "subject_version",
+            name="agent_dispatch_identity",
+        ),
+        CheckConstraint("slot = 1", name="dispatch_slot_one"),
+        CheckConstraint(
+            "status IN ('ACTIVE','BLOCKED','DONE','ACKNOWLEDGED')",
+            name="dispatch_status_set",
+        ),
+        CheckConstraint(
+            "(status IN ('ACTIVE','BLOCKED') AND slot IS NOT NULL AND slot = 1) OR (status IN ('DONE','ACKNOWLEDGED') AND slot IS NULL)",
+            name="agent_slot_state",
+        ),
+        CheckConstraint(
+            "role <> 'dev' OR phase <> 'code' OR (task_id IS NOT NULL AND round_number IS NOT NULL AND input_sha IS NOT NULL AND subject_type = 'task' AND subject_id = task_id AND subject_version = round_number::text || ':' || input_sha)",
+            name="agent_dev_identity",
+        ),
+    )
+    dispatch_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_type: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_id: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_version: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.task_id"))
+    round_number: Mapped[int | None] = mapped_column(Integer)
+    input_sha: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    slot: Mapped[int | None] = mapped_column(Integer)
+    deadline: Mapped[float] = mapped_column(Float(precision=53), nullable=False)
+    result_sha: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+
+
+class AgentExecutionEvidence(Base):
+    __tablename__ = "agent_execution_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "evidence_kind <> 'dev_runtime' OR (task_id IS NOT NULL AND input_sha IS NOT NULL AND runtime_name IS NOT NULL AND declared_runtime_version IS NOT NULL AND inference_telemetry IS NOT NULL AND tested_digest IS NOT NULL AND published_head_sha IS NOT NULL)",
+            name="agent_dev_evidence_fields",
+        ),
+    )
+    dispatch_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_dispatches.dispatch_id"), primary_key=True
+    )
+    evidence_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    trusted_writer: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    input_sha: Mapped[str | None] = mapped_column(Text)
+    runtime_name: Mapped[str | None] = mapped_column(Text)
+    declared_runtime_version: Mapped[str | None] = mapped_column(Text)
+    observed_image_id: Mapped[str | None] = mapped_column(Text)
+    inference_telemetry: Mapped[str | None] = mapped_column(Text)
+    tested_digest: Mapped[str | None] = mapped_column(Text)
+    published_head_sha: Mapped[str | None] = mapped_column(Text)
+    recorded_at: Mapped[float] = mapped_column(Float(precision=53), nullable=False)

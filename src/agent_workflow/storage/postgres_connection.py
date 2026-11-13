@@ -1,4 +1,5 @@
 """Explicit PostgreSQL runtime connections; importing does not connect."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -10,7 +11,7 @@ from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 
-EXPECTED_REVISION = "pg01_baseline"
+EXPECTED_REVISION = "pg02c_agent_dispatch"
 
 
 class PostgresUnavailableError(RuntimeError):
@@ -34,11 +35,15 @@ class PostgresFactory:
         dsn = validate_pg_runtime_dsn(config.pg_runtime_dsn)
         try:
             engine = create_engine(
-                dsn, poolclass=NullPool, connect_args={"connect_timeout": 5},
+                dsn,
+                poolclass=NullPool,
+                connect_args={"connect_timeout": 5},
                 hide_parameters=True,
             )
         except Exception:
-            raise PostgresUnavailableError("PostgreSQL connection or schema readiness check failed") from None
+            raise PostgresUnavailableError(
+                "PostgreSQL connection or schema readiness check failed"
+            ) from None
         return cls(engine)
 
     def assert_schema_ready(self) -> None:
@@ -46,13 +51,17 @@ class PostgresFactory:
             raise PostgresUnavailableError("PostgreSQL factory is closed")
         try:
             with self._engine.connect() as connection:
-                revisions = connection.execute(
-                    text("SELECT version_num FROM alembic_version")
-                ).scalars().all()
+                revisions = (
+                    connection.execute(text("SELECT version_num FROM alembic_version"))
+                    .scalars()
+                    .all()
+                )
                 if revisions != [EXPECTED_REVISION]:
                     raise ValueError("unexpected schema revision")
         except Exception:
-            raise PostgresUnavailableError("PostgreSQL connection or schema readiness check failed") from None
+            raise PostgresUnavailableError(
+                "PostgreSQL connection or schema readiness check failed"
+            ) from None
 
     @contextmanager
     def transaction(self) -> Iterator[Connection]:

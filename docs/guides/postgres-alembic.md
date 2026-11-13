@@ -6,7 +6,7 @@
 
 Legacy Draft PR #39 was closed without merge. This branch starts from main after PR #47. The Owner-supplied migration archive contains a Flask-Migrate/Alembic example. Its revisioned upgrade/downgrade pattern is useful, but the Flask runtime and its unrelated business tables are not used.
 
-PostgreSQL schema changes are managed exclusively by **standalone Alembic**. The existing SQLite `schema_migrations` registry is retained only for the existing SQLite adapters until a separately approved cutover; it is not copied to PostgreSQL. The baseline is revision `pg01_baseline` and requires a clean `public` schema rather than adopting unknown tables.
+PostgreSQL schema changes are managed exclusively by **standalone Alembic**. The existing SQLite `schema_migrations` registry is retained only for the existing SQLite adapters until a separately approved cutover; it is not copied to PostgreSQL. The baseline is revision `pg01_baseline` and requires a clean `public` schema rather than adopting unknown tables. The forward `pg02c_agent_dispatch` revision renames the PostgreSQL Dev dispatch and evidence tables to role-neutral agent tables, backfills Dev/Code identity, and retains publication foreign keys. It refuses inconsistent historical evidence or invalid slot states; resolve such data before retrying. The runtime factory expects the new head revision.
 
 ## Operator setup on an EMPTY PostgreSQL database
 
@@ -21,7 +21,7 @@ python -m alembic -c alembic.ini current
 
 Use a privileged migration-only account; do not store DSNs, passwords or secrets in the repository. The `PG_MIGRATOR_DSN` environment variable is required and accepts only a psycopg-backed PostgreSQL URL. Runtime database roles must not receive DDL permissions.
 
-The baseline creates tables in PostgreSQL's default `public` schema for workflow/review, dispatch, runtime evidence, webhook, CI and future publication-intent tables. Alembic tracks schema revision in `public.alembic_version`. The publication-intent table is **not** an activated publish feature: it is reserved for a future reviewed PostgreSQL adapter replacing the SQLite store in Draft PR #48.
+The migrations create tables in PostgreSQL's default `public` schema for workflow/review, dispatch, runtime evidence, webhook, CI and future publication-intent tables. The opt-in dispatch adapter currently accepts only host-selected `dev` / `code`; it is not wired into the Controller. Alembic tracks schema revision in `public.alembic_version`. The publication-intent table is **not** an activated publish feature: it is reserved for a future reviewed PostgreSQL adapter replacing the SQLite store in Draft PR #48.
 
 The migration runs transactional DDL under a nonblocking **transaction advisory lock for concurrent migrators**. It does NOT protect against concurrent Controllers; that requires separate session ownership, row locks, transaction boundaries and fault injection in PG-03. Keep all Controllers stopped for any authorized schema or data migration.
 
