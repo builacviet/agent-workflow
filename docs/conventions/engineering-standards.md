@@ -51,6 +51,39 @@ record = TaskDTO.model_validate(row).model_dump()
 
 Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is acceptable for PostgreSQL-specific operations such as advisory locks or transaction settings, and narrowly justified atomic operations; never interpolate user-controlled SQL fragments or identifiers. Bound lock and statement waits to the operation's deadline, roll back failures, and close resources. Apply these conventions to subsequent PG02 adapters within their authorized scopes; they do not add a DEVELOPMENT review gate.
 
+## PostgreSQL Session, query and transaction ownership
+
+**Mandatory for new/changed PostgreSQL adapter code in CURRENT manual DEVELOPMENT; no new runtime capability is authorized by this text.** Review `AGENTS.md`, the actual merged `PostgresFactory` API, and the task's exact allowlist first. **Do not assume an API described in an unmerged cleanup PR is available.** Legacy adapters are normalized by DB-STD-01/02, not by unrequested sweeping edits.
+
+| Concern | Canonical direction | Exception / boundary |
+| --- | --- | --- |
+| CRUD and model projections | SQLAlchemy 2.x typed ORM, `select(Model)`, `Session.get()`, DTO at repository boundary | SQLAlchemy Core for documented atomic updates, explicit bulk work and `insert(...).on_conflict_*()` |
+| PostgreSQL-specific SQL | Constant, bound-parameter `text()` for advisory locks, `SET LOCAL`, schema checks or a justified atomic primitive | No interpolated user identifiers/SQL, positional whole-row inserts or ad hoc SQL for ordinary CRUD |
+| Short database transactions | Prefer the **one shared factory-managed Session/transaction context** once DB-STD-01 is merged; factory owns commit, rollback and closing | Do not open another connection or `session.commit()` inside the factory-owned scope |
+| Multi-operation Unit of Work | Keep **one transaction across all operations in the UoW**; pass its Session/Unit to collaborators | Do not convert each repository method into a separately committed transaction |
+| Session-level leadership lock | Dedicated, pinned backend connection for the entire leadership lifetime; explicit unlock/close, retire on loss | Never return a lock-owning connection to the pool or replace it with a short-lived ORM Session |
+| Transaction-level data coordination | Continue using row locks / `FOR UPDATE` / `pg_advisory_xact_lock` only where justified by invariant | Transaction-level locks are **not** substitutes for session leadership |
+| Timeouts, isolation, durability | Apply bounded settings at the owning transaction/session boundary and preserve each operation's current isolation, deadline and `synchronous_commit` behavior | No blanket one-size-fits-all timeout/isolation changes |
+| Errors and result ownership | Roll back on failure, close/invalidate uncertain connections, sanitize DB errors; propagate expected domain errors; map ORM results to validated DTOs before closing | Avoid broad exception swallowing or leaking secrets / ORM entities outside the boundary |
+
+**Canonical transaction shape after DB-STD-01 merges** (illustrative interface; match the implemented factory signature):
+
+```python
+# One outer owner: factory commits on success, rolls back on failure.
+with factory.session() as session:
+    row = session.get(Task, task_id, with_for_update=True)
+    if row is None:
+        raise WorkflowError("Task not found")
+    row.status = next_status
+    # No session.commit(); the factory owns the commit.
+```
+
+For a grouped Workflow Unit of Work, keep all member operations inside the *same* `factory.session()` scope, not one context per method. An adapter must not hide a second `Session` or inconsistent `_transaction()` helper if the shared factory context already fulfills that responsibility.
+
+**Migration guard:** Until DB-STD-01 merges, the example is a target contract, not an invitation to add parallel implementations. DB-STD-02 must preserve the existing Workflow/Dispatch public contract, deadline checks and transaction boundaries when converting legacy `session.commit()` sites. Never change PG-01/02 Alembic schema, runtime composition, Controller leadership wiring or security policy as part of a documentation-only change.
+
+**Agent review gate:** In Dev self-review and TL exact-HEAD review, compare each touched PG adapter to this table. Record any deliberate exception with a concrete PostgreSQL invariant and tests; arbitrary per-module style choices are not accepted. Include live PostgreSQL 16 tests when the change affects concurrency, transactions, lock lifetime or rollback.
+
 ## Dev implementation and self-check
 
 Before coding, map each AC to observable behavior and related tests; note unchanged invariants and permitted paths. While coding, prefer clear control flow and single-responsibility units; avoid needless generalization. After coding, inspect diff for unrelated changes, duplicated business rules, accidental secret handling, unsafe defaults and breaks in dependency direction. Run permitted deterministic pytest and negative tests; report actual commands, environment, exit status, skipped cases and limitations. Do not self-approve.
