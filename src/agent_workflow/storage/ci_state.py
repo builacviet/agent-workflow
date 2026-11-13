@@ -3,19 +3,26 @@
 This records observations, not a webhook's self-asserted conclusion. Separate
 migration component avoids modifying frozen workflow/webhook migrations.
 """
+
 from __future__ import annotations
 
+import sqlite3
 from contextlib import closing
 from pathlib import Path
-import re
-import sqlite3
 
+from agent_workflow.domain.ci_evidence import (
+    CiEvidence,
+    validate_delivery_id,
+    validate_evidence,
+)
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
-from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError, validate_sha
 from agent_workflow.storage.migrations import (
-    Migration, migrate, table_names, validate_schema,
+    Migration,
+    migrate,
+    table_names,
+    validate_schema,
 )
 from agent_workflow.storage.webhook_inbox import WebhookInbox, WebhookNotification
 
@@ -55,7 +62,9 @@ def _create_ci(db: sqlite3.Connection) -> None:
 
 
 def _add_ci_provenance(db: sqlite3.Connection) -> None:
-    db.execute("ALTER TABLE controller_ci_observations ADD COLUMN workflow_run_id INTEGER")
+    db.execute(
+        "ALTER TABLE controller_ci_observations ADD COLUMN workflow_run_id INTEGER"
+    )
     db.execute("ALTER TABLE controller_ci_observations ADD COLUMN run_attempt INTEGER")
 
 
@@ -63,7 +72,11 @@ _MIGRATIONS = (
     Migration(1, "controller_ci_gate", _create_ci),
     Migration(2, "controller_ci_provenance", _add_ci_provenance),
 )
-_OWNED = {"controller_ci_tasks", "controller_ci_observations", "controller_ci_processed"}
+_OWNED = {
+    "controller_ci_tasks",
+    "controller_ci_observations",
+    "controller_ci_processed",
+}
 
 
 def _validate_ci(db: sqlite3.Connection, version: int) -> None:
@@ -88,8 +101,13 @@ class ControllerCiState:
         WorkflowService(self.path)
         WebhookInbox(self.path)
         with closing(self._connect()) as db:
-            migrate(db, "controller_ci", _MIGRATIONS,
-                    adopt_legacy=_legacy_ci, validate=_validate_ci)
+            migrate(
+                db,
+                "controller_ci",
+                _MIGRATIONS,
+                adopt_legacy=_legacy_ci,
+                validate=_validate_ci,
+            )
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=5)
@@ -102,7 +120,12 @@ class ControllerCiState:
     def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
         """Create the initial CI binding or replay the persisted PR and HEAD."""
         validate_sha(head_sha)
-        if not isinstance(task_id, str) or not task_id or type(pr_number) is not int or pr_number < 1:
+        if (
+            not isinstance(task_id, str)
+            or not task_id
+            or type(pr_number) is not int
+            or pr_number < 1
+        ):
             raise WorkflowError("invalid CI tracking identity")
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -111,14 +134,15 @@ class ControllerCiState:
                 (task_id,),
             ).fetchone()
             if (
-                task is None or task["status"] != WorkflowStatus.READY_IN_REVIEW
+                task is None
+                or task["status"] != WorkflowStatus.READY_IN_REVIEW
                 or task["current_head_sha"] != head_sha
                 or task["repository"] != REPOSITORY
             ):
                 raise WorkflowError("CI tracking requires authorized exact task HEAD")
             row = db.execute(
-                "SELECT pr_number,head_sha "
-                "FROM controller_ci_tasks WHERE task_id=?", (task_id,),
+                "SELECT pr_number,head_sha FROM controller_ci_tasks WHERE task_id=?",
+                (task_id,),
             ).fetchone()
             if row is None:
                 inserted = db.execute(
@@ -141,7 +165,8 @@ class ControllerCiState:
                 "SELECT c.task_id,c.pr_number,c.head_sha,c.verdict,c.repair_heads "
                 "FROM controller_ci_tasks c JOIN tasks t ON t.task_id=c.task_id "
                 "WHERE t.status='READY_IN_REVIEW' AND t.current_head_sha=c.head_sha "
-                "ORDER BY c.task_id LIMIT ?", (limit + 1,),
+                "ORDER BY c.task_id LIMIT ?",
+                (limit + 1,),
             ).fetchall()
         if len(records) > limit:
             raise WorkflowError("too many in-flight CI tasks")
@@ -149,39 +174,17 @@ class ControllerCiState:
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         with closing(self._connect()) as db:
-            return db.execute(
-                "SELECT 1 FROM controller_ci_observations "
-                "WHERE task_id=? AND head_sha=? AND verdict='FAILURE' LIMIT 1",
-                (task_id, head_sha),
-            ).fetchone() is not None
+            return (
+                db.execute(
+                    "SELECT 1 FROM controller_ci_observations "
+                    "WHERE task_id=? AND head_sha=? AND verdict='FAILURE' LIMIT 1",
+                    (task_id, head_sha),
+                ).fetchone()
+                is not None
+            )
 
     def record(self, evidence: CiEvidence) -> None:
-        if type(evidence) is not CiEvidence:
-            raise WorkflowError("untrusted CI evidence type")
-        if (
-            evidence.check_name != "Python tests"
-            or evidence.check_app_slug != "github-actions"
-            or evidence.installation_id <= 0
-        ):
-            raise WorkflowError("CI evidence source is not authorized")
-        terminal_reasons = {
-            CiVerdict.SUCCESS: "REQUIRED_CHECK_PASSED",
-            CiVerdict.FAILURE: "REQUIRED_CHECK_FAILED",
-        }
-        if evidence.verdict in terminal_reasons and (
-            evidence.reason != terminal_reasons[evidence.verdict]
-            or evidence.observed_head_sha != evidence.expected_head_sha
-            or evidence.tested_sha != evidence.expected_head_sha
-            or type(evidence.check_run_id) is not int
-            or evidence.check_run_id <= 0
-            or type(evidence.workflow_run_id) is not int
-            or evidence.workflow_run_id <= 0
-            or type(evidence.run_attempt) is not int
-            or evidence.run_attempt <= 0
-        ):
-            raise WorkflowError(
-                f"CI {evidence.verdict.lower()} lacks exact-HEAD trusted evidence"
-            )
+        validate_evidence(evidence)
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
@@ -189,7 +192,8 @@ class ControllerCiState:
                 (evidence.task_id,),
             ).fetchone()
             if (
-                row is None or row["pr_number"] != evidence.pr_number
+                row is None
+                or row["pr_number"] != evidence.pr_number
                 or row["head_sha"] != evidence.expected_head_sha
                 or evidence.repository != REPOSITORY
             ):
@@ -199,9 +203,17 @@ class ControllerCiState:
                 "task_id,pr_number,head_sha,verdict,reason,check_run_id,observed_at,"
                 "workflow_run_id,run_attempt)"
                 "VALUES(?,?,?,?,?,?,?,?,?)",
-                (evidence.task_id, evidence.pr_number, evidence.expected_head_sha,
-                 evidence.verdict, evidence.reason, evidence.check_run_id,
-                 evidence.observed_at, evidence.workflow_run_id, evidence.run_attempt),
+                (
+                    evidence.task_id,
+                    evidence.pr_number,
+                    evidence.expected_head_sha,
+                    evidence.verdict,
+                    evidence.reason,
+                    evidence.check_run_id,
+                    evidence.observed_at,
+                    evidence.workflow_run_id,
+                    evidence.run_attempt,
+                ),
             )
             if inserted.rowcount != 1:
                 raise WorkflowError("CI observation insertion failed")
@@ -229,13 +241,16 @@ class ControllerCiState:
         except WorkflowError:
             return False
         with closing(self._connect()) as db:
-            return db.execute(
-                "SELECT 1 FROM controller_ci_tasks c JOIN tasks t "
-                "ON c.task_id=t.task_id WHERE c.task_id=? "
-                "AND c.head_sha=? AND c.verdict='SUCCESS' "
-                "AND t.current_head_sha=c.head_sha LIMIT 1",
-                (task_id, head_sha),
-            ).fetchone() is not None
+            return (
+                db.execute(
+                    "SELECT 1 FROM controller_ci_tasks c JOIN tasks t "
+                    "ON c.task_id=t.task_id WHERE c.task_id=? "
+                    "AND c.head_sha=? AND c.verdict='SUCCESS' "
+                    "AND t.current_head_sha=c.head_sha LIMIT 1",
+                    (task_id, head_sha),
+                ).fetchone()
+                is not None
+            )
 
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
         if type(limit) is not int or not 1 <= limit <= 20:
@@ -246,20 +261,22 @@ class ControllerCiState:
                 "w.installation_id,w.subject_id,w.head_sha "
                 "FROM webhook_inbox w LEFT JOIN controller_ci_processed p "
                 "ON p.delivery_id=w.delivery_id WHERE p.delivery_id IS NULL "
-                "ORDER BY w.rowid LIMIT ?", (limit,),
+                "ORDER BY w.rowid LIMIT ?",
+                (limit,),
             ).fetchall()
         return [WebhookNotification(*row) for row in records]
 
     def mark_processed(self, delivery_id: str) -> None:
-        if not isinstance(delivery_id, str) or not re.fullmatch(
-            r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}", delivery_id
-        ):
-            raise WorkflowError("invalid webhook delivery identity")
+        validate_delivery_id(delivery_id)
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            if db.execute(
-                "SELECT 1 FROM webhook_inbox WHERE delivery_id=?", (delivery_id,),
-            ).fetchone() is None:
+            if (
+                db.execute(
+                    "SELECT 1 FROM webhook_inbox WHERE delivery_id=?",
+                    (delivery_id,),
+                ).fetchone()
+                is None
+            ):
                 raise WorkflowError("unknown webhook delivery")
             inserted = db.execute(
                 "INSERT INTO controller_ci_processed(delivery_id) VALUES(?) "

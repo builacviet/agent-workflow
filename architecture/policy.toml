@@ -56,11 +56,6 @@ reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
 path = "src/agent_workflow/storage/ci_state.py"
-module = "agent_workflow.integrations.ci_gate"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/storage/ci_state.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
@@ -82,11 +77,6 @@ reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 [[legacy_imports]]
 path = "src/agent_workflow/storage/workflow_migrations.py"
 module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/integrations/ci_controller.py"
-module = "agent_workflow.storage.ci_state"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]

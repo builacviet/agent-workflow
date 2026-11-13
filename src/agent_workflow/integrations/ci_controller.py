@@ -3,17 +3,23 @@
 Webhook receipt is a wake-up hint only. All gate verdicts come from a fresh
 PR head + complete Checks API read bound to task/PR/HEAD.
 """
+
 from __future__ import annotations
 
-from agent_workflow.integrations.ci_gate import CiRequest, CiEvidence, ReadOnlyChecks, verify_ci
+from agent_workflow.domain.ci_evidence import ControllerCiStore
+from agent_workflow.integrations.ci_gate import (
+    CiEvidence,
+    CiRequest,
+    ReadOnlyChecks,
+    verify_ci,
+)
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
-from agent_workflow.storage.ci_state import ControllerCiState
 
 
 class ControllerCiCoordinator:
     def __init__(
         self,
-        state: ControllerCiState,
+        state: ControllerCiStore,
         checks: ReadOnlyChecks,
         *,
         installation_id: int,
@@ -43,12 +49,14 @@ class ControllerCiCoordinator:
                 check_name=self.check_name,
             )
             evidence = verify_ci(
-                request, self.checks,
+                request,
+                self.checks,
                 allowed_repository=REPOSITORY,
                 allowed_check_names=frozenset({self.check_name}),
                 failure_history_complete=True,
                 previous_failure_for_sha=self.state.previous_failure(
-                    request.task_id, request.expected_head_sha,
+                    request.task_id,
+                    request.expected_head_sha,
                 ),
             )
             self.state.record(evidence)
@@ -69,7 +77,8 @@ class ControllerCiCoordinator:
             if (
                 event.repository != REPOSITORY
                 or event.installation_id != self.installation_id
-                or (event.event, event.action) not in {
+                or (event.event, event.action)
+                not in {
                     ("pull_request", "synchronize"),
                     ("workflow_run", "completed"),
                 }

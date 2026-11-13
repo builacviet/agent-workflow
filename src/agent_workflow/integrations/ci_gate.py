@@ -3,18 +3,20 @@
 The caller owns authenticated GitHub transport and durable failure history.
 Webhook notifications are not authoritative CI evidence.
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, Mapping, Protocol
+from typing import Mapping, Protocol
 
+from agent_workflow.domain.ci_evidence import CiEvidence as CiEvidence
+from agent_workflow.domain.ci_evidence import Verdict as Verdict
 from agent_workflow.integrations.github import WorkflowError, validate_sha
 from agent_workflow.integrations.github_ci_types import (
-    GitHubCheckConclusion, GitHubRunStatus,
+    GitHubCheckConclusion,
+    GitHubRunStatus,
 )
-
-Verdict = Literal["SUCCESS", "FAILURE", "BLOCKED"]
 
 
 class ReadOnlyChecks(Protocol):
@@ -51,30 +53,6 @@ class CiRequest:
             raise WorkflowError("CI check name required")
         if not isinstance(self.check_app_slug, str) or not self.check_app_slug.strip():
             raise WorkflowError("CI check source required")
-
-
-@dataclass(frozen=True, slots=True)
-class CiEvidence:
-    task_id: str
-    repository: str
-    installation_id: int
-    pr_number: int
-    expected_head_sha: str
-    observed_head_sha: str | None
-    tested_sha: str | None
-    check_name: str
-    check_app_slug: str
-    verdict: Verdict
-    reason: str
-    check_run_id: int | None
-    workflow_run_id: int | None
-    run_attempt: int | None
-    completed_at: str | None
-    observed_at: str
-
-    def as_dict(self) -> dict:
-        """Serialize the immutable observation, never an authorization token."""
-        return asdict(self)
 
 
 def _head(pr: object, repository: str, number: int) -> str | None:
@@ -132,11 +110,17 @@ def verify_ci(
     """
     if type(request) is not CiRequest:
         raise WorkflowError("invalid CI request")
-    if request.repository != allowed_repository or request.check_name not in allowed_check_names:
+    if (
+        request.repository != allowed_repository
+        or request.check_name not in allowed_check_names
+    ):
         raise WorkflowError("unapproved CI repository or required check")
     if checks.installation_id != request.installation_id:
         raise WorkflowError("CI GitHub installation mismatch")
-    if type(failure_history_complete) is not bool or type(previous_failure_for_sha) is not bool:
+    if (
+        type(failure_history_complete) is not bool
+        or type(previous_failure_for_sha) is not bool
+    ):
         raise WorkflowError("CI history must be trusted booleans")
     now = observed_at or datetime.now(timezone.utc)
     if not isinstance(now, datetime) or now.tzinfo is None:
@@ -150,16 +134,29 @@ def verify_ci(
 
     def evidence(verdict: Verdict, reason: str) -> CiEvidence:
         return CiEvidence(
-            request.task_id, request.repository, request.installation_id,
-            request.pr_number, request.expected_head_sha, seen_head, tested,
-            request.check_name, request.check_app_slug, verdict, reason,
-            check_id, workflow_run_id, run_attempt, completed, now.isoformat(),
+            request.task_id,
+            request.repository,
+            request.installation_id,
+            request.pr_number,
+            request.expected_head_sha,
+            seen_head,
+            tested,
+            request.check_name,
+            request.check_app_slug,
+            verdict,
+            reason,
+            check_id,
+            workflow_run_id,
+            run_attempt,
+            completed,
+            now.isoformat(),
         )
 
     try:
         seen_head = _head(
             checks.get_pull_request(request.repository, request.pr_number),
-            request.repository, request.pr_number,
+            request.repository,
+            request.pr_number,
         )
         if seen_head is None:
             return evidence("BLOCKED", "PR_IDENTITY_UNVERIFIED")
@@ -184,13 +181,20 @@ def verify_ci(
             return evidence("BLOCKED", "CHECK_ID_AMBIGUOUS")
         if any(run.get("status") != GitHubRunStatus.COMPLETED for run in relevant):
             return evidence("BLOCKED", "CHECK_PENDING")
-        if any(not isinstance(run.get("completed_at"), str) or not run["completed_at"] for run in relevant):
+        if any(
+            not isinstance(run.get("completed_at"), str) or not run["completed_at"]
+            for run in relevant
+        ):
             return evidence("BLOCKED", "COMPLETION_UNVERIFIED")
         # Re-fetch HEAD after checks; a PR synchronize event can race this query.
-        if _head(
-            checks.get_pull_request(request.repository, request.pr_number),
-            request.repository, request.pr_number,
-        ) != seen_head:
+        if (
+            _head(
+                checks.get_pull_request(request.repository, request.pr_number),
+                request.repository,
+                request.pr_number,
+            )
+            != seen_head
+        ):
             return evidence("BLOCKED", "PR_HEAD_CHANGED_DURING_QUERY")
         latest = max(relevant, key=lambda run: (run["completed_at"], run["id"]))
         tested = latest["tested_sha"]

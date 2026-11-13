@@ -1,15 +1,18 @@
 """Versioned, durable SQLite inbox for GitHub reconciliation notifications."""
+
+import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-import sqlite3
 
+from agent_workflow.domain.ci_evidence import WebhookNotification as WebhookNotification
 from agent_workflow.storage.migrations import (
-    Migration, migrate, table_names, validate_schema,
+    Migration,
+    migrate,
+    table_names,
+    validate_schema,
 )
 from agent_workflow.storage.workflow_migrations import LEGACY_WORKFLOW_TABLES
-
 
 _LEGACY_ALIAS_SQL = """
     CREATE TABLE webhook_delivery_aliases (
@@ -17,17 +20,6 @@ _LEGACY_ALIAS_SQL = """
         body_digest TEXT NOT NULL
     )
 """
-
-
-@dataclass(frozen=True, slots=True)
-class WebhookNotification:
-    delivery_id: str
-    event: str
-    action: str
-    repository: str
-    installation_id: int
-    subject_id: int
-    head_sha: str
 
 
 class InboxResult(Enum):
@@ -63,7 +55,10 @@ def _validate_inbox_schema(db: sqlite3.Connection, version: int) -> None:
         for step in _WEBHOOK_MIGRATIONS[:version]:
             step.upgrade(expected)
         validate_schema(
-            db, expected, "webhook", retired_tables=("webhook_delivery_aliases",),
+            db,
+            expected,
+            "webhook",
+            retired_tables=("webhook_delivery_aliases",),
         )
 
 
@@ -77,7 +72,9 @@ def _legacy_webhook(db: sqlite3.Connection) -> int:
         workflow_registered = db.execute(
             "SELECT 1 FROM schema_migrations WHERE component = 'workflow' LIMIT 1"
         ).fetchone()
-        if not workflow_registered and names - (LEGACY_WORKFLOW_TABLES | {"schema_migrations"}):
+        if not workflow_registered and names - (
+            LEGACY_WORKFLOW_TABLES | {"schema_migrations"}
+        ):
             raise sqlite3.DatabaseError("unexpected legacy webhook tables")
         return 0
 
@@ -96,7 +93,9 @@ def _legacy_webhook(db: sqlite3.Connection) -> int:
 
 def _migrate_webhook(db: sqlite3.Connection) -> None:
     migrate(
-        db, "webhook", _WEBHOOK_MIGRATIONS,
+        db,
+        "webhook",
+        _WEBHOOK_MIGRATIONS,
         adopt_legacy=_legacy_webhook,
         validate=_validate_inbox_schema,
     )
@@ -136,19 +135,26 @@ class WebhookInbox:
             if existing is not None:
                 return (
                     InboxResult.DUPLICATE
-                    if existing[0] == body_digest else InboxResult.CONFLICT
+                    if existing[0] == body_digest
+                    else InboxResult.CONFLICT
                 )
-            if db.execute(
-                "SELECT 1 FROM webhook_inbox WHERE body_digest = ? LIMIT 1",
-                (body_digest,),
-            ).fetchone() is not None:
+            if (
+                db.execute(
+                    "SELECT 1 FROM webhook_inbox WHERE body_digest = ? LIMIT 1",
+                    (body_digest,),
+                ).fetchone()
+                is not None
+            ):
                 return InboxResult.DUPLICATE
 
             # Also reject triggers installed after this adapter was opened.
-            if db.execute(
-                "SELECT 1 FROM main.sqlite_schema WHERE type='trigger' "
-                "AND tbl_name = 'webhook_inbox' COLLATE NOCASE LIMIT 1"
-            ).fetchone() is not None:
+            if (
+                db.execute(
+                    "SELECT 1 FROM main.sqlite_schema WHERE type='trigger' "
+                    "AND tbl_name = 'webhook_inbox' COLLATE NOCASE LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
                 raise sqlite3.DatabaseError("unexpected webhook inbox trigger")
             inserted = db.execute(
                 """
@@ -158,10 +164,14 @@ class WebhookInbox:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    notification.delivery_id, notification.event,
-                    notification.action, notification.repository,
-                    notification.installation_id, notification.subject_id,
-                    notification.head_sha, body_digest,
+                    notification.delivery_id,
+                    notification.event,
+                    notification.action,
+                    notification.repository,
+                    notification.installation_id,
+                    notification.subject_id,
+                    notification.head_sha,
+                    body_digest,
                 ),
             )
             if inserted.rowcount != 1:
