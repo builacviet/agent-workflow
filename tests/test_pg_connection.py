@@ -41,7 +41,14 @@ def test_opt_in_and_repr():
 
 
 @pytest.mark.parametrize(
-    "rows", [[], ["other"], ["pg01_baseline"], ["pg02c_agent_dispatch", "other"]]
+    "rows",
+    [
+        [],
+        ["other"],
+        ["pg01_baseline"],
+        ["pg02c_agent_dispatch"],
+        ["pg02d_webhook_digest", "other"],
+    ],
 )
 def test_bad_revision_disposes(rows):
     engine = MagicMock()
@@ -79,7 +86,7 @@ def test_missing_version_table_fails_closed():
 def test_open_uses_bounded_timeout_and_checks_revision(monkeypatch):
     engine = MagicMock()
     engine.connect.return_value.__enter__.return_value.execute.return_value.scalars.return_value.all.return_value = [
-        "pg02c_agent_dispatch"
+        "pg02d_webhook_digest"
     ]
     create = MagicMock(return_value=engine)
     monkeypatch.setattr(
@@ -95,7 +102,7 @@ def test_transaction_commit_rollback_and_close():
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num text)"))
         conn.execute(
-            text("INSERT INTO alembic_version VALUES ('pg02c_agent_dispatch')")
+            text("INSERT INTO alembic_version VALUES ('pg02d_webhook_digest')")
         )
         conn.execute(text("CREATE TABLE items (value integer)"))
     factory = PostgresFactory(engine)
