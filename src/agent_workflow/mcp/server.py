@@ -2,10 +2,12 @@ import os
 import re
 from datetime import datetime, timezone
 
+from mcp.server.auth.routes import create_protected_resource_routes
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
 
-from agent_workflow.mcp.security import poc_unauthenticated_enabled
+from agent_workflow.mcp.security import TECHLEAD_SCOPE, poc_unauthenticated_enabled
 from agent_workflow.mcp.tools import register_tools
 
 
@@ -41,6 +43,27 @@ def server_allowed_hosts() -> list[str]:
     return hosts
 
 
+class _Auth0FastMCP(FastMCP):
+    def streamable_http_app(self) -> Starlette:
+        app = super().streamable_http_app()
+        auth = self.settings.auth
+        assert auth is not None and auth.resource_server_url is not None
+        scopes = list(dict.fromkeys([*(auth.required_scopes or []), TECHLEAD_SCOPE]))
+        (metadata_route,) = create_protected_resource_routes(
+            resource_url=auth.resource_server_url,
+            authorization_servers=[auth.issuer_url],
+            scopes_supported=scopes,
+        )
+
+        # FastMCP 1.30 generates this route from required_scopes and puts it
+        # ahead of custom routes. Replace only discovery and keep SDK auth.
+        (original,) = (
+            route for route in app.routes if route.path == metadata_route.path
+        )
+        app.routes[app.routes.index(original)] = metadata_route
+        return app
+
+
 def create_mcp_server():
     """Legacy bearer by default; Auth0 OAuth is opt-in and fail-closed."""
     mode = os.environ.get("WFC_AUTH_MODE", "bearer").strip()
@@ -63,7 +86,8 @@ def create_mcp_server():
             required_scopes=[config.scope],
             validate_token_resource=True,
         )
-    return FastMCP(
+    server_type = _Auth0FastMCP if mode == "auth0" else FastMCP
+    return server_type(
         "Workflow MCP Lab",
         host=server_bind_host(),
         port=8000,
