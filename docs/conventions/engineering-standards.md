@@ -94,4 +94,4 @@ Complete the checked self-review directly in the [Draft PR handoff](../templates
 
 ## Product orchestration contracts (on demand)
 
-Product QC, reviewer, approval, immutable-package and retry rules live in [V1 scope and gates](../v1-scope-and-gates.md), [QC role](../roles/qc.md) and [Reviewer role](../roles/tl-reviewer.md). They are **not part of manual Coder onboarding** for this repository.
+Product Code/Test/Publish, QC, reviewer and approval-gate behavior is specified in the existing [V1 scope and gates](../v1-scope-and-gates.md), not in manual Coder onboarding.
