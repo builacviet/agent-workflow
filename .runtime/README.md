@@ -82,3 +82,17 @@ Set `WFC_SANDBOX_STATE_DIR` for the trusted host Controller to a private, persis
 Windows permits fixed local drives only; it rejects UNC shares, mapped network/removable drives, device paths, symlink/junction/reparse redirection and ambiguous path components. Linux uses the current mount namespace to reject known remote, virtual share, volatile and unknown filesystems (NFS, CIFS, 9p, tmpfs, etc.). The validation checks the directory at startup; it **cannot** defend against a privileged actor remounting or swapping parents afterward. Keep directory parents under trusted host ownership/ACLs.
 
 Do not delete, rename or copy unresolved legacy SQLite fences to bypass a blocked startup. Review the [Phase 3.1 recovery procedure](../docs/phase-3.1.md) and the [dispatch recovery matrix](../docs/guides/dispatch-recovery.md) before a cutover. The new implementation cannot infer unknown old SQLite locations from a PostgreSQL DSN.
+
+## Optional Tech Lead identities
+
+`controller-mcp.env.example` is also the single template for all ten
+`TECHLEAD_*` settings. The Owner alone maintains the ignored real env file;
+do not overwrite it from the template. Keep Auth0 and empty write allowlists.
+Tech Lead credentials live outside the checkout at
+`D:\WORK\secrets\agent-workflow`, separate from Controller/Worker credentials.
+
+The two MCP mounts in `compose.yaml` are intentionally commented so default
+startup and CI require no Tech Lead files. Activation is an Owner-only local
+YAML edit, never committed or pushed. Follow the
+[activation procedure](../docs/guides/mcp-techlead-integrations.md#owner-local-activation)
+for host interpolation, UID 10001 access checks and pull/reapply handling.
