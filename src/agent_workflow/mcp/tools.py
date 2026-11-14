@@ -1,4 +1,5 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
+
 from mcp.server.fastmcp import Context
 
 from agent_workflow.app_config import AppConfig
@@ -48,13 +49,27 @@ def register_tools(mcp, service_factory=configured_service_factory):
         return engine.get_review_result(task_id)
 
     @mcp.tool()
-    def register_task_handoff(task_id: str, repository: str, branch: str, base_sha: str,
-                              new_head_sha: str, handoff_file_path: str, test_summary: str,
-                              ctx: Context) -> dict:
+    def register_task_handoff(
+        task_id: str,
+        repository: str,
+        branch: str,
+        base_sha: str,
+        new_head_sha: str,
+        handoff_file_path: str,
+        test_summary: str,
+        ctx: Context,
+    ) -> dict:
         """Authenticated mutation: record reported handoff for a locally authorized task; no remote verification."""
         engine, _ = service(ctx)
-        return engine.register_task_handoff(task_id, repository, branch, base_sha, new_head_sha,
-                                            handoff_file_path, test_summary)
+        return engine.register_task_handoff(
+            task_id,
+            repository,
+            branch,
+            base_sha,
+            new_head_sha,
+            handoff_file_path,
+            test_summary,
+        )
 
     @mcp.tool()
     def get_coder_assignment(task_id: str, ctx: Context) -> dict:
