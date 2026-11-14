@@ -1,50 +1,34 @@
-# Manual Coder — Draft PR handoff & checked self-review
+# Manual Coder — Draft PR handoff
 
-**Use this template in the PR description.** Do not create a separate `docs/evidence/*.md` file for every task. This is the Coder's self-report; Tech Lead verifies against the task, actual diff, tests and GitHub CI. Never include credentials, raw DSNs or full secret-bearing logs.
+**Put this in the GitHub PR description, not a new Markdown file.** GitHub owns implementation, test/CI evidence and review findings. The linked **Notion Task owns approved AC, scope/allowlist, base and publish authorization**; do not copy its full requirements here. Notion Comments are only for questions, status and links. Never include credentials or secret-bearing logs.
 
-## Task identity and scope
+## Task and change
+- **Task:** `<TASK-ID>` — [approved Notion task](<NOTION-URL>)
+- **Implementation (2–5 lines):** `<what actually changed and why>`
+- **AC coverage by ID:** `AC-01 PASS → code/test reference; AC-02 NOT VERIFIED → reason`. Do not repeat the AC prose.
+- **GitHub PR base / tested implementation SHA / final pushed HEAD:** `<base> / <tested-sha> / <head>` (GitHub identifies current HEAD; state any divergence from Notion base).
+- **Actual diff against approved base:** `<inspected; paths match Notion allowlist PASS / FAIL / NOT VERIFIED>`.
+- **Actor attribution:** `<actual authenticated GitHub author/app; Coder agent role if relevant>`. A role label is not proof of bot authentication.
 
-- Task ID / approved Notion AC:
-- Authorized base SHA / branch / worktree:
-- Tested code SHA / final pushed PR HEAD SHA:
-- Draft PR URL:
-- Approved **write allowlist**:
-- Separate **remote publish authorization** (ordinary task-branch push + Draft PR, or NONE):
-- Actual added/modified/deleted/renamed paths (compare approved base and PR base):
-- Read-only context / important shared contracts checked (brief):
+## Tests and CI (observed evidence only)
 
-## AC implementation and test mapping
+| Command or CI run link | Environment / tested SHA / event | Exit / conclusion and pass-fail-skip | Limitations |
+| --- | --- | --- | --- |
+| `<scoped test / Ruff / architecture>` | `<OS, Python, SHA>` | `<exit; counts>` | `<NONE or NOT VERIFIED + reason>` |
+| `<push HEAD / pull_request merge ref>` | `<actual event + SHA>` | `<result>` | `<gaps>` |
 
-| AC | Status: PASS / FAIL / N/A / NOT VERIFIED | Implementation + concrete test / evidence |
-| --- | --- | --- |
-| AC-… | | |
+- CI **push HEAD** and **pull_request merge-ref** are different evidence. If CI is pending or not observed, say `NOT VERIFIED`, not PASS. New HEAD invalidates old SHA-bound evidence.
 
-A `PASS` is valid only if supported by actual inspection or test evidence. Explain every `N/A` or `NOT VERIFIED`; required unverified checks must be escalated. Do not turn a skipped test into PASS.
+## Concise checked self-review
 
-## Checked self-review (complete after coding)
+Each checked item means *inspected*, not automatically passed. Mark each relevant area `PASS / FAIL / N/A / NOT VERIFIED` with a short reason or reference; group irrelevant items as `N/A + reason` for small tasks.
 
-Each `[x]` means **inspected**, not automatically passed. Give a status and a concise file/test/command link or explicit reason for each relevant item. For a small/docs-only task, mark an irrelevant group `N/A` with one short reason instead of writing a lengthy report.
+- [ ] **AC / regression / compatibility:** `<verdict; evidence>`
+- [ ] **Approved write paths / protected paths / remote publish grant:** `<verdict; Notion task and diff check>`
+- [ ] **Clean Code / architecture / PostgreSQL if touched:** `<verdict; findings/fixes or N/A>`
+- [ ] **Security / external effects:** `<verdict; issues or NONE>`
+- [ ] **Tests / CI coverage and skipped checks:** `<verdict; links or NOT VERIFIED>`
 
-- [ ] **Scope & diff:** [status]; [base-vs-HEAD diff inspected, exact changed paths, no unauthorized edits].
-- [ ] **Correctness & contracts:** [status]; [AC mapping, boundary/error cases, existing API and regression impact].
-- [ ] **Clean Code & architecture:** [status]; [naming/types, duplication, modules/dependencies, refactors fixed or deferred].
-- [ ] **Security & side effects:** [status]; [input/SQL/path/secret/permission review and negative tests, or N/A reason].
-- [ ] **Persistence/concurrency/recovery (if relevant):** [status]; [transaction owner, rollback, isolation/deadline, idempotency/lock lifetime, or N/A reason].
-- [ ] **Tests, lint & CI:** [status]; [actual scoped/full tests, Ruff, required CI jobs and gaps].
+**Self-review fixes:** `<brief or NONE>`. **Risks/blockers:** `<brief or NONE>`. **Requested status:** `READY_FOR_TL_REVIEW` or `BLOCKED`.
 
-**Proactive fixes from self-review:** [within-scope fixes and tests re-run; or NONE]. **Out-of-scope findings / unresolved risks:** [paths, risk and requested TL decision; or NONE].
-
-## Commands and independently checkable evidence
-
-| Environment | Command / CI job link | Tested SHA or run/attempt | Exit code / conclusion | Passed / failed / skipped; limitation |
-| --- | --- | --- | --- | --- |
-| Local | | | | |
-| GitHub Actions | | | | |
-
-- Did not run / unavailable: [`NOT VERIFIED` + reason, not PASS].
-- Exact PR HEAD and CI scope: [push run on HEAD vs pull_request merge ref, workflow jobs actually run, whether checks covered the **whole PR diff** or only the latest commit].
-- **Protected files / CI self-modification:** [NONE or paths and independent review/validation; a green run from a modified CI/policy is not automatically trustworthy].
-- External effects / shared DB / credentials / containers touched: [NONE or authorized facts].
-- Verdict requested: **Ready for Tech Lead review** / **BLOCKED** [reason].
-
-**Ownership:** Coder may commit/push and open a Draft PR on the assigned task branch **only when the approved task/role grant permits remote publication**. Tech Lead independently checks evidence at the reviewed HEAD; a newer HEAD requires fresh review/CI. **Owner alone merges.**
+**Handoff:** Coder may ordinary-push/open Draft PR only if the approved task grants remote publish. After PR evidence is ready, post **one short Notion comment**: `READY_FOR_TL_REVIEW — PR #<n> <url>` (include CI PENDING if applicable). Detailed code findings stay in GitHub review; only Owner merges.
