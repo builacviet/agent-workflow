@@ -174,7 +174,7 @@ def test_invalid_input_is_rejected_before_connecting():
             inbox.record(invalid, digest)
     with pytest.raises(ValueError):
         inbox.get(None)
-    factory.transaction.assert_not_called()
+    factory.repository_session.assert_not_called()
 
 
 def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, delivery):
@@ -206,6 +206,12 @@ def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, deliver
             event.remove(engine, "commit", fail_commit)
         assert inbox.get(delivery.delivery_id) is None
         assert inbox.record(delivery, digest) is InboxResult.INSERTED
+
+        event.listen(engine, "commit", fail_commit)
+        try:
+            assert inbox.get(delivery.delivery_id) == delivery
+        finally:
+            event.remove(engine, "commit", fail_commit)
 
         def fail_read(conn, cursor, statement, parameters, context, executemany):
             if statement.startswith("SELECT webhook_inbox."):

@@ -1,13 +1,8 @@
 """Opt-in PostgreSQL storage for validated webhook notifications."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-
-from pydantic import BaseModel, ConfigDict, ValidationError
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
 
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
@@ -15,6 +10,8 @@ from agent_workflow.storage.postgres_connection import (
 )
 from agent_workflow.storage.postgres_models import WebhookInboxRow
 from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
+
+_OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 
 
 class _NotificationDTO(BaseModel):
@@ -44,24 +41,6 @@ class PostgresWebhookInbox:
     def __init__(self, factory: PostgresFactory) -> None:
         self._factory = factory
 
-    @contextmanager
-    def _transaction(self) -> Iterator[Session]:
-        try:
-            with self._factory.transaction() as connection:
-                # A second statement must see the committed winner of a collision.
-                connection.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                )
-                connection.execute(text("SET LOCAL lock_timeout = '5s'"))
-                connection.execute(text("SET LOCAL statement_timeout = '5s'"))
-                connection.execute(text("SET LOCAL synchronous_commit = on"))
-                with Session(bind=connection) as session:
-                    yield session
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(
-                "PostgreSQL webhook inbox operation failed"
-            ) from None
-
     def record(
         self, notification: WebhookNotification, body_digest: str
     ) -> InboxResult:
@@ -81,10 +60,13 @@ class PostgresWebhookInbox:
             if type(value) is not int or not -(2**63) <= value < 2**63:
                 raise ValueError("invalid webhook notification numeric ID")
 
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
             row = WebhookInboxRow
+            inbox = row.__table__
             inserted_id = session.scalar(
-                insert(row)
+                insert(inbox)
                 .values(
                     delivery_id=notification.delivery_id,
                     event=notification.event,
@@ -96,7 +78,7 @@ class PostgresWebhookInbox:
                     body_digest=body_digest,
                 )
                 .on_conflict_do_nothing()
-                .returning(row.delivery_id)
+                .returning(inbox.c.delivery_id)
             )
             if inserted_id is not None:
                 return InboxResult.INSERTED
@@ -121,7 +103,9 @@ class PostgresWebhookInbox:
 
     def get(self, delivery_id: str) -> WebhookNotification | None:
         _validate_text(delivery_id)
-        with self._transaction() as session:
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR, read_only=True
+        ) as session:
             row = session.get(WebhookInboxRow, delivery_id)
             if row is None:
                 return None
