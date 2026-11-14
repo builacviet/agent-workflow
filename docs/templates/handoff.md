@@ -31,4 +31,4 @@ Each checked item means *inspected*, not automatically passed. Mark each relevan
 
 **Self-review fixes:** `<brief or NONE>`. **Risks/blockers:** `<brief or NONE>`. **Requested status:** `READY_FOR_TL_REVIEW` or `BLOCKED`.
 
-**Handoff:** Coder may ordinary-push/open Draft PR only if the approved task grants remote publish. After PR evidence is ready, post **one short Notion comment**: `READY_FOR_TL_REVIEW — PR #<n> <url>` (include CI PENDING if applicable). Detailed code findings stay in GitHub review; only Owner merges.
+**Handoff:** Coder may ordinary-push/open Draft PR only if the approved task grants remote publish. When the PR opens but required CI is still pending, comment `PR_OPENED / CI_PENDING — PR #<n> <url>`. Only after required CI/evidence is verified, comment `READY_FOR_TL_REVIEW — PR #<n> <url>`. These are **routing notices**, not evidence or approval. Detailed findings stay in GitHub review; only Owner merges.
