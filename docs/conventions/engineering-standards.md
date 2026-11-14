@@ -63,11 +63,11 @@ class TaskDTO(BaseModel):
 record = TaskDTO.model_validate(row).model_dump()
 ```
 
-Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is acceptable for PostgreSQL-specific operations such as advisory locks or transaction settings, and narrowly justified atomic operations; never interpolate user-controlled SQL fragments or identifiers. Bound lock and statement waits to the operation's deadline, roll back failures, and close resources. Apply these conventions to subsequent PG02 adapters within their authorized scopes; they do not add a DEVELOPMENT review gate.
+Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is acceptable for PostgreSQL-specific operations such as advisory locks or transaction settings, and narrowly justified atomic operations; never interpolate user-controlled SQL fragments or identifiers. Bound lock and statement waits to the operation's deadline, roll back failures, and close resources. Apply these conventions within approved PostgreSQL adapter changes. They are code-review criteria, not an additional role or approval stage.
 
 ## PostgreSQL Session, query and transaction ownership
 
-**Mandatory for new/changed PostgreSQL adapter code in CURRENT manual DEVELOPMENT; no new runtime capability is authorized by this text.** Review `AGENTS.md`, the actual merged `PostgresFactory` API, and the task's exact allowlist first. **Do not assume an API described in an unmerged cleanup PR is available.** Legacy adapters are normalized by DB-STD-01/02, not by unrequested sweeping edits.
+**Apply when changing PostgreSQL adapter code within an approved task.** Review the actual merged `PostgresFactory` API, task AC and allowlist. A factory-managed ORM Session is the preferred direction **only once the corresponding API is merged in the authorized base**; do not block unrelated legacy changes for failing to use an unmerged API. Normalize old adapters only under an explicit cleanup task.
 
 | Concern | Canonical direction | Exception / boundary |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is
 
 **API compatibility:** Use only the transaction/session methods that are actually **merged** in the approved base. Do not copy illustrative `factory.session()` pseudo-APIs or pre-use methods from an open PR. A short repository transaction, a multi-call Workflow UoW and a session-pinned leadership connection have different lifetimes; preserve their isolation, deadlines and lock ownership. DB-STD-01/02 cleanup must not implicitly change schemas, runtime composition or leadership wiring.
 
-**Agent review gate:** In Dev self-review and TL exact-HEAD review, compare each touched PG adapter to this table. Record any deliberate exception with a concrete PostgreSQL invariant and tests; arbitrary per-module style choices are not accepted. Include live PostgreSQL 16 tests when the change affects concurrency, transactions, lock lifetime or rollback.
+**PG review evidence (when applicable):** Inspect touched adapters against the table **using only APIs available at the approved base**. Review documented exceptions and relevant behavioral tests; do not demand unrelated cleanup or a pre-merge API. For changed concurrency, transaction, lock-lifetime or rollback behavior, require relevant live PostgreSQL 16 evidence or explicitly mark it NOT VERIFIED.
 
 ## Dev implementation and self-check
 
@@ -92,63 +92,6 @@ Before coding, map each AC to observable behavior and related tests; note unchan
 
 Complete the checked self-review directly in the [Draft PR handoff](../templates/handoff.md) after coding and tests. Give actual commands, exit codes, tests/skips, tested SHA, changed paths, N/A/NOT VERIFIED reasons and outstanding risks. The Tech Lead checks the task, diff and CI independently on the current PR HEAD. No mandatory committed `docs/evidence/*.md` report is generated for each task.
 
-## QC testing and evidence standard
+## Product orchestration contracts (on demand)
 
-Prioritize tests by **impact × likelihood** and trust-boundary risk. Design from AC and failure modes, not implementation details alone:
-
-- **Functional:** positive, negative, invalid type/value, equivalence partition, boundary values and state transitions.
-- **Safety/security:** permissions, unauthorized access, secret leakage, path traversal, input validation, role separation, stale SHA/package version and fail-closed errors.
-- **Reliability:** idempotency, failure atomicity, timeout/recovery, duplicate/reordered events and partial operations **when relevant to approved AC**.
-- **Integration/regression:** existing public contract, persisted history, cross-module interactions and Python packaging. Use isolated fixtures and synthetic data.
-- **Evidence:** deterministic assertions and isolated fixtures, captured commands/exit codes/test reports (sanitized before sharing), tested snapshot digest/exact reviewed HEAD, per-case `PASS|FAIL|BLOCKED|NOT RUN`. **Agent narration alone is not evidence**; trusted runner evidence capture/manifest verification is a V1-02 implementation requirement, not proven by Markdown. In manual bootstrap, independent operator evidence must be verified and labeled as such. Pre-Dev MTP cases are **NOT RUN**, not PASS.
-- **Proportionate testing:** do not require a load test for a docs-only change or test a future subsystem not in scope. Document N/A with reason; escalate uncovered high-risk ACs. Prefer deterministic clocks, bounded retries, frozen fixtures and controlled network; preserve flaky/failed attempts rather than cherry-picking passes.
-
-QC tests *what the system does* against AC and approved MTP. QC may recommend implementation fixes but does not rewrite production logic or approve its own MTP/evidence.
-
-## Independent TL Reviewer code-quality rubric
-
-Review findings should identify a **measurable risk and supporting evidence**, with severity, AC link, file/line and minimal remediation:
-
-1. **Correctness and requirements:** AC/DoD behavior, error paths, invariants, migrations and compatibility; unauthorized scope.
-2. **Security and trust boundaries:** injection/path safety, auth/permissions, secrets, untrusted input, sandbox separation, exact SHA and human approval gates.
-3. **Architecture and maintainability:** responsibilities/cohesion, dependency direction, interfaces only where justified, semantic DRY, change blast-radius, coupling, clarity and rollback.
-4. **Tests and evidence:** case/AC traceability, meaningful negative/boundary/regression tests, deterministic fixtures, reliable CI on exact current HEAD and explicit gaps.
-5. **Operational quality where applicable:** logging without secrets, timeouts, failure handling, idempotency, observability, resource use and recovery without unsafe retries.
-
-**Severity guidance:** `BLOCKER` for demonstrated security/authorization breach, AC failure, data loss or gate bypass; `MAJOR` for substantive regression/high-risk omission; `MINOR` for limited maintainability/testability risk; `SUGGESTION` for optional style. In current WFC `Finding.severity`, map `BLOCKER→critical`, `MAJOR→high`, `MINOR→medium`, `SUGGESTION→low`. **Only blocking findings enter the current WFC code-review findings payload**: its legacy `APPROVED` verdict strictly requires zero new findings and all old findings resolved. Nonblocking MINOR/SUGGESTION belong to separate advisory notes until a compatible adapter exists. Do not spend formal code-review rounds on style preferences. Missing/stale evidence is operational `BLOCKED`, not a completed failed code-review round. See [TL verdict mapping](../roles/tl-reviewer.md).
-
-## Change control, evidence ownership and rework decisions
-
-**Approved files stay frozen:** Plan, AC and MTP bytes are individually identified in a versioned package manifest with SHA-256 digests. The manifest/package hash is computed and stored **outside files it covers**, to avoid self-reference; trusted Controller/Worker should attest it once V1-02 delivers that capability. For manual bootstrap, Owner/operator records hashes externally. Any byte change after approval is a *new artifact version/hash*; if it affects an approved package, re-review the package and obtain **new explicit Owner approval** before further Dev. An existing approval cannot silently carry over.
-
-**Who revises what:** Dev, QC or TL Reviewer finding an ambiguous, contradictory or untestable requirement must send `clarification_request {artifact_id, AC_or_test_id, question, suggested_options, evidence}` and mark `BLOCKED`. TL Planner authors revised Plan/AC; QC authors revised MTP; independent TL Reviewer rechecks the whole affected planning package; Owner approves the new version/hash. Reviewer does not edit its own review target. After dispatch, a new package version invalidates affected in-flight evidence; Controller later implements safe reconciliation. No agent independently decides that an approved file can be edited “non-substantively.”
-
-**Evidence and changed paths:** In the automated target design, trusted runner/Worker—not an LLM—captures the tested snapshot manifest/digest, sanitized test artifacts, actual exit code and changed-path allowlist result. A claimed `PASS` without verifiable artifacts is `NOT VERIFIED` and cannot clear a gate. Snapshot-only agents receive a trusted read-only diff/manifest when available; they must **not** claim they ran `git diff` without Git metadata. Current Phase 3.1 already has some trusted Worker checks but **V1-02's role-specific attestation and V1-03's exact-CI checks are not yet implemented**.
-
-**Owner-approved V1 policy (2026-11-09; [decision recorded in PR #27](https://github.com/builacviet/agent-workflow/pull/27#issuecomment-6727494479)): maximum 2 per rework loop.** This section is an **Owner-approved V1 scope/gate-policy addendum** to [V1 scope and gates](../v1-scope-and-gates.md) §§2–4, with precedence **(1)** for the retry limits stated here. The document's advisory-rubric status and precedence **(4)** apply to engineering heuristics, **not** this explicit Owner decision. The linked comment documents an Owner instruction conveyed in chat by the Tech Lead; it is not a separate GitHub-authenticated Owner approval event. The four original loops (Plan/MTP review, CI repair, formal code review, post-QC repair) have separate counters. The independent **QC evidence-review** correction loop is also limited to two submissions. Owner can revise after observed operations. These are **docs-only targets** except legacy WFC's code-review counter, which already counts every formal submission **including PASS**.
-
-| Counter | Stable key | Increment and cap | Never counts |
-| --- | --- | --- | --- |
-| **Plan/MTP review** | `package_id` **lineage**, including post-approval change-control revisions | **2 formal independent TL planning reviews** (initial + one revision) over that lineage | Draft edits; insufficient evidence or operational `BLOCKED` |
-| **CI repair** | `task_id` across **all** branches/HEADs/triggers, including code fixes and QC-repair HEADs | **2 authorized Dev repair HEADs** after a recorded completed required exact-HEAD `conclusion=failure` | Initial CI failure alone, same-SHA reruns, `cancelled`, `timed_out`, stale, pending, missing or ambiguous checks (`BLOCKED`) |
-| **Formal code review** | `task_id` = legacy WFC `completed_review_rounds` | **2 total formal submissions, PASS included**; first failure `CHANGES_REQUESTED`, second failure `ESCALATED` | Operational `BLOCKED` with no formal submission |
-| **QC repair/retest** | `task_id` across post-code cycles | **2 Dev repair HEADs** after verified required-case QC FAIL; each requires fresh CI, independent TL **post-QC code revalidation**, and frozen-MTP QC retest | QC `NOT RUN`, uncertain or flaky test results, rerun without authorized source repair |
-| **QC evidence review** | `task_id + qc_execution_attempt_id`, unchanged across report revisions | **2 formal TL QC evidence submissions** per authorized execution attempt, initial and one corrected-evidence submission | Draft edits, `BLOCKED`, changing report hash/version alone |
-
-**QC execution attempt IDs (R-1):** Only the trusted Controller may issue a **new** `qc_execution_attempt_id` for (i) the first post-code QC execution on an independently reviewed HEAD, (ii) a separately authorized QC-repair HEAD, or (iii) an **explicit Owner decision**. QC and TL Reviewer cannot request or invent a new ID to reset the evidence-review counter. Retesting an unchanged HEAD, editing a report, changing the harness or resubmitting evidence within the same execution attempt **keeps the same ID**. This is a **target Controller contract**, not existing WFC functionality.
-
-**Post-QC code revalidation versus legacy WFC code review:** Legacy WFC rejects a handoff/review after `APPROVED`; it cannot safely accommodate another formal code-review submission or reset `completed_review_rounds`. **Target V1 design:** each authorized QC repair HEAD receives **one independent TL post-QC code revalidation** checking changed diff, AC/security/scope, trusted fresh exact-HEAD CI and frozen MTP, recorded in a **separate future QC-repair gate**, under the **QC repair counter**, not the legacy code-review counter. It applies full independent technical scrutiny but is **not a third WFC `Submission`**. **Until a separate Owner-approved gate and durable record exist, a verified QC FAIL requiring code changes ⇒ `BLOCKED` and Owner reconciliation.** Do not reinterpret the old code verdict as covering the new HEAD.
-
-**CI provenance, failure classification and rerun defense:** Trusted CI evidence must bind `{task_id, pr_url, current_pr_head_sha, tested_sha, check_name, event, conclusion, workflow_run_id, run_attempt, check_run_id, completed_at}` and retain earlier runs at the same SHA. Only a trusted completed required named-check `conclusion=failure` is a definite CI defect; `cancelled`, `timed_out`, pending, stale, missing or inconsistent evidence is `BLOCKED`. A later **success on the same SHA after a recorded failure does not silently clear the gate**: stop `BLOCKED` until Owner explicitly acknowledges the failure, rerun and disposition. Same-SHA reruns do **not** count as Dev CI repairs. Failed CI on code-review-fix or QC-repair HEADs consumes the **same task-lifetime CI repair budget** when an authorized subsequent Dev repair HEAD is attempted.
-
-**Reset and escalation:** On exhaustion, terminal policy disposition is **`ESCALATED`**. If the deployed legacy WFC cannot represent this status for a non-code loop, persist **`BLOCKED` with reason `LIMIT_EXHAUSTED`**, counter key, actual attempt IDs/history and Owner notification; do **not** submit an invalid code verdict. Counter keys and attempts are persisted by the **trusted Controller/WFC** in the future; agent prose never advances or resets them. New HEAD/PR/session/MTP revision, approval of a revised package or a new report digest **never implicitly resets** the existing task/package-lineage counter. Only **explicit Owner action** with recorded reason, old/new identity and prior attempt history can authorize a reset in a newly approved package/policy. At any 2-round limit, **stop and notify Owner** with evidence; no automatic third attempt. An unresolved `BLOCKED` must also notify Owner after the approved incident/timeout path, not sit silently forever. New planning/QC `ESCALATED` state must not be misrepresented as supported by current legacy WFC.
-
-**No runtime authorization:** This maximum is not permission to deploy, retry uncertain effects, bypass an exact-HEAD gate or merge. Owner alone controls package authorization, retry-policy changes and PR merge.
-
-**QC ownership:** Dev owns unit/integration/regression tests included in its approved source PR; QC owns the independently approved pre-Dev *test design* and post-code *execution evidence*. QC may build an isolated test harness from frozen MTP semantics without editing Dev source; its script version/hash and commands are captured in the [execution-report template](../templates/mtp-execution-report.md). An additional test must be reported explicitly and cannot turn a frozen MTP case PASS by itself; material MTP change returns to planning approval.
-
-**Quality policy scope:** `qc: skip` must have task-specific, risk-based reason reviewed in the package and approved by Owner; it **does not waive CI, independent code review or Owner merge**. For behavior/security/stateful work prefer `qc: required`. Do not impose a blanket “docs-only” rule without a separate Owner policy decision.
-
-## Review boundaries
-
-Dev implements under approved scope. QC designs the approved test plan then executes it separately. Independent TL Reviewer reviews the plan, code and QC evidence but does not edit artifacts under its own review. **Owner alone approves package versions and merges PRs.** These Markdown standards are advisory; actual role selection, model/effort policy, mounted paths and capabilities must be enforced by trusted runtime in V1-02.
+Product QC, reviewer, approval, immutable-package and retry rules live in [V1 scope and gates](../v1-scope-and-gates.md), [QC role](../roles/qc.md) and [Reviewer role](../roles/tl-reviewer.md). They are **not part of manual Coder onboarding** for this repository.
