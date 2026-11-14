@@ -9,6 +9,7 @@
 - Tested code SHA / final pushed PR HEAD SHA:
 - Draft PR URL:
 - Approved **write allowlist**:
+- Separate **remote publish authorization** (ordinary task-branch push + Draft PR, or NONE):
 - Actual added/modified/deleted/renamed paths (compare approved base and PR base):
 - Read-only context / important shared contracts checked (brief):
 
@@ -22,7 +23,7 @@ A `PASS` is valid only if supported by actual inspection or test evidence. Expla
 
 ## Checked self-review (complete after coding)
 
-Each `[x]` means **inspected**, not automatically passed. Give a status and a concise file/test/command link or explicit reason for each relevant item.
+Each `[x]` means **inspected**, not automatically passed. Give a status and a concise file/test/command link or explicit reason for each relevant item. For a small/docs-only task, mark an irrelevant group `N/A` with one short reason instead of writing a lengthy report.
 
 - [ ] **Scope & diff:** [status]; [base-vs-HEAD diff inspected, exact changed paths, no unauthorized edits].
 - [ ] **Correctness & contracts:** [status]; [AC mapping, boundary/error cases, existing API and regression impact].
@@ -41,8 +42,9 @@ Each `[x]` means **inspected**, not automatically passed. Give a status and a co
 | GitHub Actions | | | | |
 
 - Did not run / unavailable: [`NOT VERIFIED` + reason, not PASS].
-- Exact PR HEAD and CI scope: [push vs pull_request event, workflow jobs actually run, whether checks covered the **whole PR diff** or only the latest commit].
+- Exact PR HEAD and CI scope: [push run on HEAD vs pull_request merge ref, workflow jobs actually run, whether checks covered the **whole PR diff** or only the latest commit].
+- **Protected files / CI self-modification:** [NONE or paths and independent review/validation; a green run from a modified CI/policy is not automatically trustworthy].
 - External effects / shared DB / credentials / containers touched: [NONE or authorized facts].
 - Verdict requested: **Ready for Tech Lead review** / **BLOCKED** [reason].
 
-**Ownership:** Coder commits/pushes only on the approved task branch and leaves PR Draft. Tech Lead independently checks evidence at the reviewed HEAD; a newer HEAD requires fresh review/CI. **Owner alone merges.**
+**Ownership:** Coder may commit/push and open a Draft PR on the assigned task branch **only when the approved task/role grant permits remote publication**. Tech Lead independently checks evidence at the reviewed HEAD; a newer HEAD requires fresh review/CI. **Owner alone merges.**
