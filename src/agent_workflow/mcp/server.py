@@ -2,10 +2,14 @@ import os
 import re
 from datetime import datetime, timezone
 
-from agent_workflow.mcp.security import poc_unauthenticated_enabled
-
+from mcp.server.auth.routes import create_protected_resource_routes
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+
+from agent_workflow.mcp.security import TECHLEAD_SCOPE, poc_unauthenticated_enabled
+from agent_workflow.mcp.tools import register_tools
+
 
 def server_bind_host() -> str:
     """Keep local source execution loopback-only unless explicitly containerized."""
@@ -32,9 +36,33 @@ def server_allowed_hosts() -> list[str]:
                 for label in labels
             )
         ):
-            raise ValueError("WFC_PUBLIC_HOST must be a plain DNS hostname without scheme or port")
+            raise ValueError(
+                "WFC_PUBLIC_HOST must be a plain DNS hostname without scheme or port"
+            )
         hosts.extend([public_host, public_host + ":*"])
     return hosts
+
+
+class _Auth0FastMCP(FastMCP):
+    def streamable_http_app(self) -> Starlette:
+        app = super().streamable_http_app()
+        auth = self.settings.auth
+        assert auth is not None and auth.resource_server_url is not None
+        scopes = list(dict.fromkeys([*(auth.required_scopes or []), TECHLEAD_SCOPE]))
+        (metadata_route,) = create_protected_resource_routes(
+            resource_url=auth.resource_server_url,
+            authorization_servers=[auth.issuer_url],
+            scopes_supported=scopes,
+        )
+
+        # FastMCP 1.30 generates this route from required_scopes and puts it
+        # ahead of custom routes. Replace only discovery and keep SDK auth.
+        (original,) = (
+            route for route in app.routes if route.path == metadata_route.path
+        )
+        app.routes[app.routes.index(original)] = metadata_route
+        return app
+
 
 def create_mcp_server():
     """Legacy bearer by default; Auth0 OAuth is opt-in and fail-closed."""
@@ -43,8 +71,9 @@ def create_mcp_server():
         raise ValueError("WFC_AUTH_MODE must be bearer or auth0")
     kwargs = {}
     if mode == "auth0":
-        from pydantic import AnyHttpUrl
         from mcp.server.auth.settings import AuthSettings
+        from pydantic import AnyHttpUrl
+
         from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier, load_auth0_config
 
         config = load_auth0_config(
@@ -57,7 +86,8 @@ def create_mcp_server():
             required_scopes=[config.scope],
             validate_token_resource=True,
         )
-    return FastMCP(
+    server_type = _Auth0FastMCP if mode == "auth0" else FastMCP
+    return server_type(
         "Workflow MCP Lab",
         host=server_bind_host(),
         port=8000,
@@ -73,24 +103,29 @@ def ping() -> str:
     """Check whether ChatGPT can call this MCP server."""
     return "pong"
 
+
 def get_server_info() -> dict:
     """Return basic, non-sensitive information about this server."""
     return {
         "name": "Workflow MCP Lab",
         "version": "0.2.0",
         "status": "running",
-        "mode": ("oauth-auth0-resource-server" if os.environ.get("WFC_AUTH_MODE") == "auth0"
-                 else "POC-UNAUTHENTICATED-UNSAFE" if poc_unauthenticated_enabled()
-                 else "workflow-writes-denied-unless-authenticated"),
+        "mode": (
+            "oauth-auth0-resource-server"
+            if os.environ.get("WFC_AUTH_MODE") == "auth0"
+            else "POC-UNAUTHENTICATED-UNSAFE"
+            if poc_unauthenticated_enabled()
+            else "workflow-writes-denied-unless-authenticated"
+        ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-from agent_workflow.mcp.tools import register_tools
 
 mcp = create_mcp_server()
 mcp.tool()(ping)
 mcp.tool()(get_server_info)
 register_tools(mcp)
+
 
 def main() -> None:
     if poc_unauthenticated_enabled():
@@ -101,6 +136,7 @@ def main() -> None:
             flush=True,
         )
     mcp.run(transport="streamable-http")
+
 
 if __name__ == "__main__":
     main()

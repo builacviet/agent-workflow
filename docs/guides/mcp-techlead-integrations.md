@@ -1,14 +1,20 @@
 
 # Tech Lead MCP integrations
 
-The existing FastMCP server registers six additional tools in Auth0 mode. The
-configured Auth0 subject and client must receive both the existing
-`WFC_AUTH0_SCOPE` permission and the distinct `wfc:techlead` permission in the
-signed access token's `scope` claim. Define and grant the latter only to the
-authorized Tech Lead subject and client in Auth0 for the existing MCP audience.
-Confirm the deployment's OAuth flow actually issues both scopes. Keep the
-existing `WFC_AUTH0_SCOPE` setting separate. Legacy bearer and anonymous modes
-expose the original nine tools.
+The existing FastMCP server registers six additional tools in Auth0 mode. Its
+protected-resource metadata advertises the configured workflow scope and
+`wfc:techlead`. Keep `WFC_AUTH0_SCOPE` set to a single workflow permission,
+normally `wfc:workflow`. A workflow-only access token still works for the nine
+legacy tools. The Tech Lead tools require both scopes in the signed access
+token's `scope` claim. Bearer and anonymous modes expose the original nine tools.
+
+Grant both permissions to the authorized subject and existing ChatGPT client
+for the same Auth0 MCP audience. After deploying this change, reconnect the
+ChatGPT MCP connection to start a fresh OAuth authorization flow. A cached
+workflow-only grant may still serve legacy calls. During the separately
+authorized E2E check, verify that the fresh access token includes both scopes
+without copying or logging the token. A permission grant in the Auth0 console
+alone does not verify what the client requested or what Auth0 issued.
 
 Each integration loads its own settings after the Auth0 check. Unset or invalid
 settings disable calls for that integration. Store each credential in a

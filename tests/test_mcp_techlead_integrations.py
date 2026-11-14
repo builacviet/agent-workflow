@@ -75,11 +75,11 @@ def auth_env(monkeypatch):
         monkeypatch.setenv(setting, value)
 
 
-def _server():
+def _server(**registration_options):
     mcp = create_mcp_server()
     mcp.tool()(ping)
     mcp.tool()(get_server_info)
-    register_tools(mcp)
+    register_tools(mcp, **registration_options)
     return mcp
 
 
@@ -596,3 +596,171 @@ def test_verified_scope_can_call_notion_tool(auth_env, monkeypatch, notion):
 
     asyncio.run(exercise())
     assert [request.url.path for request in calls] == ["/v1/users/me"]
+
+
+def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_path):
+    import time
+
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from mcp.client.auth.utils import (
+        extract_resource_metadata_from_www_auth,
+        extract_scope_from_www_auth,
+        get_client_metadata_scopes,
+    )
+    from mcp.shared.auth import ProtectedResourceMetadata
+    from starlette.testclient import TestClient
+
+    from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    scope = "wfc:workflow"
+    both_scopes = "wfc:workflow wfc:techlead"
+    resource = "https://test.example.org/mcp"
+    issuer = "https://example.us.auth0.com/"
+    metadata_url = "https://test.example.org/.well-known/oauth-protected-resource/mcp"
+    now = int(time.time())
+    upstream_calls = []
+
+    async def fake_jwks(self):
+        return {"fixture": key.public_key()}
+
+    class FakeNotion:
+        def __init__(self, config):
+            upstream_calls.append(config.bot_id)
+
+        async def identity(self):
+            return {"id": BOT_ID, "type": "bot"}
+
+    monkeypatch.setattr(Auth0TokenVerifier, "_fetch_jwks", fake_jwks)
+    monkeypatch.setattr("agent_workflow.mcp.tools.TechLeadNotion", FakeNotion)
+    monkeypatch.setenv("TECHLEAD_NOTION_BOT_ID", BOT_ID)
+    monkeypatch.setenv("TECHLEAD_NOTION_TOKEN_FILE", str(tmp_path / "unused"))
+
+    def token(**overrides):
+        claims = {
+            "iss": issuer,
+            "aud": resource,
+            "sub": "auth0|test",
+            "azp": "https://chatgpt.com/oauth/client.json",
+            "scope": scope,
+            "iat": now,
+            "exp": now + 300,
+        }
+        return jwt.encode(
+            claims | overrides, key, algorithm="RS256", headers={"kid": "fixture"}
+        )
+
+    class FakeWorkflow:
+        def list_review_queue(self, requested_effort):
+            assert requested_effort == "medium"
+            return [{"task_id": "fixture"}]
+
+    server = _server(service_factory=FakeWorkflow)
+    assert server.settings.auth.required_scopes == [scope]
+    server.settings.json_response = True
+    server.settings.stateless_http = True
+
+    with TestClient(
+        server.streamable_http_app(), base_url="https://test.example.org"
+    ) as client:
+
+        def rpc(method, access_token=None, params=None):
+            headers = {
+                "Accept": "application/json, text/event-stream",
+                "MCP-Protocol-Version": "2025-11-25",
+            }
+            if access_token:
+                headers["Authorization"] = f"Bearer {access_token}"
+            return client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": method,
+                    "params": params or {},
+                },
+            )
+
+        challenge = rpc("tools/list")
+        assert challenge.status_code == 401
+        assert extract_resource_metadata_from_www_auth(challenge) == metadata_url
+        response = client.get(metadata_url)
+        assert response.status_code == 200
+        metadata = ProtectedResourceMetadata.model_validate(response.json())
+        assert str(metadata.resource) == resource
+        assert [str(url) for url in metadata.authorization_servers] == [issuer]
+        assert metadata.scopes_supported == both_scopes.split()
+        assert (
+            get_client_metadata_scopes(extract_scope_from_www_auth(challenge), metadata)
+            == both_scopes
+        )
+
+        for claims in (
+            {"scope": "wfc:techlead"},
+            {"sub": "auth0|different", "scope": both_scopes},
+            {"aud": "https://wrong.example.org/mcp", "scope": both_scopes},
+            {"azp": "different-client", "scope": both_scopes},
+            {"iss": "https://wrong.example.org/", "scope": both_scopes},
+            {"exp": now - 60, "scope": both_scopes},
+        ):
+            assert rpc("tools/list", token(**claims)).status_code == 401
+
+        workflow_only = token()
+        tools = rpc("tools/list", workflow_only)
+        assert tools.status_code == 200
+        assert {
+            tool["name"] for tool in tools.json()["result"]["tools"]
+        } == LEGACY | NEW.keys()
+        ping_result = rpc("tools/call", workflow_only, {"name": "ping"}).json()[
+            "result"
+        ]
+        assert ping_result["content"][0]["text"] == "pong"
+        queue = rpc(
+            "tools/call",
+            workflow_only,
+            {"name": "list_review_queue", "arguments": {"requested_effort": "medium"}},
+        ).json()["result"]
+        assert not queue.get("isError")
+        assert json.loads(queue["content"][0]["text"]) == {
+            "tasks": [{"task_id": "fixture"}],
+        }
+        denied = rpc(
+            "tools/call", workflow_only, {"name": "tl_notion_identity"}
+        ).json()["result"]
+        assert denied["isError"]
+        assert "Tech Lead OAuth authorization required" in denied["content"][0]["text"]
+        assert upstream_calls == []
+
+        accepted = rpc(
+            "tools/call", token(scope=both_scopes), {"name": "tl_notion_identity"}
+        ).json()["result"]
+        assert not accepted.get("isError")
+        assert json.loads(accepted["content"][0]["text"]) == {
+            "id": BOT_ID,
+            "type": "bot",
+        }
+        assert upstream_calls == [BOT_ID]
+
+
+@pytest.mark.parametrize("poc_no_auth", ["0", "1"])
+def test_legacy_modes_have_nine_tools_and_no_oauth_discovery(
+    auth_env, monkeypatch, poc_no_auth
+):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("WFC_AUTH_MODE", "bearer")
+    monkeypatch.setenv("WFC_POC_NO_AUTH", poc_no_auth)
+    legacy = _server()
+    assert {tool.name for tool in asyncio.run(legacy.list_tools())} == LEGACY
+    with TestClient(legacy.streamable_http_app()) as client:
+        assert (
+            client.get("/.well-known/oauth-protected-resource/mcp").status_code == 404
+        )
+
+
+def test_workflow_scope_setting_still_requires_one_value(auth_env, monkeypatch):
+    monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow wfc:techlead")
+    with pytest.raises(ValueError, match="must be a single OAuth permission"):
+        _server()
