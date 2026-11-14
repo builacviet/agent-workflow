@@ -104,7 +104,7 @@ class PostgresWebhookInbox:
     def get(self, delivery_id: str) -> WebhookNotification | None:
         _validate_text(delivery_id)
         with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
+            error_message=_OPERATION_ERROR, read_only=True
         ) as session:
             row = session.get(WebhookInboxRow, delivery_id)
             if row is None:

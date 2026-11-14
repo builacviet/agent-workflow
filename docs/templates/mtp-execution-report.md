@@ -49,4 +49,4 @@
 
 **Assertion integrity:** Verify each harness case actually asserts the frozen MTP expectation, including negative cases. A zero exit from skipped, tautological, weakened or vacuous assertions is insufficient for PASS. Preserve **per-run** script hash, command, run ID, tested HEAD and artifacts, including failed attempts. Independent TL checks hashes and assertions before accepting QC evidence.
 
-**No silent result conversion:** A QC execution with any unresolved required `FAIL`, `BLOCKED` or `NOT RUN` cannot receive a full `QC_REVIEW_PASS`. Refer to [QC contract](../roles/qc.md), [TL Reviewer](../roles/tl-reviewer.md) and [MTP template](master-test-plan.md).
+**No silent result conversion:** A QC execution with any unresolved required `FAIL`, `BLOCKED` or `NOT RUN` cannot receive a full `QC_REVIEW_PASS`. Refer to [V1 QC and independent review gates](../v1-scope-and-gates.md#3-execution-gates--strictly-one-atomic-task-at-a-time) and [MTP template](master-test-plan.md).

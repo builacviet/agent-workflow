@@ -222,6 +222,36 @@ def test_repository_session_lifecycle(monkeypatch, failure):
         session.flush.assert_not_called()
 
 
+def test_repository_read_session_closes_without_flush_or_commit(monkeypatch):
+    engine = MagicMock()
+    connection_scope = engine.connect.return_value
+    connection = connection_scope.__enter__.return_value
+    connection.execute.return_value.scalars.return_value.all.return_value = [
+        "pg02d_webhook_digest"
+    ]
+    factory = PostgresFactory(engine)
+    connection_scope.reset_mock()
+    session_type = MagicMock()
+    monkeypatch.setattr(
+        "agent_workflow.storage.postgres_connection.Session", session_type
+    )
+
+    with factory.repository_session(
+        error_message="read failed", read_only=True
+    ) as session:
+        assert session is session_type.return_value.__enter__.return_value
+
+    assert str(connection.execute.call_args_list[0].args[0]) == (
+        "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY"
+    )
+    connection.begin.assert_not_called()
+    connection.commit.assert_not_called()
+    session.flush.assert_not_called()
+    session_scope = session_type.return_value
+    session_scope.__exit__.assert_called_once_with(None, None, None)
+    connection_scope.__exit__.assert_called_once_with(None, None, None)
+
+
 def test_disposable_live_transactions():
     dsn = os.environ.get("PG_TEST_DSN")
     if not dsn:
@@ -264,6 +294,22 @@ def test_disposable_live_transactions():
                 ) as session:
                     session.execute(insert_value, {"value": 2})
                     raise RuntimeError("rollback")
+            assert outcomes == ["rollback", "close"]
+            outcomes.clear()
+            with factory.repository_session(
+                error_message="test read failed", read_only=True
+            ) as session:
+                assert session.scalar(text("SHOW transaction_read_only")) == "on"
+                assert session.execute(
+                    text(f"SELECT value FROM {table}")
+                ).scalars().all() == [1]
+            assert outcomes == ["rollback", "close"]
+            outcomes.clear()
+            with pytest.raises(PostgresUnavailableError, match="^test read failed$"):
+                with factory.repository_session(
+                    error_message="test read failed", read_only=True
+                ) as session:
+                    session.execute(insert_value, {"value": 3})
             assert outcomes == ["rollback", "close"]
             with factory.transaction() as conn:
                 assert conn.execute(

@@ -21,9 +21,12 @@ class PostgresUnavailableError(RuntimeError):
     """Runtime connection or schema validation failed without exposing credentials."""
 
 
-def _set_repository_transaction_options(connection: Connection) -> None:
+def _set_repository_transaction_options(
+    connection: Connection, *, read_only: bool
+) -> None:
     # Webhook collision lookup must see the winner committed by a concurrent insert.
-    connection.execute(text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+    mode = ", READ ONLY" if read_only else ""
+    connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
     connection.execute(
         text(
             "SELECT set_config('lock_timeout', :lock_timeout, true), "
@@ -91,16 +94,20 @@ class PostgresFactory:
                 yield connection
 
     @contextmanager
-    def repository_session(self, *, error_message: str) -> Iterator[Session]:
-        """Flush repository work before committing its READ COMMITTED transaction."""
+    def repository_session(
+        self, *, error_message: str, read_only: bool = False
+    ) -> Iterator[Session]:
+        """Scope Webhook/CI work and flush only before a write commit."""
+        connection_scope = self.connect_session if read_only else self.transaction
         try:
-            with self.transaction() as connection:
-                _set_repository_transaction_options(connection)
+            with connection_scope() as connection:
+                _set_repository_transaction_options(connection, read_only=read_only)
                 with Session(
                     bind=connection, join_transaction_mode="rollback_only"
                 ) as session:
                     yield session
-                    session.flush()
+                    if not read_only:
+                        session.flush()
         except (SQLAlchemyError, ValidationError):
             # Database and DTO errors can contain query parameters or row values.
             raise PostgresUnavailableError(error_message) from None

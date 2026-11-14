@@ -1,5 +1,7 @@
 # Dev completion checklist — DB-STD-01
 
+The reconciliation below supersedes the old readiness status. Earlier evidence is retained with its original tested SHA.
+
 ## Identity and scope
 
 - Task / Notion AC: [DB-STD-01 and Owner/TL addendum](https://app.notion.com/p/417f92014abd813e91dce8ff39026cc5)
@@ -63,4 +65,18 @@ This self-report covers the tested implementation commit above. The PR descripti
 - [x] I reported observed results and kept local, CI and unverified results distinct.
 - [x] The final PR HEAD and fresh push and PR CI belong in the PR handoff after this commit.
 
-**Status:** BLOCKED on #60 documentation reconciliation pending Owner merge. Tech Lead reviews the checklist, diff and final CI. Owner decides merge.
+## Reconciliation after #60
+
+- **Scope and governance — PASS.** Original authorized base remains `b531f8492c24bfb1ca8ca2e32c70b7a594b0fb05`. Merged `origin/main` at `e9d9cb6858083274efcda6cf1481e5b33405b5b1` into `codex/db-std-01` without rewriting branch history. The PR diff from that main commit has seven paths, all within the task's approved scope. The inherited governance files are from #60. The sole conflict was resolved in the PostgreSQL section.
+- **Correctness, transaction ownership and security — PASS by inspection and local tests.** Webhook `get` and CI-state `tracked`, `previous_failure`, `approved` and `pending_events` use a READ ONLY Session. Closing rolls back the read transaction without flush or commit. Webhook record and CI-state track/record/mark_processed retain one outer write transaction. CI record's intermediate observation flush and later binding update remain atomic. Both scopes retain READ COMMITTED and the existing timeouts. Writes retain synchronous durability. SQL/DTO errors are sanitized and domain errors propagate. Existing Workflow UoW, Dispatch deadline handling, pinned leadership, schema and migration code are unchanged in the full PR diff.
+- **Regression evidence — PASS locally.** Windows Python 3.12.10, Ruff 0.17.0. Checked the five changed Python paths with `python -m ruff check <paths>` and `python -m ruff format --check <paths>`, both exit 0. After correcting a mock that counted the factory initialization close, the final scoped run below passed 43, skipped 16. The final full run passed 559, skipped 59, with 45 subtests passed. The initial scoped/full attempts each failed that one mock assertion. Test runs used the task venv with PostgreSQL DSNs and Compose opt-in removed from the process environment.
+
+```text
+python -m pytest -q --tb=short --basetemp=.runtime/pytest-db-std-01-scoped-r3 tests/test_pg_connection.py tests/test_pg_webhook_adapter.py tests/test_pg_ci_state.py tests/test_pg_leadership.py tests/test_architecture_policy.py
+exit 0
+python -m pytest -q --tb=short --basetemp=.runtime/pytest-db-std-01-full-r3
+exit 0
+```
+
+- **Live PostgreSQL 16 and Compose — NOT VERIFIED locally.** The new live test checks rollback/close without commit, database rejection of writes in the read scope, and preservation of prior committed data. The Webhook live test also checks a read succeeds while an instrumented write commit fails. The Draft PR description is the record for the final SHA and fresh push/merge-ref CI.
+- **Schema, migrations and runtime wiring — N/A.** No changes. Tech Lead independently reviews the resulting HEAD; Owner decides merge.

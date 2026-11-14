@@ -99,7 +99,7 @@ class PostgresControllerCiState:
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError("bounded CI task scan required")
         with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
+            error_message=_OPERATION_ERROR, read_only=True
         ) as session:
             bindings = session.scalars(
                 select(CITask)
@@ -121,7 +121,7 @@ class PostgresControllerCiState:
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
+            error_message=_OPERATION_ERROR, read_only=True
         ) as session:
             return self._has_failure(session, task_id, head_sha)
 
@@ -184,7 +184,7 @@ class PostgresControllerCiState:
         except WorkflowError:
             return False
         with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
+            error_message=_OPERATION_ERROR, read_only=True
         ) as session:
             success = (
                 select(CIObservation.id)
@@ -220,7 +220,7 @@ class PostgresControllerCiState:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("bounded webhook scan required")
         with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
+            error_message=_OPERATION_ERROR, read_only=True
         ) as session:
             inbox, processed = WebhookInboxRow, CIProcessedDelivery
             rows = session.scalars(
