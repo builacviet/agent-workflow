@@ -15,7 +15,7 @@
 | QC author/session identifier | `<non-secret identity and session ID>` |
 | Risks, dependencies and clarification requests | `<blocking questions or none>` |
 
-**Freeze/approval protocol:** Once the proposed MTP and package are complete, a trusted Controller (when implemented) computes **SHA-256 of the exact raw UTF-8 bytes of this finalized file**, and a separately defined immutable Planning Package manifest binds that hash to the Plan/AC/task artifacts. **Neither resulting hash is inserted into a file included in its own hash.** In manual bootstrap, the Owner/operator computes and records the file SHA-256 and package-manifest hash *outside* these approved files; the independent reviewer checks the submitted bytes; Owner approval records their exact identities. This is a design/operating procedure for V1-02, **not a claim that a Controller hash registry exists today**. Changing any approved byte requires a new version/hash, review and Owner decision under [change control](../conventions/engineering-standards.md).
+**Freeze/approval protocol:** Once the proposed MTP and package are complete, a trusted Controller (when implemented) computes **SHA-256 of the exact raw UTF-8 bytes of this finalized file**, and a separately defined immutable Planning Package manifest binds that hash to the Plan/AC/task artifacts. **Neither resulting hash is inserted into a file included in its own hash.** In manual bootstrap, the Owner/operator computes and records the file SHA-256 and package-manifest hash *outside* these approved files; the independent reviewer checks the submitted bytes; Owner approval records their exact identities. This is a design/operating procedure for V1-02, **not a claim that a Controller hash registry exists today**. Changing any approved byte requires a new version/hash, review and Owner decision under [product change control](../v1-scope-and-gates.md#5-change-control-evidence-ownership-and-rework-decisions).
 
 ## 2. Acceptance Criteria traceability
 
@@ -59,8 +59,8 @@ The AC/test semantics and expected results **must be specified before Dev**. A t
 1. QC creates/finalizes this **design-only** document.
 2. Independent TL reviews proposed Plan/AC/MTP, including exact bytes and coverage.
 3. Owner approves an immutable Planning Package ID/version/hash with a referenced MTP SHA-256.
-4. Dev → trusted Worker publishes Draft PR → named GitHub CI PASS on **current PR HEAD** → independent TL code review PASS.
+4. Dev/Code hands off its snapshot → trusted isolated Test runs approved mandatory checks on the **same snapshot** → Worker verifies Test PASS and changed-path allowlist → Worker publishes Draft PR → GitHub CI PASS on **current PR HEAD** → independent TL code review PASS.
 5. QC executes this frozen MTP against reviewed HEAD in an isolated environment, recording actual results in the **separate** [MTP Execution Report](mtp-execution-report.md) with runner evidence.
 6. Independent TL reviews QC execution evidence; Owner alone approves/merges PR. Changes in code HEAD or approved package/MTP invalidate dependent evidence.
 
-**Failure policy:** Ambiguous AC, missing approvals, stale hashes/SHA, incomplete critical test coverage or uncertain external effects ⇒ `BLOCKED` with an explicit clarification/findings owner. No MTP case is `PASS` during pre-Dev authoring. Refer to [QC role](../roles/qc.md), [V1 gates](../v1-scope-and-gates.md) and [change-control rules](../conventions/engineering-standards.md).
+**Failure policy:** Ambiguous AC, missing approvals, stale hashes/SHA, incomplete critical test coverage or uncertain external effects ⇒ `BLOCKED` with an explicit clarification/findings owner. No MTP case is `PASS` during pre-Dev authoring. Refer to [V1 planning, QC and approval gates](../v1-scope-and-gates.md#2-planning-gates--once-per-approved-package) and [product change-control rules](../v1-scope-and-gates.md#5-change-control-evidence-ownership-and-rework-decisions).
