@@ -1,21 +1,48 @@
-# Coder / agent task handoff template
+# Manual Coder — Draft PR handoff & checked self-review
 
-Fill only with observed evidence for the **current authorized task**. Submit in PR description or an explicit handoff message. Do not append new task reports to this template or to `docs/handoff.md`.
+**Use this template in the PR description.** Do not create a separate `docs/evidence/*.md` file for every task. This is the Coder's self-report; Tech Lead verifies against the task, actual diff, tests and GitHub CI. Never include credentials, raw DSNs or full secret-bearing logs.
 
-```text
-Task ID and approved scope:
-Role / responsibility (CURRENT implementation vs TARGET design):
-Base commit SHA / branch / worktree:
-Head commit SHA / pushed remote SHA / PR URL:
-Changed files and why (path allowlist):
-Acceptance criteria checked (PASS / FAIL / BLOCKED / NOT RUN):
-Actual tests/commands, environment and observed results:
-Security/trust-boundary changes and negative checks:
-Risks, regressions, unknowns and limitations:
-External effects / credentials / DB/host/containers touched (or NONE):
-Diff review / CI evidence (or NOT RUN):
-Requested review effort (do not claim unverifiable setting):
-Status: awaiting independent Tech Lead / Owner review
-```
+## Task identity and scope
 
-**Rules:** Never fabricate a test, merge, engine hardening or model-effort result. Exact HEAD changes invalidate older review evidence. Codex cannot approve its own work. Tech Lead review allows at most two rounds, with separate Owner merge authority. See [`review-policy.md`](../review-policy.md), [`AGENTS.md`](../../AGENTS.md), and dated [historical handoffs](../history/handoff-log.md) if needed.
+- Task ID / approved Notion AC:
+- Authorized base SHA / branch / worktree:
+- Tested code SHA / final pushed PR HEAD SHA:
+- Draft PR URL:
+- Approved **write allowlist**:
+- Actual added/modified/deleted/renamed paths (compare approved base and PR base):
+- Read-only context / important shared contracts checked (brief):
+
+## AC implementation and test mapping
+
+| AC | Status: PASS / FAIL / N/A / NOT VERIFIED | Implementation + concrete test / evidence |
+| --- | --- | --- |
+| AC-… | | |
+
+A `PASS` is valid only if supported by actual inspection or test evidence. Explain every `N/A` or `NOT VERIFIED`; required unverified checks must be escalated. Do not turn a skipped test into PASS.
+
+## Checked self-review (complete after coding)
+
+Each `[x]` means **inspected**, not automatically passed. Give a status and a concise file/test/command link or explicit reason for each relevant item.
+
+- [ ] **Scope & diff:** [status]; [base-vs-HEAD diff inspected, exact changed paths, no unauthorized edits].
+- [ ] **Correctness & contracts:** [status]; [AC mapping, boundary/error cases, existing API and regression impact].
+- [ ] **Clean Code & architecture:** [status]; [naming/types, duplication, modules/dependencies, refactors fixed or deferred].
+- [ ] **Security & side effects:** [status]; [input/SQL/path/secret/permission review and negative tests, or N/A reason].
+- [ ] **Persistence/concurrency/recovery (if relevant):** [status]; [transaction owner, rollback, isolation/deadline, idempotency/lock lifetime, or N/A reason].
+- [ ] **Tests, lint & CI:** [status]; [actual scoped/full tests, Ruff, required CI jobs and gaps].
+
+**Proactive fixes from self-review:** [within-scope fixes and tests re-run; or NONE]. **Out-of-scope findings / unresolved risks:** [paths, risk and requested TL decision; or NONE].
+
+## Commands and independently checkable evidence
+
+| Environment | Command / CI job link | Tested SHA or run/attempt | Exit code / conclusion | Passed / failed / skipped; limitation |
+| --- | --- | --- | --- | --- |
+| Local | | | | |
+| GitHub Actions | | | | |
+
+- Did not run / unavailable: [`NOT VERIFIED` + reason, not PASS].
+- Exact PR HEAD and CI scope: [push vs pull_request event, workflow jobs actually run, whether checks covered the **whole PR diff** or only the latest commit].
+- External effects / shared DB / credentials / containers touched: [NONE or authorized facts].
+- Verdict requested: **Ready for Tech Lead review** / **BLOCKED** [reason].
+
+**Ownership:** Coder commits/pushes only on the approved task branch and leaves PR Draft. Tech Lead independently checks evidence at the reviewed HEAD; a newer HEAD requires fresh review/CI. **Owner alone merges.**
