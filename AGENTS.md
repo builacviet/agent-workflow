@@ -9,7 +9,7 @@
 1. Read **this file** and the **approved task/acceptance criteria** (normally Notion). Confirm task ID, base SHA, branch/worktree, exact write allowlist, expected tests and any suggested entrypoints. Missing or conflicting authority: ask Tech Lead; do not guess.
 2. Verify repository, `git status`, branch and base before editing; work only in the assigned `.worktrees/<task>` on `codex/<task>`. Do not reset or overwrite someone else's worktree. Keep `main` clean.
 3. **Guided discovery:** Begin with task entrypoints. Find affected symbols, callers, imports, interfaces, wiring and tests using bounded search (`rg`, file/range reads). Extend **read context** only when needed for an AC, shared contract or trust boundary. Stop when each AC maps to implementation and a verification path. Reading a file does **not** authorize editing it.
-4. Open only the relevant section of [engineering standards](docs/conventions/engineering-standards.md) and relevant source/tests. [Documentation index](docs/INDEX.md), architecture docs, role specifications and historical ADRs are **optional lookups**, not required onboarding.
+4. Open only the relevant section of [engineering standards](docs/conventions/engineering-standards.md) and relevant source/tests. [Documentation index](docs/INDEX.md), architecture and product contracts, and historical ADRs are **optional lookups**, not required onboarding.
 
 ## Non-negotiable boundaries
 
@@ -19,6 +19,14 @@
 - Never expose tokens, GitHub App credentials, secrets or real database contents. No unapproved production/shared DB, Docker socket, privileged engine, tunnel, deployment, migration or network side effects. Validate untrusted input, parameterize SQL, fail closed.
 - **Manual coding agents** may run authorized local Ruff/pytest in a dedicated worktree with disposable fixtures to save time. This does **not** grant an automated untrusted Coder Worker permission to execute Python/tests on the host; execution isolation is a separate product security requirement. Do not claim isolation is implemented without evidence.
 - **Write / publish / merge are separate rights:** the task authorizes file edits; manual commit, ordinary push and opening a Draft PR on the assigned `codex/<task>` branch require the approved task/role handoff to allow publication. Neither permission allows direct push to `main`, force-push, self-approval or merge. **Owner alone merges.** Work on one atomic task per Draft PR unless scope is explicitly changed.
+
+## One source of truth and authenticated agent identity
+
+- **Notion Task = WHAT:** Approved AC, scope/write allowlist, base, task status, publish grant and Owner decisions. Only a documented authorized task revision changes requirements; a Notion comment is **not** an approval or scope amendment.
+- **GitHub PR = HOW + PROOF:** Implementation summary, AC IDs with code/test links, commands, result/skips, CI run/ref, risks and full code review findings inline. Reuse the task URL; do **not** duplicate task text or a separate evidence Markdown.
+- **Notion Comments = COMMUNICATION:** Questions/blockers and short state notices with link to the PR/review. Coder posts READY_FOR_TL_REVIEW + PR link when ready; TL posts CHANGES_REQUESTED/APPROVED + review link. Do not paste full diff, test evidence or findings there; reflect actual workflow state in the Notion Task.
+- **Verified identity:** GitHub/Notion's **authenticated account or App actor** is the audit identity. A `role=TL`/ `role=Coder` label is explanatory, **never proof of a distinct bot identity or Owner approval**. Confirm actor before attributing actions. If using the Owner-connected connector, say so; do not impersonate a standalone Tech Lead bot.
+- **Separate agent integrations are a setup requirement, not granted here:** Codex GitHub App should use a least-privilege **installation identity** for branch/PR operations; distinct, appropriately scoped TL GitHub and Notion connections are needed for independently attributed TL actions. Notion Codex plugin identity must be checked. Never put App private keys, installation tokens or access tokens in tasks, comments, PRs or logs.
 
 ## Code quality — read the relevant rules, not everything
 
