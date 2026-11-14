@@ -11,7 +11,7 @@
 | Controller/Docker recovery | [Phase 3.1 runbook](phase-3.1.md) and [dispatch/recovery guide](guides/dispatch-recovery.md) |
 | OAuth / GitHub integration | [OAuth runbook](auth0-oauth.md), relevant integration source/tests |
 | Product orchestration features and gates | [V1 scope contract](v1-scope-and-gates.md), then the task-specific product specs |
-| Implementing Dev/QC/reviewer product roles | [Dev](roles/dev.md), [QC](roles/qc.md), [Reviewer](roles/tl-reviewer.md) specifications **only when task requires those product components** |
+| Implementing automated Dev/Code stage, QC or Reviewer product features | [Dev/Code stage and product gates](v1-scope-and-gates.md#automated-devcode-stage-contract-product-feature), [QC](roles/qc.md), [Reviewer](roles/tl-reviewer.md) — **only if assigned to implement those features** |
 | Task scope and PR handoff | [Task contract](templates/agent-task-contract.md), [one PR handoff template](templates/handoff.md), [TL review checklist](templates/tl-review-checklist.md) |
 | Historical design and decisions | [ADR index](adr/CL-12-current-state.md), [historical handoffs](history/handoff-log.md) — never assumed current without verification |
 
