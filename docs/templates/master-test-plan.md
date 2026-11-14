@@ -59,7 +59,7 @@ The AC/test semantics and expected results **must be specified before Dev**. A t
 1. QC creates/finalizes this **design-only** document.
 2. Independent TL reviews proposed Plan/AC/MTP, including exact bytes and coverage.
 3. Owner approves an immutable Planning Package ID/version/hash with a referenced MTP SHA-256.
-4. Dev → trusted Worker publishes Draft PR → named GitHub CI PASS on **current PR HEAD** → independent TL code review PASS.
+4. Dev/Code hands off its snapshot → trusted isolated Test runs approved mandatory checks on the **same snapshot** → Worker verifies Test PASS and changed-path allowlist → Worker publishes Draft PR → GitHub CI PASS on **current PR HEAD** → independent TL code review PASS.
 5. QC executes this frozen MTP against reviewed HEAD in an isolated environment, recording actual results in the **separate** [MTP Execution Report](mtp-execution-report.md) with runner evidence.
 6. Independent TL reviews QC execution evidence; Owner alone approves/merges PR. Changes in code HEAD or approved package/MTP invalidate dependent evidence.
 
