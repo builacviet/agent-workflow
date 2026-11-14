@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import unquote, urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
@@ -100,3 +103,123 @@ class AppConfig(BaseModel):
                 "WFC_SANDBOX_STATE_DIR must be a safe, durable local directory"
             ) from None
         return config
+
+    @staticmethod
+    def techlead_github(
+        environ: Mapping[str, str] | None = None,
+    ) -> TechLeadGitHubConfig:
+        """Load independent settings only for an authorized GitHub tool call."""
+        source = os.environ if environ is None else environ
+        try:
+            slug = source["TECHLEAD_GITHUB_APP_SLUG"]
+            installation_id = _github_id(source["TECHLEAD_GITHUB_INSTALLATION_ID"])
+            if (
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?", slug)
+                or slug == "builacviet-wfc-coder"
+                or str(installation_id) == source.get("WFC_CONTROLLER_INSTALLATION_ID")
+            ):
+                raise ValueError
+            return TechLeadGitHubConfig(
+                app_id=_github_id(source["TECHLEAD_GITHUB_APP_ID"]),
+                installation_id=installation_id,
+                app_slug=slug,
+                bot_id=_github_id(source["TECHLEAD_GITHUB_BOT_ID"]),
+                key_file=_secret_file(source["TECHLEAD_GITHUB_KEY_FILE"]),
+                test_prs=_tl_ids(
+                    source.get("TECHLEAD_GITHUB_TEST_PRS", ""), _github_id
+                ),
+            )
+        except (KeyError, ValueError):
+            raise ValueError(
+                "Tech Lead GitHub connection disabled or invalid"
+            ) from None
+
+    @staticmethod
+    def techlead_notion(
+        environ: Mapping[str, str] | None = None,
+    ) -> TechLeadNotionConfig:
+        """Load independent settings only for an authorized Notion tool call."""
+        source = os.environ if environ is None else environ
+        try:
+            task_pages = _tl_ids(
+                source.get("TECHLEAD_NOTION_TASK_PAGES", ""), _notion_id
+            )
+            test_pages = _tl_ids(
+                source.get("TECHLEAD_NOTION_TEST_PAGES", ""), _notion_id
+            )
+            if not test_pages <= task_pages:
+                raise ValueError
+            return TechLeadNotionConfig(
+                bot_id=_notion_id(source["TECHLEAD_NOTION_BOT_ID"]),
+                token_file=_secret_file(source["TECHLEAD_NOTION_TOKEN_FILE"]),
+                task_pages=task_pages,
+                test_pages=test_pages,
+            )
+        except (KeyError, ValueError):
+            raise ValueError(
+                "Tech Lead Notion connection disabled or invalid"
+            ) from None
+
+
+def _tl_ids(raw: str, parse: Callable[[str], T]) -> frozenset[T]:
+    if not raw:
+        return frozenset()
+    values = raw.split(",")
+    if len(values) > 100:
+        raise ValueError
+    return frozenset(parse(value.strip()) for value in values)
+
+
+def _github_id(raw: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", raw) or int(raw) > 2**63 - 1:
+        raise ValueError
+    return int(raw)
+
+
+def notion_uuid(value: object) -> str | None:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})",
+        value,
+    ):
+        return None
+    parsed = UUID(value)
+    return str(parsed) if parsed.int else None
+
+
+def _notion_id(raw: str) -> str:
+    normalized = notion_uuid(raw)
+    if normalized is None:
+        raise ValueError
+    return normalized
+
+
+def _secret_file(raw: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute() or ".." in path.parts or raw.startswith(("//", "\\\\")):
+        raise ValueError
+    return path
+
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class TechLeadGitHubConfig:
+    app_id: int
+    installation_id: int
+    app_slug: str
+    bot_id: int
+    key_file: Path = field(repr=False)
+    test_prs: frozenset[int] = frozenset()
+
+    @property
+    def bot_login(self) -> str:
+        return f"{self.app_slug}[bot]"
+
+
+@dataclass(frozen=True)
+class TechLeadNotionConfig:
+    bot_id: str
+    token_file: Path = field(repr=False)
+    task_pages: frozenset[str] = frozenset()
+    test_pages: frozenset[str] = frozenset()

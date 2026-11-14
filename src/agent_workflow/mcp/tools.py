@@ -1,11 +1,14 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
 
 from mcp.server.fastmcp import Context
+from pydantic import StrictInt
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.service import default_service
-from agent_workflow.mcp.security import authorize_context
+from agent_workflow.mcp.security import authorize_context, authorize_techlead
+from agent_workflow.mcp.techlead_github import TechLeadGitHub
+from agent_workflow.mcp.techlead_notion import TechLeadNotion
 
 
 def configured_service_factory():
@@ -76,3 +79,46 @@ def register_tools(mcp, service_factory=configured_service_factory):
         """Authenticated read only: task and unresolved findings; never dispatch Codex."""
         engine, _ = service(ctx)
         return engine.get_coder_assignment(task_id)
+
+    if mcp.settings.auth is None:
+        return
+
+    @mcp.tool()
+    async def tl_github_identity() -> dict:
+        """Verify the dedicated Tech Lead GitHub App, installation and bot."""
+        authorize_techlead()
+        return await TechLeadGitHub(AppConfig.techlead_github()).identity()
+
+    @mcp.tool()
+    async def tl_github_get_pr(pr_number: StrictInt) -> dict:
+        """Read minimal metadata and the exact HEAD of an agent-workflow PR."""
+        authorize_techlead()
+        return await TechLeadGitHub(AppConfig.techlead_github()).get_pr(pr_number)
+
+    @mcp.tool()
+    async def tl_github_comment_review(
+        pr_number: StrictInt, expected_head_sha: str, body: str
+    ) -> dict:
+        """Submit a COMMENT review pinned to the current HEAD of an allowlisted test PR."""
+        authorize_techlead()
+        return await TechLeadGitHub(AppConfig.techlead_github()).comment_review(
+            pr_number, expected_head_sha, body
+        )
+
+    @mcp.tool()
+    async def tl_notion_identity() -> dict:
+        """Verify the dedicated Tech Lead Notion integration bot."""
+        authorize_techlead()
+        return await TechLeadNotion(AppConfig.techlead_notion()).identity()
+
+    @mcp.tool()
+    async def tl_notion_get_task(page_id: str) -> dict:
+        """Read a bounded text preview of an allowlisted Notion task page."""
+        authorize_techlead()
+        return await TechLeadNotion(AppConfig.techlead_notion()).get_task(page_id)
+
+    @mcp.tool()
+    async def tl_notion_comment(page_id: str, body: str) -> dict:
+        """Add a comment to an allowlisted Notion test page."""
+        authorize_techlead()
+        return await TechLeadNotion(AppConfig.techlead_notion()).comment(page_id, body)
