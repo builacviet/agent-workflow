@@ -13,6 +13,7 @@
 | Product orchestration features and gates | [V1 scope contract](v1-scope-and-gates.md), then the task-specific product specs |
 | Implementing the product's Code, Test, Publish, QC or Reviewer stages | [V1 scope and gate contract](v1-scope-and-gates.md#3-execution-gates--strictly-one-atomic-task-at-a-time) and relevant source/tests — **only when implementing those features** |
 | Task scope and PR handoff | [Task contract](templates/agent-task-contract.md), [one PR handoff template](templates/handoff.md), [TL review checklist](templates/tl-review-checklist.md) |
+| Manual Tech Lead onboarding and replacement | [Tech Lead operating procedure](guides/techlead-operating-procedure.md) — authority, task assignment, exact-HEAD review, merge and takeover |
 | Historical design and decisions | [ADR index](adr/CL-12-current-state.md), [historical handoffs](history/handoff-log.md) — never assumed current without verification |
 
 **Evidence rules:** The authorized task controls **write paths**, not which safe repo files can be read. The current merged source, task AC, diff and CI run scope are stronger evidence of behavior than stale documents. A linked design is not proof of implementation. If guidance conflicts, report it to the Tech Lead instead of picking the most convenient rule.
