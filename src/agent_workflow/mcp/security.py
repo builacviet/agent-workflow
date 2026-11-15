@@ -72,6 +72,10 @@ def authorize_context(ctx) -> str:
 TECHLEAD_SCOPE = "wfc:techlead"
 
 
+class TechLeadScopeRequired(PermissionError):
+    """Verified workflow identity needs the additional Tech Lead scope."""
+
+
 def authorize_techlead() -> None:
     """Require the Auth0 middleware's verified identity and a distinct TL scope."""
     from mcp.server.auth.middleware.auth_context import get_access_token
@@ -90,6 +94,7 @@ def authorize_techlead() -> None:
         or verified.subject != subject
         or workflow_scope == TECHLEAD_SCOPE
         or workflow_scope not in verified.scopes
-        or TECHLEAD_SCOPE not in verified.scopes
     ):
         raise PermissionError("Tech Lead OAuth authorization required")
+    if TECHLEAD_SCOPE not in verified.scopes:
+        raise TechLeadScopeRequired("Tech Lead OAuth authorization required")
