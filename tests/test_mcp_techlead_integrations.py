@@ -9,6 +9,7 @@ import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import CallToolResult
 
 from agent_workflow.app_config import (
     AppConfig,
@@ -95,6 +96,13 @@ def test_optional_tools_preserve_nine_legacy_schemas(auth_env, monkeypatch):
     for tool in oauth:
         if tool.name in NEW:
             assert set(tool.inputSchema["properties"]) == set(NEW[tool.name])
+            assert tool.meta == {
+                "securitySchemes": [
+                    {"type": "oauth2", "scopes": ["wfc:workflow", "wfc:techlead"]}
+                ]
+            }
+        else:
+            assert tool.meta is None
 
 
 @pytest.mark.parametrize(
@@ -137,8 +145,16 @@ def test_every_tool_checks_auth0_and_config_before_io(
         )
         try:
             for tool, args in NEW.items():
-                with pytest.raises(ToolError, match=message):
-                    await server.call_tool(tool, args)
+                if case == "wrong_scope":
+                    denied = await server.call_tool(tool, args)
+                    assert isinstance(denied, CallToolResult)
+                    assert denied.isError
+                    assert (
+                        "insufficient_scope" in denied.meta["mcp/www_authenticate"][0]
+                    )
+                else:
+                    with pytest.raises(ToolError, match=message):
+                        await server.call_tool(tool, args)
         finally:
             auth_context_var.reset(reset)
 
@@ -713,6 +729,13 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
         assert {
             tool["name"] for tool in tools.json()["result"]["tools"]
         } == LEGACY | NEW.keys()
+        for tool in tools.json()["result"]["tools"]:
+            if tool["name"] in NEW:
+                assert tool["_meta"]["securitySchemes"] == [
+                    {"type": "oauth2", "scopes": both_scopes.split()}
+                ]
+            else:
+                assert "_meta" not in tool
         ping_result = rpc("tools/call", workflow_only, {"name": "ping"}).json()[
             "result"
         ]
@@ -731,6 +754,11 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
         ).json()["result"]
         assert denied["isError"]
         assert "Tech Lead OAuth authorization required" in denied["content"][0]["text"]
+        challenge = denied["_meta"]["mcp/www_authenticate"]
+        assert len(challenge) == 1
+        assert 'error="insufficient_scope"' in challenge[0]
+        assert f'resource_metadata="{metadata_url}"' in challenge[0]
+        assert f'scope="{both_scopes}"' in challenge[0]
         assert upstream_calls == []
 
         accepted = rpc(

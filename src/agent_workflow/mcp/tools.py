@@ -1,12 +1,19 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
 
+from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.fastmcp import Context
+from mcp.types import CallToolResult, TextContent
 from pydantic import StrictInt
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.service import default_service
-from agent_workflow.mcp.security import authorize_context, authorize_techlead
+from agent_workflow.mcp.security import (
+    TECHLEAD_SCOPE,
+    TechLeadScopeRequired,
+    authorize_context,
+    authorize_techlead,
+)
 from agent_workflow.mcp.techlead_github import TechLeadGitHub
 from agent_workflow.mcp.techlead_notion import TechLeadNotion
 
@@ -83,42 +90,71 @@ def register_tools(mcp, service_factory=configured_service_factory):
     if mcp.settings.auth is None:
         return
 
-    @mcp.tool()
+    workflow_scope = mcp.settings.auth.required_scopes[0]
+    techlead_scopes = [workflow_scope, TECHLEAD_SCOPE]
+    techlead_meta = {"securitySchemes": [{"type": "oauth2", "scopes": techlead_scopes}]}
+    metadata_url = build_resource_metadata_url(mcp.settings.auth.resource_server_url)
+
+    def techlead_challenge() -> CallToolResult | None:
+        try:
+            authorize_techlead()
+        except TechLeadScopeRequired as exc:
+            return CallToolResult(
+                content=[TextContent(type="text", text=str(exc))],
+                isError=True,
+                _meta={
+                    "mcp/www_authenticate": [
+                        'Bearer error="insufficient_scope", '
+                        'error_description="Tech Lead OAuth authorization required", '
+                        f'resource_metadata="{metadata_url}", '
+                        f'scope="{" ".join(techlead_scopes)}"'
+                    ]
+                },
+            )
+        return None
+
+    @mcp.tool(meta=techlead_meta)
     async def tl_github_identity() -> dict:
         """Verify the dedicated Tech Lead GitHub App, installation and bot."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadGitHub(AppConfig.techlead_github()).identity()
 
-    @mcp.tool()
+    @mcp.tool(meta=techlead_meta)
     async def tl_github_get_pr(pr_number: StrictInt) -> dict:
         """Read minimal metadata and the exact HEAD of an agent-workflow PR."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadGitHub(AppConfig.techlead_github()).get_pr(pr_number)
 
-    @mcp.tool()
+    @mcp.tool(meta=techlead_meta)
     async def tl_github_comment_review(
         pr_number: StrictInt, expected_head_sha: str, body: str
     ) -> dict:
         """Submit a COMMENT review pinned to the current HEAD of an allowlisted test PR."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadGitHub(AppConfig.techlead_github()).comment_review(
             pr_number, expected_head_sha, body
         )
 
-    @mcp.tool()
+    @mcp.tool(meta=techlead_meta)
     async def tl_notion_identity() -> dict:
         """Verify the dedicated Tech Lead Notion integration bot."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadNotion(AppConfig.techlead_notion()).identity()
 
-    @mcp.tool()
+    @mcp.tool(meta=techlead_meta)
     async def tl_notion_get_task(page_id: str) -> dict:
         """Read a bounded text preview of an allowlisted Notion task page."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadNotion(AppConfig.techlead_notion()).get_task(page_id)
 
-    @mcp.tool()
+    @mcp.tool(meta=techlead_meta)
     async def tl_notion_comment(page_id: str, body: str) -> dict:
         """Add a comment to an allowlisted Notion test page."""
-        authorize_techlead()
+        if challenge := techlead_challenge():
+            return challenge
         return await TechLeadNotion(AppConfig.techlead_notion()).comment(page_id, body)
