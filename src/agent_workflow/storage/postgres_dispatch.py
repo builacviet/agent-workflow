@@ -64,14 +64,13 @@ class PostgresDispatchLedger:
 
     @contextmanager
     def _transaction(self):
-        with self.factory.transaction() as connection:
-            with Session(bind=connection) as session:
-                self._timeout(session)
-                yield session
-                check_deadline()
-                self._timeout(session)
-                session.commit()
-                check_deadline()
+        with self.factory.unit_of_work_session(
+            after_session_commit=check_deadline
+        ) as session:
+            self._timeout(session)
+            yield session
+            check_deadline()
+            self._timeout(session)
 
     def _locked(self, session: Session, dispatch_id: str):
         self._timeout(session)

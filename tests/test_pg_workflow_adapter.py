@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_my_wfc import BASE, HEAD, NEXT, REPO, payload, spec
 
@@ -17,6 +17,30 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+def test_factory_uow_deadline_hook_can_rollback_after_session_commit():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version (version_num text)"))
+        connection.execute(
+            text("INSERT INTO alembic_version VALUES ('pg02d_webhook_digest')")
+        )
+        connection.execute(text("CREATE TABLE uow_items (value integer)"))
+
+    def expired():
+        raise TimeoutError("deadline expired")
+
+    with PostgresFactory(engine) as factory:
+        with factory.unit_of_work_session() as session:
+            session.execute(text("INSERT INTO uow_items VALUES (1)"))
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            with factory.unit_of_work_session(after_session_commit=expired) as session:
+                session.execute(text("INSERT INTO uow_items VALUES (2)"))
+        with factory.transaction() as connection:
+            assert connection.execute(
+                text("SELECT value FROM uow_items")
+            ).scalars().all() == [1]
 
 
 @pytest.fixture
@@ -114,6 +138,74 @@ def test_rollback_and_constraints(setup):
     with repo.read() as db:
         assert db.find_task((task_id,))["current_head_sha"] == HEAD
         assert db.find_active_claim((task_id,)) is None
+
+
+def test_read_keeps_repeatable_read_snapshot_and_rejects_writes(setup):
+    service, repo, task_id, factory = setup
+    ready(service, task_id)
+    with repo.read() as db:
+        assert (
+            db.session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
+        )
+        assert db.session.scalar(text("SHOW transaction_read_only")) == "on"
+        assert db.find_task((task_id,))["current_head_sha"] == HEAD
+        with factory.transaction() as connection:
+            connection.execute(
+                text("UPDATE tasks SET current_head_sha=:sha WHERE task_id=:task_id"),
+                {"sha": NEXT, "task_id": task_id},
+            )
+        assert db.find_task((task_id,))["current_head_sha"] == HEAD
+    with pytest.raises(DBAPIError):
+        with repo.read() as db:
+            db.session.execute(
+                text("UPDATE tasks SET current_head_sha=:sha WHERE task_id=:task_id"),
+                {"sha": HEAD, "task_id": task_id},
+            )
+    with repo.read() as db:
+        assert db.find_task((task_id,))["current_head_sha"] == NEXT
+
+
+@pytest.mark.parametrize("failed_check", [1, 2])
+def test_deadline_before_outer_commit_rolls_back(setup, monkeypatch, failed_check):
+    _, repo, task_id, factory = setup
+    checks = 0
+
+    def fail_at_deadline():
+        nonlocal checks
+        checks += 1
+        if checks == failed_check:
+            raise TimeoutError("deadline expired")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "agent_workflow.storage.postgres_workflow.check_deadline",
+            fail_at_deadline,
+        )
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            with repo.transaction() as db:
+                db.insert_task(
+                    (
+                        task_id,
+                        "{}",
+                        REPO,
+                        "branch",
+                        BASE,
+                        "medium",
+                        0,
+                        "AWAITING_HANDOFF",
+                        1.0,
+                        1.0,
+                    )
+                )
+    assert checks == failed_check
+    with factory.transaction() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM tasks WHERE task_id=:task_id"),
+                {"task_id": task_id},
+            )
+            == 0
+        )
 
 
 def test_competing_claims_and_ci_fail_closed(setup):

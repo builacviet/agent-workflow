@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from pydantic import ValidationError
@@ -92,6 +92,32 @@ class PostgresFactory:
         with self.connect_session() as connection:
             with connection.begin():
                 yield connection
+
+    @contextmanager
+    def unit_of_work_session(
+        self,
+        *,
+        read_only: bool = False,
+        after_session_commit: Callable[[], None] | None = None,
+    ) -> Iterator[Session]:
+        """Keep an ORM Session inside one externally owned UoW transaction.
+
+        The post-Session-commit hook still runs before the outer transaction
+        commits, so a deadline failure can roll back the entire UoW.
+        """
+        with self.transaction() as connection:
+            if read_only:
+                connection.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                )
+            with Session(
+                bind=connection, join_transaction_mode="rollback_only"
+            ) as session:
+                yield session
+                if not read_only:
+                    session.commit()
+                    if after_session_commit is not None:
+                        after_session_commit()
 
     @contextmanager
     def repository_session(
