@@ -84,3 +84,65 @@ Provider references: [GitHub App tokens](https://docs.github.com/en/apps/creatin
 [GitHub PR reviews](https://docs.github.com/en/rest/pulls/reviews?apiVersion=2022-11-28#create-a-review-for-a-pull-request),
 [Notion bot identity](https://developers.notion.com/reference/get-self), and
 [Notion comments](https://developers.notion.com/reference/create-a-comment).
+
+## Owner local activation
+
+The checked-in `compose.yaml` leaves both Tech Lead mounts commented. Default
+startup and CI therefore need neither `TECHLEAD_SECRETS_DIR` nor TL secrets.
+Compose v5.6.0 cannot conditionally omit individual mounts; activation is an
+intentional local edit in this same file, not an overlay or another service.
+
+After merge and separate deployment authorization, the Owner:
+
+1. Keeps these operator-managed files outside every checkout/build context:
+   `D:\WORK\secrets\agent-workflow\wf-teamlead.pem` and
+   `D:\WORK\secrets\agent-workflow\notion-tl.token`.
+   Never print their contents, copy them into an image, or commit them.
+2. Sets the interpolation input in the host PowerShell session:
+   `$env:TECHLEAD_SECRETS_DIR = 'D:/WORK/secrets/agent-workflow'`.
+   An ignored root `.env` may instead contain
+   `TECHLEAD_SECRETS_DIR=D:/WORK/secrets/agent-workflow`.
+   The service `env_file` does not supply Compose interpolation variables.
+   Before enabling either mount or running Docker, require both leaf checks:
+
+   ```powershell
+   foreach ($name in @('wf-teamlead.pem', 'notion-tl.token')) {
+       if (-not (Test-Path -LiteralPath (Join-Path $env:TECHLEAD_SECRETS_DIR $name) -PathType Leaf)) {
+           throw "Required Tech Lead secret file is missing or is not a file: $name"
+       }
+   }
+   ```
+3. Fills the ten nonsecret settings in the Owner-managed ignored
+   `.runtime/controller-mcp.env`, using the existing template as reference
+   without overwriting working Auth0 values. Preserve `WFC_AUTH_MODE=auth0`,
+   `WFC_POC_NO_AUTH=0`, `WFC_AUTH0_SCOPE=wfc:workflow` and empty test-write
+   allowlists until separately authorized.
+4. Removes only the `# ` prefix from the twelve mount-declaration lines under
+   `services.mcp.volumes`, preserving indentation and leaving the explanatory
+   comments intact. Both mounts remain read-only, MCP-only, with
+   `create_host_path: false` and the required nonempty directory guard.
+5. Runs `docker compose -f compose.yaml config --quiet`. This checks syntax and
+   the directory variable, **not file existence or readability**. Confirm Docker
+   Desktop can share the directory and host ACLs permit the unprivileged MCP
+   UID 10001 to read both regular files. A content-free container check is:
+   `docker compose -f compose.yaml run --rm --no-deps --entrypoint python mcp -c
+   "import os; from pathlib import Path; assert os.getuid() == 10001; paths =
+   [Path('/run/secrets/wf-teamlead.pem'), Path('/run/secrets/notion-tl.token')];
+   assert all(p.is_file() for p in paths); [p.open('rb').close() for p in paths]"`.
+   Enter that command on one line. It opens/closes files without reading or
+   printing contents. Known platform limitation: Compose v5.6.0 / Engine 29.8.2 created a missing Windows fixture
+   source as a directory despite `create_host_path: false`. Do not assume
+   config validation or that flag proves missing-file rejection. Unreadable
+   files fail this check. Existing `read_secret()` validation, shared by the
+   GitHub and Notion adapters, rejects missing paths, directories, empty or
+   oversized files and read failures at TL call time. This is not a global MCP
+   startup guard; the nine legacy workflow tools retain their existing behavior.
+   Do not fix access failures by running MCP as root or broadening permissions.
+6. Only after these checks, recreates MCP with
+   `docker compose -f compose.yaml up -d --no-deps mcp`. OAuth reconnection and
+   provider identity/write E2E remain separately authorized work.
+
+This intentionally leaves `compose.yaml` locally modified. Do not commit or
+push the activation edit. Before future pulls inspect `git diff -- compose.yaml`,
+restore only these comment prefixes if necessary, pull, then deliberately
+reapply and revalidate activation. Do not discard unrelated local changes.

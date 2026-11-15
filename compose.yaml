@@ -20,6 +20,20 @@ services:
         target: /state
         bind:
           create_host_path: false
+      # Tech Lead identity mounts: Owner uncomments both entries for local activation.
+      # Keep commented in Git; see docs/guides/mcp-techlead-integrations.md.
+      # - type: bind
+      #   source: ${TECHLEAD_SECRETS_DIR:?Set TECHLEAD_SECRETS_DIR}/wf-teamlead.pem
+      #   target: /run/secrets/wf-teamlead.pem
+      #   read_only: true
+      #   bind:
+      #     create_host_path: false
+      # - type: bind
+      #   source: ${TECHLEAD_SECRETS_DIR:?Set TECHLEAD_SECRETS_DIR}/notion-tl.token
+      #   target: /run/secrets/notion-tl.token
+      #   read_only: true
+      #   bind:
+      #     create_host_path: false
     read_only: true
     tmpfs:
       - /tmp
