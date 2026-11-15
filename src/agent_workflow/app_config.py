@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
@@ -125,9 +124,6 @@ class AppConfig(BaseModel):
                 app_slug=slug,
                 bot_id=_github_id(source["TECHLEAD_GITHUB_BOT_ID"]),
                 key_file=_secret_file(source["TECHLEAD_GITHUB_KEY_FILE"]),
-                test_prs=_tl_ids(
-                    source.get("TECHLEAD_GITHUB_TEST_PRS", ""), _github_id
-                ),
             )
         except (KeyError, ValueError):
             raise ValueError(
@@ -141,33 +137,14 @@ class AppConfig(BaseModel):
         """Load independent settings only for an authorized Notion tool call."""
         source = os.environ if environ is None else environ
         try:
-            task_pages = _tl_ids(
-                source.get("TECHLEAD_NOTION_TASK_PAGES", ""), _notion_id
-            )
-            test_pages = _tl_ids(
-                source.get("TECHLEAD_NOTION_TEST_PAGES", ""), _notion_id
-            )
-            if not test_pages <= task_pages:
-                raise ValueError
             return TechLeadNotionConfig(
                 bot_id=_notion_id(source["TECHLEAD_NOTION_BOT_ID"]),
                 token_file=_secret_file(source["TECHLEAD_NOTION_TOKEN_FILE"]),
-                task_pages=task_pages,
-                test_pages=test_pages,
             )
         except (KeyError, ValueError):
             raise ValueError(
                 "Tech Lead Notion connection disabled or invalid"
             ) from None
-
-
-def _tl_ids(raw: str, parse: Callable[[str], T]) -> frozenset[T]:
-    if not raw:
-        return frozenset()
-    values = raw.split(",")
-    if len(values) > 100:
-        raise ValueError
-    return frozenset(parse(value.strip()) for value in values)
 
 
 def _github_id(raw: str) -> int:
@@ -200,9 +177,6 @@ def _secret_file(raw: str) -> Path:
     return path
 
 
-T = TypeVar("T")
-
-
 @dataclass(frozen=True)
 class TechLeadGitHubConfig:
     app_id: int
@@ -210,7 +184,6 @@ class TechLeadGitHubConfig:
     app_slug: str
     bot_id: int
     key_file: Path = field(repr=False)
-    test_prs: frozenset[int] = frozenset()
 
     @property
     def bot_login(self) -> str:
@@ -221,5 +194,3 @@ class TechLeadGitHubConfig:
 class TechLeadNotionConfig:
     bot_id: str
     token_file: Path = field(repr=False)
-    task_pages: frozenset[str] = frozenset()
-    test_pages: frozenset[str] = frozenset()

@@ -234,11 +234,8 @@ def test_techlead_template_defaults() -> None:
         "TECHLEAD_GITHUB_APP_SLUG",
         "TECHLEAD_GITHUB_BOT_ID",
         "TECHLEAD_GITHUB_KEY_FILE",
-        "TECHLEAD_GITHUB_TEST_PRS",
         "TECHLEAD_NOTION_BOT_ID",
         "TECHLEAD_NOTION_TOKEN_FILE",
-        "TECHLEAD_NOTION_TASK_PAGES",
-        "TECHLEAD_NOTION_TEST_PAGES",
     }
     assert values["TECHLEAD_GITHUB_KEY_FILE"] == "/run/secrets/wf-teamlead.pem"
     assert values["TECHLEAD_NOTION_TOKEN_FILE"] == "/run/secrets/notion-tl.token"

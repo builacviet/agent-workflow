@@ -85,14 +85,14 @@ class TechLeadNotion:
             await self._authenticate(client)
         return {"id": self.config.bot_id, "type": "bot"}
 
-    def _page_id(self, page_id: str, allowlist: frozenset[str]) -> str:
+    def _page_id(self, page_id: str) -> str:
         normalized = notion_uuid(page_id)
-        if normalized is None or normalized not in allowlist:
-            raise TechLeadError("Notion page is outside the allowlist")
+        if normalized is None:
+            raise TechLeadError("Invalid Notion page ID")
         return normalized
 
     async def get_task(self, page_id: str) -> dict:
-        page_id = self._page_id(page_id, self.config.task_pages)
+        page_id = self._page_id(page_id)
         async with self._client() as client:
             token = await self._authenticate(client)
             page = await request_json(client, "GET", f"/v1/pages/{page_id}", token)
@@ -139,7 +139,7 @@ class TechLeadNotion:
         }
 
     async def comment(self, page_id: str, body: str) -> dict:
-        page_id = self._page_id(page_id, self.config.test_pages)
+        page_id = self._page_id(page_id)
         validate_body(body)
         async with self._client() as client:
             token = await self._authenticate(client)
