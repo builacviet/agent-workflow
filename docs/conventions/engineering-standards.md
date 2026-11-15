@@ -4,7 +4,7 @@
 
 ## Authority and proportionality
 
-**Precedence for repository coding:** (1) Owner/TL-approved task, its allowlist and the security invariants in `AGENTS.md`; (2) public API/domain invariants and actual merged code; (3) applicable conventions below. If they conflict, ask Tech Lead; do not silently select a convenient rule. Read only task-relevant sections. The following are **judgment principles, not blanket architecture mandates**:
+**Precedence for repository coding:** (1) Owner/TL-approved task, its PRIMARY/RELATED/PROTECTED Scope Envelope and the security invariants in `AGENTS.md`; (2) public API/domain invariants and actual merged code; (3) applicable conventions below. If they conflict, ask Tech Lead; do not silently select a convenient rule. Read only task-relevant sections. The following are **judgment principles, not blanket architecture mandates**:
 
 | Principle | Practical application | Avoid |
 | --- | --- | --- |
@@ -17,6 +17,8 @@
 | **Consistency over novelty** | Follow the *as-built* package structure and project conventions; isolate changes | Unrequested sweeping refactors disguised as small fixes |
 
 **Pragmatic rule:** Start with a focused change that satisfies AC. Introduce an abstraction only when it improves clarity, testability or a demonstrated boundary. Reviewers must cite a concrete defect, regression or maintainability consequence rather than fail a PR for not using a named pattern.
+
+**Scope Envelope (manual DEVELOPMENT only):** The approved task owns PRIMARY modules/paths plus bounded RELATED LOW (AC-required tests/docs/imports/typing/small internal cleanups) and specifically preauthorized MEDIUM (behavior-preserving private helpers within the named owned module). Record additional path, reason, caller/test evidence in the PR. HIGH changes to public contracts, authentication/credentials/trust, transaction/isolation/lock semantics, schema/migrations, CI/security/policy gates, deployment or external effects require prior focused TL and applicable Owner approval recorded in the task, even if the path is listed. Do not infer permission from repository searches, wildcard paths, `max_extra_files` or comments. The Owner merge gate and product execution isolation remain unchanged.
 
 ## Current repository-specific coding baseline
 
@@ -67,7 +69,7 @@ Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is
 
 ## PostgreSQL Session, query and transaction ownership
 
-**Apply when changing PostgreSQL adapter code within an approved task.** Review the actual merged `PostgresFactory` API, task AC and allowlist. A factory-managed ORM Session is the preferred direction **only once the corresponding API is merged in the authorized base**; do not block unrelated legacy changes for failing to use an unmerged API. Normalize old adapters only under an explicit cleanup task.
+**Apply when changing PostgreSQL adapter code within an approved task.** Review the actual merged `PostgresFactory` API, task AC and Scope Envelope. Transaction, isolation and lock-semantic modifications remain HIGH and require recorded pre-edit authorization. A factory-managed ORM Session is the preferred direction **only once the corresponding API is merged in the authorized base**; do not block unrelated legacy changes for failing to use an unmerged API. Normalize old adapters only under an explicit cleanup task.
 
 | Concern | Canonical direction | Exception / boundary |
 | --- | --- | --- |
@@ -89,7 +91,7 @@ Use bound parameters for all values. Fixed, parameterized SQLAlchemy `text()` is
 
 ## Dev implementation and self-check
 
-Before coding, map each AC to observable behavior and related tests; note unchanged invariants and permitted paths. While coding, prefer clear control flow and single-responsibility units; avoid needless generalization. After coding, inspect diff for unrelated changes, duplicated business rules, accidental secret handling, unsafe defaults and breaks in dependency direction. Run permitted deterministic pytest and negative tests; report actual commands, environment, exit status, skipped cases and limitations. Do not self-approve.
+Before coding, map each AC to observable behavior and related tests; note unchanged invariants and the approved PRIMARY/RELATED/PROTECTED boundaries. While coding, prefer clear control flow and single-responsibility units; avoid needless generalization. After coding, inspect diff for unrelated changes, duplicated business rules, accidental secret handling, unsafe defaults and breaks in dependency direction. Run permitted deterministic pytest and negative tests; report actual commands, environment, exit status, skipped cases and limitations. Do not self-approve.
 
 ### Manual Coder self-review and handoff
 
