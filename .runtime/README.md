@@ -85,9 +85,10 @@ Do not delete, rename or copy unresolved legacy SQLite fences to bypass a blocke
 
 ## Optional Tech Lead identities
 
-`controller-mcp.env.example` is also the single template for all ten
+`controller-mcp.env.example` is also the single template for all seven
 `TECHLEAD_*` settings. The Owner alone maintains the ignored real env file;
-do not overwrite it from the template. Keep Auth0 and empty write allowlists.
+do not overwrite it from the template. Keep the existing Auth0 configuration.
+GitHub and Notion provider permissions determine which resources are accessible.
 Tech Lead credentials live outside the checkout at
 `D:\WORK\secrets\agent-workflow`, separate from Controller/Worker credentials.
 

@@ -296,8 +296,8 @@ class TechLeadGitHub:
     async def comment_review(
         self, pr_number: int, expected_head_sha: str, body: str
     ) -> dict:
-        if not positive_id(pr_number) or pr_number not in self.config.test_prs:
-            raise TechLeadError("GitHub pull request is outside the test allowlist")
+        if not positive_id(pr_number):
+            raise TechLeadError("Invalid GitHub pull request number")
         if not _valid_sha(expected_head_sha):
             raise TechLeadError("Invalid GitHub HEAD SHA")
         validate_body(body)

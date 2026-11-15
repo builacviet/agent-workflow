@@ -172,31 +172,28 @@ def test_git_config_does_not_accept_coder_or_controller(tmp_path):
         "TECHLEAD_GITHUB_APP_SLUG": "fixture-techlead",
         "TECHLEAD_GITHUB_BOT_ID": "33",
         "TECHLEAD_GITHUB_KEY_FILE": str(tmp_path / "key.pem"),
-        "TECHLEAD_GITHUB_TEST_PRS": "42, 43",
+        "TECHLEAD_GITHUB_TEST_PRS": "not-a-pr",
     }
-    assert AppConfig.techlead_github(values).test_prs == {42, 43}
+    assert AppConfig.techlead_github(values).bot_id == 33
     for changes in (
         {"TECHLEAD_GITHUB_APP_SLUG": "builacviet-wfc-coder"},
         {"WFC_CONTROLLER_INSTALLATION_ID": "22"},
         {"TECHLEAD_GITHUB_INSTALLATION_ID": "0"},
         {"TECHLEAD_GITHUB_KEY_FILE": "relative.pem"},
-        {"TECHLEAD_GITHUB_TEST_PRS": "42,/anything"},
     ):
         with pytest.raises(ValueError, match="connection disabled or invalid"):
             AppConfig.techlead_github(values | changes)
 
 
-def test_notion_config_requires_explicit_test_subset(tmp_path):
+def test_notion_config_ignores_removed_page_allowlists(tmp_path):
     values = {
         "TECHLEAD_NOTION_BOT_ID": BOT_ID,
         "TECHLEAD_NOTION_TOKEN_FILE": str(tmp_path / "token"),
-        "TECHLEAD_NOTION_TASK_PAGES": PAGE.replace("-", "").upper(),
+        "TECHLEAD_NOTION_TASK_PAGES": "not-a-uuid",
+        "TECHLEAD_NOTION_TEST_PAGES": f"https://notion.so/{PAGE}",
     }
-    assert AppConfig.techlead_notion(values).task_pages == {PAGE}
-    assert AppConfig.techlead_notion(values).test_pages == set()
+    assert AppConfig.techlead_notion(values).bot_id == BOT_ID
     for changes in (
-        {"TECHLEAD_NOTION_TEST_PAGES": OTHER},
-        {"TECHLEAD_NOTION_TEST_PAGES": f"https://notion.so/{PAGE}"},
         {"TECHLEAD_NOTION_BOT_ID": ""},
         {"TECHLEAD_NOTION_TOKEN_FILE": "relative"},
     ):
@@ -208,7 +205,7 @@ def test_notion_config_requires_explicit_test_subset(tmp_path):
 def github(tmp_path):
     pem = tmp_path / "fixture.pem"
     pem.write_bytes(b"synthetic PEM fixture")
-    config = TechLeadGitHubConfig(11, 22, "fixture-techlead", 33, pem, frozenset({42}))
+    config = TechLeadGitHubConfig(11, 22, "fixture-techlead", 33, pem)
     bot = {"id": 33, "login": config.bot_login, "type": "Bot"}
     app = {"id": 11, "slug": config.app_slug, "permissions": PERMISSIONS}
     installation = {
@@ -316,6 +313,20 @@ def test_github_review_only_comment_pinned_to_fresh_head(github):
     assert result["url"] == f"https://github.com/{REPO}/pull/42#pullrequestreview-50"
 
 
+def test_github_review_accepts_any_pr_in_fixed_repository(github):
+    client, paths, calls = github
+    pr_number = 84
+    pull = f"/repos/{REPO}/pulls/{pr_number}"
+    paths[pull] = httpx.Response(200, json=paths[PULL].json() | {"number": pr_number})
+    paths[f"{pull}/reviews"] = paths[f"{PULL}/reviews"]
+
+    asyncio.run(client.comment_review(pr_number, HEAD, "fixture comment"))
+
+    assert calls[-2].url.path == pull
+    assert calls[-1].url.path == f"{pull}/reviews"
+    assert json.loads(calls[-1].content)["event"] == "COMMENT"
+
+
 @pytest.mark.parametrize(
     "path, patch, error",
     [
@@ -380,7 +391,9 @@ def test_invalid_or_stale_pr_prevents_write(github, patch, error):
 @pytest.mark.parametrize(
     "number, sha, body",
     [
-        (41, HEAD, "x"),
+        (0, HEAD, "x"),
+        (-1, HEAD, "x"),
+        (2**63, HEAD, "x"),
         (True, HEAD, "x"),
         ("42", HEAD, "x"),
         (42, "main", "x"),
@@ -400,9 +413,7 @@ def test_invalid_review_arguments_never_contact_provider(github, number, sha, bo
 def notion(tmp_path):
     secret = tmp_path / "notion"
     secret.write_text(NOTION_TOKEN, encoding="ascii")
-    config = TechLeadNotionConfig(
-        BOT_ID, secret, frozenset({PAGE, OTHER}), frozenset({PAGE})
-    )
+    config = TechLeadNotionConfig(BOT_ID, secret)
     user = {
         "object": "user",
         "id": BOT_ID,
@@ -490,6 +501,49 @@ def test_notion_comment_returns_bound_author_and_parent(notion):
     }
 
 
+def test_notion_access_uses_native_connection_permissions(notion):
+    client, paths, calls = notion
+    paths[f"/v1/pages/{OTHER}"] = httpx.Response(
+        200,
+        json={
+            "object": "page",
+            "id": OTHER,
+            "properties": {"Name": {"type": "title", "title": []}},
+        },
+    )
+    paths[f"/v1/blocks/{OTHER}/children"] = httpx.Response(
+        200, json={"object": "list", "has_more": False, "results": []}
+    )
+    paths["/v1/comments"] = httpx.Response(
+        200,
+        json={
+            "object": "comment",
+            "id": COMMENT,
+            "created_by": {"object": "user", "id": BOT_ID},
+            "parent": {"type": "page_id", "page_id": OTHER},
+        },
+    )
+
+    assert asyncio.run(client.get_task(OTHER))["id"] == OTHER
+    assert asyncio.run(client.comment(OTHER, "test comment"))["page_id"] == OTHER
+    assert calls[-1].url.path == "/v1/comments"
+
+
+@pytest.mark.parametrize("operation", ["get_task", "comment"])
+def test_notion_denies_pages_not_shared_with_integration(notion, operation):
+    client, paths, calls = notion
+    denied_path = f"/v1/pages/{OTHER}" if operation == "get_task" else "/v1/comments"
+    paths[denied_path] = httpx.Response(404, text="not found")
+
+    with pytest.raises(TechLeadError, match="HTTP 404"):
+        if operation == "get_task":
+            asyncio.run(client.get_task(OTHER))
+        else:
+            asyncio.run(client.comment(OTHER, "test comment"))
+
+    assert calls[-1].url.path == denied_path
+
+
 @pytest.mark.parametrize(
     "patch", [{"id": OTHER}, {"type": "person"}, {"bot": {"owner": None}}]
 )
@@ -505,11 +559,11 @@ def test_wrong_notion_identity_prevents_comment(notion, patch):
 
 def test_notion_input_and_secret_checks_precede_io(notion, tmp_path):
     client, _, calls = notion
-    for page_id in ("https://notion.so/" + PAGE, "f" * 32):
-        with pytest.raises(TechLeadError, match="allowlist"):
+    for page_id in ("https://notion.so/" + PAGE, "z" * 32):
+        with pytest.raises(TechLeadError, match="Invalid Notion page ID"):
             asyncio.run(client.get_task(page_id))
-    with pytest.raises(TechLeadError, match="allowlist"):
-        asyncio.run(client.comment(OTHER, "x"))
+    with pytest.raises(TechLeadError, match="Invalid Notion page ID"):
+        asyncio.run(client.comment("invalid", "x"))
     with pytest.raises(TechLeadError, match="body"):
         asyncio.run(client.comment(PAGE, ""))
     with pytest.raises(TechLeadError, match="secret file"):
