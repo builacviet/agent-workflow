@@ -471,24 +471,19 @@ class PostgresWorkflowRepository:
 
     @contextmanager
     def transaction(self):
-        with self.factory.transaction() as connection:
-            with Session(bind=connection) as session:
-                unit = PostgresWorkflowUnit(session, writable=True)
-                unit._timeout()
-                yield unit
-                check_deadline()
-                unit._timeout()
-                session.commit()
-                check_deadline()
+        with self.factory.unit_of_work_session(
+            after_session_commit=check_deadline
+        ) as session:
+            unit = PostgresWorkflowUnit(session, writable=True)
+            unit._timeout()
+            yield unit
+            check_deadline()
+            unit._timeout()
 
     @contextmanager
     def read(self):
-        with self.factory.transaction() as connection:
-            connection.execute(
-                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            )
-            with Session(bind=connection) as session:
-                unit = PostgresWorkflowUnit(session, writable=False)
-                unit._timeout()
-                yield unit
-                check_deadline()
+        with self.factory.unit_of_work_session(read_only=True) as session:
+            unit = PostgresWorkflowUnit(session, writable=False)
+            unit._timeout()
+            yield unit
+            check_deadline()

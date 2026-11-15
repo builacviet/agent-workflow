@@ -255,6 +255,38 @@ def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
     assert ledger.claim({task_id}, 60) is not None
 
 
+@pytest.mark.parametrize("failed_check", [1, 2])
+def test_claim_deadline_before_outer_commit_releases_slot(
+    setup, monkeypatch, failed_check
+):
+    ledger, _, factory, task_id = setup
+    checks = 0
+
+    def fail_at_deadline():
+        nonlocal checks
+        checks += 1
+        if checks == failed_check:
+            raise TimeoutError("deadline expired")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "agent_workflow.storage.postgres_dispatch.check_deadline",
+            fail_at_deadline,
+        )
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            ledger.claim({task_id}, 60)
+    assert checks == failed_check
+    with factory.transaction() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM agent_dispatches WHERE task_id=:task_id"),
+                {"task_id": task_id},
+            )
+            == 0
+        )
+    assert ledger.claim({task_id}, 60) is not None
+
+
 def test_finish_without_evidence_fails_and_retains_slot(setup):
     ledger, _, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
