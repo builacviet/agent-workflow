@@ -167,6 +167,33 @@ def test_required_ci_port_fails_closed(monkeypatch):
     runtime = AgentRuntime(FakeHost(calls), FakeDispatch(calls))
     with pytest.raises(RuntimeError, match="CI tracking required"):
         run(runtime)
+    assert calls == []
+
+
+def test_leadership_loss_during_evidence_blocks_handoff_and_ci(monkeypatch):
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+    calls = []
+    owns_lock = [True]
+    dispatch = FakeDispatch(calls)
+    record = dispatch.record_runtime_evidence
+
+    def lose_lock_after_evidence(*args):
+        record(*args)
+        owns_lock[0] = False
+
+    dispatch.record_runtime_evidence = lose_lock_after_evidence
+    runtime = AgentRuntime(
+        FakeHost(calls),
+        dispatch,
+        FakeCi(calls),
+        leadership_guard=lambda: owns_lock[0],
+    )
+    with pytest.raises(PermissionError, match="leadership guard"):
+        run(runtime)
+    assert any(isinstance(call, tuple) and call[0] == "evidence" for call in calls)
+    assert "handoff" not in calls
+    assert not any(isinstance(call, tuple) and call[0] == "ci" for call in calls)
+    assert calls.count("publish") == 1
     assert calls[-1] == "stop"
 
 

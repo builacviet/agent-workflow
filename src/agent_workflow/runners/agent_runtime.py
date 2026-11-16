@@ -110,6 +110,8 @@ class AgentRuntime:
         plan: RuntimePlan,
         approved_image_id: str | None,
     ) -> str:
+        if os.environ.get("WFC_CI_GATE_REQUIRED") == "1" and self.ci is None:
+            raise RuntimeError("CI tracking required but not configured")
         self.require_leadership()
         stage, envelope = self.host._prepare_stage(claim, context)
         dispatch_id = claim["dispatch_id"]
@@ -150,6 +152,7 @@ class AgentRuntime:
                 tested_digest,
                 result["head_sha"],
             )
+            self.require_leadership()
             self.host._register_handoff(context, result, envelope["test_summary"])
             # CI remains BLOCKED until the separate Controller re-verifies HEAD.
             if os.environ.get("WFC_CI_GATE_REQUIRED") == "1":
