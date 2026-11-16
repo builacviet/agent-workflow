@@ -18,6 +18,7 @@ from test_ci_controller import FakeChecks
 from test_my_wfc import BASE, HEAD, NEXT, REPO, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.composition.postgres_ci_entrypoint import run_postgres_ci_once
 from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
@@ -374,6 +375,32 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
             rows[-1]["workflow_run_id"],
             rows[-1]["run_attempt"],
         ) == (3, 44, 1)
+
+
+def test_pg_ci_entrypoint_reconciles_one_real_inbox_delivery(setup):
+    config, factory, service, task_id, deliveries = setup
+    handoff(service, task_id, HEAD)
+    state = PostgresControllerCiState(factory)
+    state.track(task_id, PR, HEAD)
+    add_delivery(factory, deliveries[0])
+    checks = FakeChecks(head=HEAD)
+
+    run_postgres_ci_once(
+        {
+            "controller_github_app": {
+                "app_id": 1,
+                "installation_id": INSTALLATION,
+                "pem": "controller.pem",
+            }
+        },
+        config,
+        checks=checks,
+    )
+
+    assert checks.calls > 0
+    assert state.approved(task_id, HEAD)
+    assert state.pending_events() == []
+    assert len(observations(factory, task_id)) == 1
 
 
 def test_pending_delivery_order_concurrent_settlement_and_fk(setup):

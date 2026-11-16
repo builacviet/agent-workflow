@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import time
-from pathlib import Path
 from contextlib import contextmanager
-import os
+from pathlib import Path
 from typing import Callable
 
-from agent_workflow.budget import dispatch_budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.dispatch_repository import DispatchLedger
@@ -36,8 +36,7 @@ def run_once(
             context = service.get_coder_assignment(claim["task_id"])
             if (
                 context["completed_review_rounds"] != claim["round_number"]
-                or context["status"]
-                not in {"AWAITING_HANDOFF", "CHANGES_REQUESTED"}
+                or context["status"] not in {"AWAITING_HANDOFF", "CHANGES_REQUESTED"}
                 or (context["current_head_sha"] or context["base_sha"])
                 != claim["input_sha"]
             ):
@@ -91,21 +90,43 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--acknowledge", metavar="DISPATCH_ID")
     parser.add_argument("--reconciled", action="store_true")
-    parser.add_argument("--ci-once", action="store_true", help="reconcile CI only, never dispatch agents")
-    parser.add_argument("--ci-watch", action="store_true", help="consume local inbox, never dispatch agents")
+    parser.add_argument(
+        "--ci-once",
+        action="store_true",
+        help="reconcile CI only, never dispatch agents",
+    )
+    parser.add_argument(
+        "--ci-watch",
+        action="store_true",
+        help="consume local inbox, never dispatch agents",
+    )
     args = parser.parse_args()
     config = json.loads(
         args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
     )
+    if "PG_RUNTIME_DSN" in os.environ:
+        app_config = AppConfig.from_env()
+        if (
+            not args.ci_once
+            or args.ci_watch
+            or args.once
+            or args.acknowledge
+            or args.reconciled
+        ):
+            raise WorkflowError("PostgreSQL supports only --ci-once")
+        from agent_workflow.composition.postgres_ci_entrypoint import (
+            run_postgres_ci_once,
+        )
+
+        run_postgres_ci_once(config, app_config)
+        return
     from agent_workflow.runners.coder_runtime import validate_config
 
     if not (args.ci_once or args.ci_watch):
         validate_config(config)
     elif args.ci_once and args.ci_watch:
         raise WorkflowError("choose one CI-only mode")
-    with process_lock(
-        Path(config["database"]).with_suffix(".controller.lock")
-    ):
+    with process_lock(Path(config["database"]).with_suffix(".controller.lock")):
         operate(config, args)
 
 
@@ -115,7 +136,9 @@ def operate(config: dict, args: argparse.Namespace) -> None:
     from agent_workflow.runners.coder_runtime import CoderRuntime
 
     # Read validated configuration at the operational composition boundary.
-    service = WorkflowService(config["database"], require_ci=AppConfig.from_env().ci_gate_required)
+    service = WorkflowService(
+        config["database"], require_ci=AppConfig.from_env().ci_gate_required
+    )
     ledger = DispatchLedger(service)
     runtime = CoderRuntime(config, service)
     if args.acknowledge:
@@ -158,7 +181,8 @@ def _ci_operator(config: dict, *, watch: bool) -> None:
     """Explicit CI-only path: cannot launch Codex or touch worker credentials."""
     from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
     from agent_workflow.integrations.github_app_checks import (
-        ControllerAppToken, ControllerChecksClient,
+        ControllerAppToken,
+        ControllerChecksClient,
     )
     from agent_workflow.storage.ci_state import ControllerCiState
 
@@ -166,23 +190,33 @@ def _ci_operator(config: dict, *, watch: bool) -> None:
     if not isinstance(gate, dict):
         raise WorkflowError("separate read-only Controller GitHub App config required")
     app_id, installation_id, pem = (
-        gate.get("app_id"), gate.get("installation_id"), gate.get("pem"),
+        gate.get("app_id"),
+        gate.get("installation_id"),
+        gate.get("pem"),
     )
     if type(app_id) is not int or type(installation_id) is not int or not pem:
         raise WorkflowError("invalid Controller GitHub App config")
     if config.get("pem") and Path(config["pem"]).resolve() == Path(pem).resolve():
         raise WorkflowError("Controller GitHub App must not use worker App PEM")
     token = ControllerAppToken(
-        app_id=app_id, installation_id=installation_id, pem_path=pem,
+        app_id=app_id,
+        installation_id=installation_id,
+        pem_path=pem,
     )
     checks = ControllerChecksClient(
-        installation_id=installation_id, token_provider=token,
+        installation_id=installation_id,
+        token_provider=token,
     )
     ci = ControllerCiCoordinator(
-        ControllerCiState(config["database"]), checks, installation_id=installation_id,
+        ControllerCiState(config["database"]),
+        checks,
+        installation_id=installation_id,
     )
     observations = ci.reconcile_once(startup=True)
-    print("CI reconciliation: " + str(len(observations)) + " tracked observations", flush=True)
+    print(
+        "CI reconciliation: " + str(len(observations)) + " tracked observations",
+        flush=True,
+    )
     if not watch:
         return
     delay = 2
