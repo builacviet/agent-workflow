@@ -4,11 +4,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from hashlib import sha256
-from threading import Barrier
+from queue import Queue
+from threading import Barrier, Event
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, delete, event, select, update
+from sqlalchemy import create_engine, delete, event, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
@@ -16,7 +18,13 @@ from test_ci_controller import FakeChecks
 from test_my_wfc import BASE, HEAD, NEXT, REPO, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
+from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.postgres_leadership import (
+    LeadershipDomain,
+    PostgresLeadershipLock,
+)
 from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
@@ -407,6 +415,78 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
                 )
             ).scalars().all() == [first.delivery_id]
         assert not state.approved(task_id, HEAD)
+
+
+def test_lost_watcher_session_keeps_real_inbox_pending(setup):
+    _, factory, service, task_id, (notification, _) = setup
+    handoff(service, task_id, HEAD)
+    state = PostgresControllerCiState(factory)
+    state.track(task_id, PR, HEAD)
+    add_delivery(factory, notification)
+    original_record = state.record
+    original_ack = state.mark_processed
+    state.record = Mock(wraps=original_record)
+    state.mark_processed = Mock(wraps=original_ack)
+
+    leadership = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
+    controller = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
+    contender = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
+    entered = Event()
+    resume = Event()
+    backend_ids = Queue(maxsize=1)
+    checks = FakeChecks()
+    checks.installation_id = INSTALLATION
+
+    def blocked_request(*_args):
+        connection = leadership._connection
+        assert connection is not None
+        with connection.begin():
+            pid = connection.scalar(select(func.pg_backend_pid()))
+        backend_ids.put(pid)
+        entered.set()
+        assert resume.wait(10)
+        return {}
+
+    checks.get_pull_request = Mock(side_effect=blocked_request)
+    dependencies = PostgresCiWatcherDependencies(state, leadership)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                run_ci_watcher_once,
+                dependencies,
+                checks,
+                installation_id=INSTALLATION,
+            )
+            assert entered.wait(10)
+            pid = backend_ids.get(timeout=1)
+            assert controller.try_acquire()
+            assert not contender.try_acquire()
+            with factory.transaction() as connection:
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT datname = current_database() AND usename = current_user "
+                            "FROM pg_stat_activity WHERE pid = :pid"
+                        ),
+                        {"pid": pid},
+                    )
+                    is True
+                )
+                assert (
+                    connection.scalar(select(func.pg_terminate_backend(pid, 5000)))
+                    is True
+                )
+            resume.set()
+            with pytest.raises(PermissionError, match="leadership lost"):
+                future.result(timeout=10)
+        assert state.pending_events() == [notification]
+        state.record.assert_not_called()
+        state.mark_processed.assert_not_called()
+    finally:
+        resume.set()
+        contender.release()
+        controller.release()
+        leadership.release()
 
 
 def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):

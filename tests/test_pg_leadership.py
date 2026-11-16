@@ -1,13 +1,18 @@
 """Offline failure handling and live PostgreSQL 16 session ownership."""
 
+import multiprocessing
 import os
 from collections.abc import Iterator
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, make_url
 
+from agent_workflow.composition.postgres_controller import (
+    PostgresControllerDependencies,
+)
+from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -201,3 +206,109 @@ def test_live_failed_acquire_commit_discards_locked_session(pg_factory):
         assert not owner.try_acquire()
         with PostgresLeadershipLock(pg_factory, domain) as successor:
             assert successor.try_acquire()
+
+
+def _controller_process(mode, channel):
+    """Use a separate engine and backend for each spawned contender."""
+    from agent_workflow.app_config import AppConfig
+
+    dsn = os.environ["PG_TEST_DSN"]
+    with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
+        backend = None
+        connect = factory.connect_session
+
+        def identified_session():
+            nonlocal backend
+            connection = connect()
+            backend = connection.scalar(text("SELECT pg_catalog.pg_backend_pid()"))
+            connection.rollback()
+            return connection
+
+        factory.connect_session = identified_session
+        lock = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
+        try:
+            if mode == "hold":
+                acquired = lock.try_acquire()
+                channel.send((acquired, backend))
+                if acquired and channel.poll(30):
+                    if channel.recv() == "crash":
+                        os._exit(23)
+            else:
+                workflow = object()
+                dispatch = Mock()
+                dispatch.claim.return_value = None
+                assignment = Mock(repository=workflow)
+                execute = Mock()
+                dependencies = PostgresControllerDependencies(
+                    workflow, dispatch, Mock(), lock
+                )
+                acquired = run_controller_once(
+                    dependencies, assignment, {"PG03-C-test"}, execute
+                )
+                channel.send(
+                    (acquired, backend, dispatch.claim.call_count, execute.call_count)
+                )
+        finally:
+            lock.release()
+            channel.close()
+
+
+def _spawn_controller(context, mode):
+    parent, child = context.Pipe()
+    process = context.Process(target=_controller_process, args=(mode, child))
+    process.start()
+    child.close()
+    return process, parent
+
+
+def _receive(process, channel):
+    assert channel.poll(20), f"child {process.pid} did not report in time"
+    return channel.recv()
+
+
+def _stop_child(process, channel):
+    if process.is_alive():
+        process.terminate()
+    process.join(timeout=5)
+    assert not process.is_alive(), f"child {process.pid} did not stop"
+    channel.close()
+
+
+def test_live_independent_process_crash_releases_controller(pg_factory):
+    """A loser does no work; a crashed owner cannot resume its pinned session."""
+    context = multiprocessing.get_context("spawn")
+    owner, owner_channel = _spawn_controller(context, "hold")
+    try:
+        assert owner.exitcode is None
+        held, owner_backend = _receive(owner, owner_channel)
+        assert held and isinstance(owner_backend, int)
+
+        contender, contender_channel = _spawn_controller(context, "attempt")
+        try:
+            acquired, contender_backend, claims, publishes = _receive(
+                contender, contender_channel
+            )
+            contender.join(timeout=5)
+            assert contender.exitcode == 0
+            assert contender_backend != owner_backend
+            assert (acquired, claims, publishes) == (False, 0, 0)
+        finally:
+            _stop_child(contender, contender_channel)
+
+        owner_channel.send("crash")
+        owner.join(timeout=5)
+        assert owner.exitcode == 23
+
+        successor, successor_channel = _spawn_controller(context, "attempt")
+        try:
+            acquired, successor_backend, claims, publishes = _receive(
+                successor, successor_channel
+            )
+            successor.join(timeout=5)
+            assert successor.exitcode == 0
+            assert successor_backend != owner_backend
+            assert (acquired, claims, publishes) == (False, 1, 0)
+        finally:
+            _stop_child(successor, successor_channel)
+    finally:
+        _stop_child(owner, owner_channel)
