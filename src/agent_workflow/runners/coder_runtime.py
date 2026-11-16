@@ -8,16 +8,20 @@ import os
 import re
 import stat
 import subprocess
-import time
 import tempfile
+import time
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError, canonical_repository
 from agent_workflow.domain.service import WorkflowService
-from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.integrations.github import (
+    REPOSITORY,
+    WorkflowError,
+    canonical_repository,
+)
+from agent_workflow.runners.agent_runtime import AgentRuntime
 from agent_workflow.runners.runtime_plugins import (
     AgentRuntimePlugin,
     CodexCLIPlugin,
@@ -27,10 +31,10 @@ from agent_workflow.runners.runtime_plugins import (
     RuntimeSpec,
 )
 from agent_workflow.runners.sandbox import (
+    _DOCKER_HOST,
     DockerCreateRejected,
     SandboxManager,
     SandboxPolicy,
-    _DOCKER_HOST,
     _assert_daemon,
     _assert_selected_host,
     _bind_host,
@@ -40,6 +44,7 @@ from agent_workflow.runners.sandbox import (
     _selected_host,
     docker_security_args,
 )
+from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -102,10 +107,9 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
 
 
 def validate_config(config: dict) -> None:
-    if (
-        canonical_repository(config.get("repository", "")) != REPOSITORY
-        or not config.get("tasks")
-    ):
+    if canonical_repository(
+        config.get("repository", "")
+    ) != REPOSITORY or not config.get("tasks"):
         raise WorkflowError("explicit repository and task allowlist required")
     for key in ("database", "pem", "scratch"):
         path = Path(config[key])
@@ -114,17 +118,10 @@ def validate_config(config: dict) -> None:
         independent_path(path, directory=key == "scratch")
     if config.get("runtime", "codex") == "codex":
         profile = Path(config["seccomp_profile"])
-        if (
-            not profile.is_absolute()
-            or not profile.is_file()
-            or profile.is_symlink()
-        ):
+        if not profile.is_absolute() or not profile.is_file() or profile.is_symlink():
             raise WorkflowError("absolute independent seccomp profile required")
         independent_path(profile)
-        if (
-            hashlib.sha256(profile.read_bytes()).hexdigest()
-            != config["seccomp_sha256"]
-        ):
+        if hashlib.sha256(profile.read_bytes()).hexdigest() != config["seccomp_sha256"]:
             raise WorkflowError("seccomp profile digest mismatch")
         if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
             raise WorkflowError("dedicated POC Codex auth volume required")
@@ -180,7 +177,9 @@ def source_digest(root: Path) -> str:
                 or info.st_size > MAX_SNAPSHOT_FILE_BYTES
                 or total_bytes > MAX_SNAPSHOT_TOTAL_BYTES
             ):
-                raise WorkflowError("source snapshot exceeds bounded file or byte budget")
+                raise WorkflowError(
+                    "source snapshot exceeds bounded file or byte budget"
+                )
             name_bytes = path.relative_to(root).as_posix().encode("utf-8")
             digest.update(len(name_bytes).to_bytes(8, "big"))
             digest.update(name_bytes)
@@ -200,6 +199,7 @@ def source_digest(root: Path) -> str:
                 raise WorkflowError("source file size changed while hashing")
     return digest.hexdigest()
 
+
 def docker_command(args: list[str]) -> bytes:
     if not args or args[0] != "docker":
         raise WorkflowError("Controller may only launch Docker")
@@ -215,7 +215,7 @@ def docker_command(args: list[str]) -> bytes:
         (["rm"], "rm"),
         (["volume", "inspect"], "volume inspect"),
     ):
-        if args[1:1 + len(prefix)] == prefix:
+        if args[1 : 1 + len(prefix)] == prefix:
             operation = name
             break
 
@@ -233,9 +233,18 @@ def docker_command(args: list[str]) -> bytes:
             # Only an exact daemon rejection of the requested immutable image
             # is terminal. Timeouts, transport errors and conflicts are not.
             rejection = (error.stderr or b"").strip()
-            image = next((arg for arg in args if re.fullmatch(r"sha256:[0-9a-f]{64}", arg)), None)
-            if image and rejection == b"Error response from daemon: No such image: " + image.encode("ascii"):
-                raise DockerCreateRejected("Docker rejected the sandbox image") from None
+            image = next(
+                (arg for arg in args if re.fullmatch(r"sha256:[0-9a-f]{64}", arg)), None
+            )
+            if (
+                image
+                and rejection
+                == b"Error response from daemon: No such image: "
+                + image.encode("ascii")
+            ):
+                raise DockerCreateRejected(
+                    "Docker rejected the sandbox image"
+                ) from None
         raise WorkflowError(
             f"Docker {operation} failed (exit {error.returncode})"
         ) from None
@@ -286,6 +295,18 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
             raise
 
 
+class _SqliteCiTracking:
+    """Lazy legacy CI adapter: opening a runtime does not open the CI database."""
+
+    def __init__(self, service: WorkflowService) -> None:
+        self.service = service
+
+    def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
+        from agent_workflow.storage.ci_state import ControllerCiState
+
+        ControllerCiState(self.service.db_path).track(task_id, pr_number, head_sha)
+
+
 class CoderRuntime:
     def __init__(
         self,
@@ -321,6 +342,9 @@ class CoderRuntime:
                     "legacy sandbox fences require operator recovery before startup"
                 )
         self.sandbox = SandboxManager(fence_dir=state_dir)
+        self.agent_runtime = AgentRuntime(
+            self, DispatchLedger(service), _SqliteCiTracking(service)
+        )
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
         runtime = self.config.get("runtime", "codex")
@@ -363,7 +387,9 @@ class CoderRuntime:
             env=plan.env,
             stdin=prompt,
         )
-        return self.registry.result(request, launch.output, observed_image_id=launch.image_id)
+        return self.registry.result(
+            request, launch.output, observed_image_id=launch.image_id
+        )
 
     @staticmethod
     def _remaining_seconds(claim: dict) -> int:
@@ -376,7 +402,7 @@ class CoderRuntime:
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
-        if DispatchLedger(self.service).is_pre_launch(dispatch_id):
+        if self.agent_runtime.dispatch.is_pre_launch(dispatch_id):
             if self.sandbox.has_launch_records(dispatch_id):
                 raise WorkflowError("pre-launch evidence conflicts with Docker records")
             return
@@ -435,9 +461,17 @@ class CoderRuntime:
         if host is None:
             # The standalone probe/test entry point also needs a durable pin.
             existing = self.sandbox._engine_path(dispatch_id).exists()
-            if existing and self.service is not None and DispatchLedger(self.service).is_pre_launch(dispatch_id):
+            if (
+                existing
+                and self.service is not None
+                and self.agent_runtime.dispatch.is_pre_launch(dispatch_id)
+            ):
                 raise WorkflowError("pre-launch evidence conflicts with Docker records")
-            host = self.sandbox.recovery_engine(dispatch_id)[0] if existing else _selected_host()
+            host = (
+                self.sandbox.recovery_engine(dispatch_id)[0]
+                if existing
+                else _selected_host()
+            )
             with _bind_host(host):
                 if not existing:
                     self._record_engine(dispatch_id, host, _require_engine())
@@ -445,7 +479,11 @@ class CoderRuntime:
         return self._docker_bound(claim, stage, mode, prompt, code_plan)
 
     def _docker_bound(
-        self, claim: dict, stage: Path, mode: str, prompt: str,
+        self,
+        claim: dict,
+        stage: Path,
+        mode: str,
+        prompt: str,
         code_plan: RuntimePlan | None,
     ) -> bytes:
         host, daemon_id = self.sandbox.recovery_engine(claim["dispatch_id"])
@@ -523,13 +561,16 @@ class CoderRuntime:
         with _bind_host(host):
             daemon_id = _require_engine()
             self._record_engine(claim["dispatch_id"], host, daemon_id)
-            result = self._execute_bound(claim, context, request, plan, approved_image_id)
+            result = self._execute_bound(
+                claim, context, request, plan, approved_image_id
+            )
             _assert_daemon(daemon_id)
             return result
 
     def _record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
         if self.service is not None:
-            DispatchLedger(self.service).retire_pre_launch(dispatch_id)
+            self.agent_runtime.require_leadership()
+            self.agent_runtime.dispatch.retire_pre_launch(dispatch_id)
         self.sandbox.record_engine(dispatch_id, host, daemon_id)
 
     def release_engine(self, dispatch_id: str) -> None:
@@ -537,16 +578,20 @@ class CoderRuntime:
         self.sandbox.clear_engine(dispatch_id)
 
     def _execute_bound(
-        self, claim: dict, context: dict, request: RuntimeRequest, plan: RuntimePlan,
+        self,
+        claim: dict,
+        context: dict,
+        request: RuntimeRequest,
+        plan: RuntimePlan,
         approved_image_id: str | None,
     ) -> str:
-        task = self.config["tasks"][context["task_id"]]
-        stage = (
-            Path(task["worktree"])
-            / ".runtime"
-            / "dispatch"
-            / claim["dispatch_id"]
+        return self.agent_runtime.execute_bound(
+            claim, context, request, plan, approved_image_id
         )
+
+    def _prepare_stage(self, claim: dict, context: dict) -> tuple[Path, dict]:
+        task = self.config["tasks"][context["task_id"]]
+        stage = Path(task["worktree"]) / ".runtime" / "dispatch" / claim["dispatch_id"]
         root = Path(task["worktree"]).resolve(strict=True)
         if not stage.resolve().is_relative_to(root):
             raise WorkflowError("dispatch path escapes allowed worktree")
@@ -566,91 +611,72 @@ class CoderRuntime:
             "app_id": self.config["app_id"],
             "installation_id": self.config["installation_id"],
         }
-        try:
-            self.docker(claim, stage, "prepare", json.dumps(envelope))
-            self.stop(claim["dispatch_id"])
-            source = stage / "source"
-            if not source.is_dir() or is_linked(source):
-                raise WorkflowError("worker source missing or linked")
-            prompt = (
-                "Implement only this authorized task; do not commit/push/approve.\n"
-                + json.dumps(context)
-            )
-            _, daemon_id = self.sandbox.recovery_engine(claim["dispatch_id"])
-            _assert_daemon(daemon_id)
-            runtime_result = self._run_code(
-                claim, source, request, plan, prompt, approved_image_id
-            )
-            self.stop(claim["dispatch_id"])
-            tested_digest = source_digest(source)
-            self.docker(claim, source, "test")
-            self.stop(claim["dispatch_id"])
-            if source_digest(source) != tested_digest:
-                raise WorkflowError("test phase mutated source")
-            envelope["test_summary"] = (
-                "python -m pytest -q: exit 0 in credential-free network-disabled test container"
-            )
-            self.docker(claim, stage, "publish", json.dumps(envelope))
-            self.stop(claim["dispatch_id"])
-            result_path = stage / "result.json"
-            if is_linked(result_path) or result_path.stat().st_size > 65536:
-                raise WorkflowError("unsafe worker result")
-            result = json.loads(result_path.read_text())
-            required = {
-                "task_id",
-                "repository",
-                "branch",
-                "base_sha",
-                "head_sha",
-                "input_sha",
-                "pr_url",
-            }
-            if not isinstance(result, dict) or not required.issubset(result):
-                raise WorkflowError("incomplete worker result")
-            if not isinstance(result["pr_url"], str) or not re.fullmatch(
-                rf"https://github\.com/{re.escape(REPOSITORY)}/pull/[1-9][0-9]*",
-                result["pr_url"],
-            ):
-                raise WorkflowError(
-                    "worker PR reference differs from repository"
-                )
-            from agent_workflow.integrations.github import validate_sha
+        return stage, envelope
 
-            validate_sha(result["head_sha"])
-            for field in ("task_id", "repository", "branch", "base_sha"):
-                if result[field] != context[field]:
-                    raise WorkflowError(
-                        "worker result differs from authorized task"
-                    )
-            if result["input_sha"] != claim["input_sha"]:
-                raise WorkflowError("worker result input mismatch")
-            check_deadline()
-            DispatchLedger(self.service).record_runtime_evidence(
-                claim["dispatch_id"], context["task_id"], claim["input_sha"],
-                request.spec.runtime, runtime_result.declared_runtime_version,
-                runtime_result.observed_image_id, runtime_result.telemetry,
-                tested_digest, result["head_sha"],
-            )
-            self.service.register_task_handoff(
-                context["task_id"],
-                context["repository"],
-                context["branch"],
-                context["base_sha"],
-                result["head_sha"],
-                task["handoff_path"],
-                envelope["test_summary"] + "; worker PR: " + result["pr_url"],
-            )
-            # This host-side registration is not an authorization to review:
-            # CI remains BLOCKED until the separate Controller App re-verifies
-            # GitHub's current PR HEAD and complete named Checks history.
-            if os.environ.get("WFC_CI_GATE_REQUIRED") == "1":
-                from agent_workflow.storage.ci_state import ControllerCiState
+    @staticmethod
+    def _source(stage: Path) -> Path:
+        source = stage / "source"
+        if not source.is_dir() or is_linked(source):
+            raise WorkflowError("worker source missing or linked")
+        return source
 
-                ControllerCiState(self.service.db_path).track(
-                    context["task_id"],
-                    int(result["pr_url"].rsplit("/", 1)[1]),
-                    result["head_sha"],
-                )
-            return result["head_sha"]
-        finally:
-            self.stop(claim["dispatch_id"])
+    @staticmethod
+    def _source_digest(source: Path) -> str:
+        return source_digest(source)
+
+    @staticmethod
+    def _check_source_digest(source: Path, expected: str) -> None:
+        if source_digest(source) != expected:
+            raise WorkflowError("test phase mutated source")
+
+    def _assert_engine(self, dispatch_id: str) -> None:
+        _, daemon_id = self.sandbox.recovery_engine(dispatch_id)
+        _assert_daemon(daemon_id)
+
+    def _validated_result(self, stage: Path, claim: dict, context: dict) -> dict:
+        result_path = stage / "result.json"
+        if is_linked(result_path) or result_path.stat().st_size > 65536:
+            raise WorkflowError("unsafe worker result")
+        result = json.loads(result_path.read_text())
+        required = {
+            "task_id",
+            "repository",
+            "branch",
+            "base_sha",
+            "head_sha",
+            "input_sha",
+            "pr_url",
+        }
+        if not isinstance(result, dict) or not required.issubset(result):
+            raise WorkflowError("incomplete worker result")
+        if not isinstance(result["pr_url"], str) or not re.fullmatch(
+            rf"https://github\.com/{re.escape(REPOSITORY)}/pull/[1-9][0-9]*",
+            result["pr_url"],
+        ):
+            raise WorkflowError("worker PR reference differs from repository")
+        from agent_workflow.integrations.github import validate_sha
+
+        validate_sha(result["head_sha"])
+        for field in ("task_id", "repository", "branch", "base_sha"):
+            if result[field] != context[field]:
+                raise WorkflowError("worker result differs from authorized task")
+        if result["input_sha"] != claim["input_sha"]:
+            raise WorkflowError("worker result input mismatch")
+        return result
+
+    def _register_handoff(
+        self,
+        context: dict,
+        result: dict,
+        test_summary: str,
+    ) -> None:
+        task = self.config["tasks"][context["task_id"]]
+        self.service.register_task_handoff(
+            context["task_id"],
+            context["repository"],
+            context["branch"],
+            context["base_sha"],
+            result["head_sha"],
+            task["handoff_path"],
+            test_summary + "; worker PR: " + result["pr_url"],
+        )
