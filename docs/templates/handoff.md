@@ -1,13 +1,14 @@
 # Manual Coder — Draft PR handoff
 
-**Put this in the GitHub PR description, not a new Markdown file.** GitHub owns implementation, test/CI evidence and review findings. The linked **Notion Task owns approved AC, scope/allowlist, base and publish authorization**; do not copy its full requirements here. Notion Comments are only for questions, status and links. Never include credentials or secret-bearing logs.
+**Put this in the GitHub PR description, not a new Markdown file.** GitHub owns implementation, test/CI evidence and review findings. The linked **Notion Task owns approved AC, the risk-based Scope Envelope (PRIMARY / bounded RELATED / PROTECTED), base and publish authorization**; do not copy its full requirements here. Notion Comments are only for questions, status and links. Never include credentials or secret-bearing logs.
 
 ## Task and change
 - **Task:** `<TASK-ID>` — [approved Notion task](<NOTION-URL>)
 - **Implementation (2–5 lines):** `<what actually changed and why>`
 - **AC coverage by ID:** `AC-01 PASS → code/test reference; AC-02 NOT VERIFIED → reason`. Do not repeat the AC prose.
 - **GitHub PR base / tested implementation SHA / final pushed HEAD:** `<base> / <tested-sha> / <head>` (GitHub identifies current HEAD; state any divergence from Notion base).
-- **Actual diff against approved base:** `<inspected; paths match Notion allowlist PASS / FAIL / NOT VERIFIED>`.
+- **Actual diff against approved base:** `<inspected; every path is within task PRIMARY or bounded RELATED envelope, or has prior recorded HIGH approval: PASS / FAIL / NOT VERIFIED>`.
+- **Added RELATED paths:** `<path → AC reason → LOW/MEDIUM classification → affected caller/test evidence; NONE if no extras>`. HIGH/out-of-envelope changes need the **pre-edit approved Notion task revision**, not a PR-body permission claim.
 - **Actor attribution:** `<actual authenticated GitHub author/app; Coder agent role if relevant>`. A role label is not proof of bot authentication.
 
 ## Tests and CI (observed evidence only)
@@ -24,7 +25,7 @@
 Each checked item means *inspected*, not automatically passed. Mark each relevant area `PASS / FAIL / N/A / NOT VERIFIED` with a short reason or reference; group irrelevant items as `N/A + reason` for small tasks.
 
 - [ ] **AC / regression / compatibility:** `<verdict; evidence>`
-- [ ] **Approved write paths / protected paths / remote publish grant:** `<verdict; Notion task and diff check>`
+- [ ] **Scope Envelope (PRIMARY/RELATED) / per-path LOW/MEDIUM rationale / protected HIGH approvals / remote publish grant:** `<verdict; approved Notion task revision and actual diff check>`
 - [ ] **Clean Code / architecture / PostgreSQL if touched:** `<verdict; findings/fixes or N/A>`
 - [ ] **Security / external effects:** `<verdict; issues or NONE>`
 - [ ] **Tests / CI coverage and skipped checks:** `<verdict; links or NOT VERIFIED>`

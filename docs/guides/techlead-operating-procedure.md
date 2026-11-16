@@ -43,7 +43,7 @@ Write the approved contract **once in Notion**. The following are the **10 core 
 | **Goal** | One observable outcome; avoid bundling unrelated cleanup. |
 | **Dependencies** | Required merged PR/task and what must be verified first. |
 | **Base SHA** | Exact verified `origin/main` commit at handoff, or justified alternative. |
-| **Scope / authorization** | Primary affected modules/paths and **approved write paths**; read entrypoints are suggestions, not a read ban. Include tests/docs/renames/deletions. |
+| **Scope / authorization** | PRIMARY owned files/modules, bounded RELATED LOW/MEDIUM changes and PROTECTED/HIGH exclusions or recorded approvals. Initial path examples are hints, not a separate per-file veto; include tests/docs/renames/deletions. Read entrypoints are suggestions, not a read ban. |
 | **AC / DoD** | Numbered, observable positive/negative behavior and completion conditions. |
 | **Constraints** | Public API, architecture, security, transaction, configuration, external effects and expressly forbidden changes. |
 | **Tests / verification** | Scoped pytest and integration/concurrency/negative tests when relevant, Ruff format/check for changed Python, architecture and exact-HEAD GitHub CI. Explain N/A for docs-only changes. |
@@ -56,15 +56,14 @@ A short assignment prompt should contain the **Notion task link + ID**, base/bra
 
 ## 4. Scope and risk governance
 
-**Current merged baseline:** `AGENTS.md` and the [task contract](../templates/agent-task-contract.md) require the **approved changed-path allowlist**. A file can be read for dependency discovery without write permission. A necessary out-of-list write requires an approved Notion task revision **before** editing. Protected paths also need explicit TL and applicable Owner scrutiny even when listed.
+**Policy (effective only after DEV-PROC-01A is merged):** The approved Notion task and [AGENTS.md](../../AGENTS.md) use a preauthorized **Scope Envelope**; this is not carte-blanche file editing. Each task identifies PRIMARY owned paths/modules, a bounded RELATED class of anticipated changes and PROTECTED/HIGH touchpoints. Reading any accessible file for dependency discovery does not grant write permission.
 
-**Scope Envelope pilot (not yet the merged repository default):** the Notion Operating Guide records a planned LOW / MEDIUM / HIGH policy, to be aligned by **DEV-PROC-01A**. Do not instruct Coder to override the current `AGENTS.md` merely because the pilot exists:
+- **LOW:** Coder may edit directly AC-related tests/docs/imports/typing and small internal cleanups **only inside the preauthorized RELATED envelope**, without requesting per-file permission. Report actual extra paths and reasons in the Draft PR.
+- **MEDIUM:** Coder may make small, behavior-preserving private helper/factory changes **only within named, preauthorized owned module/adapter boundaries**. Report affected callers, test coverage and why public/semantic behavior is unchanged; escalate to HIGH when this cannot be assured.
+- **HIGH / protected:** authentication, authorization, secrets/trust, public APIs, transaction/isolation/lock semantics, database schema/migrations, CI/security/policy gates, deployment/config security, privilege expansion or external side effects. Coder stops the affected edit until a focused TL decision and applicable Owner approval are recorded in an authorized task revision, **even if the path was initially listed**.
+- **Outside envelope / unclear:** stop the affected edit, identify the narrowest needed change and seek an authorized task amendment. A comment, PR body, role label, global wildcard or arbitrary `max_extra_files` is not authorization. Coder may continue independently safe work without escalating an entire task.
 
-- **LOW:** task-relevant tests, docs, imports, typing and internal cleanups inside a *preauthorized* related-change envelope.
-- **MEDIUM:** bounded behavior-preserving helper/factory changes inside explicitly preauthorized module boundaries, explained in PR with tests.
-- **HIGH / protected:** auth/trust, public contracts, database schema/migrations, transaction/isolation semantics, CI/policy gates, deployment/credentials and external effects; focused prior TL and applicable Owner decision, recorded in task.
-
-Before assignment, Tech Lead performs **bounded dependency discovery**: likely entrypoints, callers, shared contracts and high-risk touchpoints. Put foreseeable exceptions in the approved task *once* instead of encouraging repeated approval requests. Do not use unrestricted write globs, automatic scope expansion, or a cosmetic per-file count as a substitute for actual risk review.
+Before assignment, TL runs **bounded dependency discovery** over entrypoints, callers, related tests, shared contracts and likely protected exceptions. Preauthorize foreseeable LOW/MEDIUM and specific HIGH exceptions together, so the Coder need not repeatedly ask about trivial supporting changes. TL ultimately verifies every changed path against the approved task, the full diff and exact-HEAD CI. No new runtime privileges, QC/MTP/independent reviewer gates or Owner merge rights are created by this policy.
 
 ## 5. Execute the manual development loop
 
@@ -84,8 +83,8 @@ Classify first and request **one focused decision**; do not repeatedly restart t
 
 | Blocker | Tech Lead handling |
 | --- | --- |
-| **Missing/contradictory AC, baseline or write scope** | Reconcile evidence; update the approved Notion task through authorized actor before Coder edits newly protected paths. A TL comment alone is not scope approval. |
-| **LOW/MEDIUM dependency found** | Under current strict policy: authorize the necessary path in task first. After DEV-PROC-01A is merged: apply only its documented preauthorized Scope Envelope, then verify PR explanation. |
+| **Missing/contradictory AC, baseline or Scope Envelope** | Reconcile evidence; update the approved Notion task through an authorized actor before Coder edits HIGH or out-of-envelope paths. A TL comment alone is not scope approval. |
+| **LOW/MEDIUM dependency found** | If directly AC-related and preauthorized within the bounded RELATED envelope, proceed and record each additional path/reason in the PR (and callers/tests for MEDIUM). Otherwise request a focused task amendment before editing. |
 | **HIGH semantic/security issue** | Pause the affected change; inspect current merged source, test contract and risks; give a narrow explicit decision. Escalate Owner-specific authority. |
 | **GitHub/Notion bot or network failure** | Treat as **environment/identity blocker**, separate from code correctness. Preserve existing branch/work; do not substitute Owner/TL tokens or redo validated work unnecessarily. |
 | **CI/test failure** | Confirm failing command, environment and SHA; request minimal regression fix and rerun affected checks. Do not require unrelated refactors. |
@@ -114,7 +113,7 @@ A departing Tech Lead should leave **durable state** in Notion and GitHub, not a
 - Active Draft PR URL, exact HEAD, CI evidence and review round/verdict, or **NONE**.
 - Blocker classification and already-approved protected exceptions in the task, with links.
 - Real GitHub/Notion actor identities, permission limits and integration-health gaps, without secrets.
-- Scope policy in force (`AGENTS.md` merged version), pending **DEV-PROC-01A** pilot status and pending **OPS-TL-ID-01F** integration cleanup.
+- Scope policy in force (verified merged `AGENTS.md`), and separately verified actual GitHub/Notion integration identities and deployment health; never assume that a merged feature is already deployed.
 - Single safe next step; never assume queued work was done merely because a draft prompt exists.
 
 **First response from new TL:** summarize verified state and propose the next task/action; if core identity or authorization is missing, say exactly what cannot safely proceed. This SOP is stable; changing task state belongs in Notion/GitHub, **not by editing this file after each PR**.
