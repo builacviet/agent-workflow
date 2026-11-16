@@ -4,6 +4,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import text
@@ -13,7 +14,15 @@ from test_my_wfc import HEAD, NEXT, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
+from agent_workflow.composition.postgres_controller import (
+    PostgresControllerDependencies,
+)
+from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.postgres_leadership import (
+    LeadershipDomain,
+    PostgresLeadershipLock,
+)
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
@@ -87,6 +96,31 @@ def test_concurrent_claim_block_restart_and_replay(setup):
     assert restarted.claim({task_id}, 60) is None
     with pytest.raises(WorkflowError):
         restarted.acknowledge(claim["dispatch_id"])
+
+
+def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
+    ledger, service, factory, task_id = setup
+    claim = ledger.claim({task_id}, 60, track_pre_launch=True)
+    assert claim is not None
+    simulated_publish = Mock()
+
+    def next_owner_attempt():
+        successor = PostgresDispatchLedger(
+            factory, role="dev", phase="code", clock=lambda: 1000.0
+        )
+        leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
+        dependencies = PostgresControllerDependencies(
+            service.repository, successor, Mock(), leadership
+        )
+        return run_controller_once(dependencies, service, {task_id}, simulated_publish)
+
+    assert not next_owner_attempt()
+    assert ledger.is_pre_launch(claim["dispatch_id"])
+    ledger.block(claim["dispatch_id"])
+    assert not next_owner_attempt()
+    ledger.acknowledge(claim["dispatch_id"])
+    assert not next_owner_attempt()
+    simulated_publish.assert_not_called()
 
 
 def test_evidence_identity_and_finish(setup):
