@@ -35,16 +35,20 @@ class Auth0Config:
 
 def load_auth0_config(public_host: str) -> Auth0Config:
     """Reject partial OAuth configuration before opening the HTTP listener."""
-    if os.environ.get("WFC_POC_NO_AUTH") == "1":
-        raise ValueError("OAuth and public no-auth mode are mutually exclusive")
     issuer = os.environ.get("WFC_AUTH0_ISSUER", "").strip()
     allowed_sub = os.environ.get("WFC_AUTH0_ALLOWED_SUB", "").strip()
     # The expected OAuth client identity may be a CIMD HTTPS URL, not an
     # Auth0-internal tpc_ application record. Migrate without a forced restart.
     expected_client_id = os.environ.get("WFC_OAUTH_EXPECTED_CLIENT_ID", "").strip()
     legacy_client_id = os.environ.get("WFC_AUTH0_CLIENT_ID", "").strip()
-    if expected_client_id and legacy_client_id and expected_client_id != legacy_client_id:
-        raise ValueError("conflicting WFC_OAUTH_EXPECTED_CLIENT_ID and WFC_AUTH0_CLIENT_ID")
+    if (
+        expected_client_id
+        and legacy_client_id
+        and expected_client_id != legacy_client_id
+    ):
+        raise ValueError(
+            "conflicting WFC_OAUTH_EXPECTED_CLIENT_ID and WFC_AUTH0_CLIENT_ID"
+        )
     client_id = expected_client_id or legacy_client_id
     scope = os.environ.get("WFC_AUTH0_SCOPE", "wfc:workflow").strip()
     parsed = urlsplit(issuer)
@@ -122,7 +126,9 @@ class Auth0TokenVerifier:
         url = self.config.issuer + ".well-known/jwks.json"
         timeout = httpx.Timeout(5.0, connect=2.0)
         async with asyncio.timeout(6):
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, trust_env=False
+            ) as client:
                 async with client.stream("GET", url) as response:
                     response.raise_for_status()
                     data = bytearray()

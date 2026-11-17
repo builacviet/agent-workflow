@@ -16,7 +16,6 @@ RUNTIME = ROOT / ".runtime"
 def test_v1_controller_stack_auth0_template_is_single_source() -> None:
     template = (RUNTIME / "controller-mcp.env.example").read_text(encoding="utf-8")
     assert "WFC_AUTH_MODE=auth0" in template
-    assert "WFC_POC_NO_AUTH=0" in template
     assert "WFC_AUTH0_ISSUER=" in template
     assert "WFC_AUTH0_ALLOWED_SUB=" in template
     assert "WFC_OAUTH_EXPECTED_CLIENT_ID=" in template

@@ -113,10 +113,10 @@ After merge and separate deployment authorization, the Owner:
        }
    }
    ```
-3. Fills the seven nonsecret settings in the Owner-managed ignored
+3. Fills the six nonsecret settings in the Owner-managed ignored
    `.runtime/controller-mcp.env`, using the existing template as reference
-   without overwriting working Auth0 values. Preserve `WFC_AUTH_MODE=auth0`,
-   `WFC_POC_NO_AUTH=0`, and `WFC_AUTH0_SCOPE=wfc:workflow`.
+   without overwriting working Auth0 values. Preserve `WFC_AUTH_MODE=auth0`
+   and `WFC_AUTH0_SCOPE=wfc:workflow`.
 4. Removes only the `# ` prefix from the twelve mount-declaration lines under
    `services.mcp.volumes`, preserving indentation and leaving the explanatory
    comments intact. Both mounts remain read-only, MCP-only, with

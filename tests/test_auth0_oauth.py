@@ -12,7 +12,6 @@ from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier, load_auth0_config
 
 @pytest.fixture
 def auth_config(monkeypatch):
-    monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
     monkeypatch.delenv("WFC_OAUTH_EXPECTED_CLIENT_ID", raising=False)
@@ -45,8 +44,10 @@ def jwt_case(auth_config):
 
     def sign(**overrides):
         return jwt.encode(
-            {**claims, **overrides}, key,
-            algorithm="RS256", headers={"kid": "key-1"},
+            {**claims, **overrides},
+            key,
+            algorithm="RS256",
+            headers={"kid": "key-1"},
         )
 
     return verifier, sign, calls
@@ -70,10 +71,6 @@ def test_auth0_config_is_explicit_and_rejects_unsafe_modes(monkeypatch, auth_con
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", auth_config.allowed_sub)
     monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "")
     with pytest.raises(ValueError, match="CLIENT_ID"):
-        load_auth0_config("test.example.org")
-    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", auth_config.client_id)
-    monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
-    with pytest.raises(ValueError, match="mutually exclusive"):
         load_auth0_config("test.example.org")
 
 
@@ -101,7 +98,9 @@ def test_valid_token_binds_subject_resource_scopes_and_caches_jwks(jwt_case):
         {"azp": "other-oauth-client"},
     ],
 )
-def test_wrong_issuer_audience_subject_scope_expiry_or_client_denied(jwt_case, override):
+def test_wrong_issuer_audience_subject_scope_expiry_or_client_denied(
+    jwt_case, override
+):
     verifier, sign, _ = jwt_case
     assert asyncio.run(verifier.verify_token(sign(**override))) is None
 
@@ -110,9 +109,7 @@ def test_invalid_signatures_and_algorithms_denied(jwt_case):
     verifier, sign, _ = jwt_case
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     claims = jwt.decode(sign(), options={"verify_signature": False})
-    wrong_key = jwt.encode(
-        claims, other, algorithm="RS256", headers={"kid": "key-1"}
-    )
+    wrong_key = jwt.encode(claims, other, algorithm="RS256", headers={"kid": "key-1"})
     wrong_algorithm = jwt.encode(
         claims, "x" * 32, algorithm="HS256", headers={"kid": "key-1"}
     )
@@ -132,6 +129,7 @@ def test_jwks_unavailable_fails_closed(jwt_case):
 
 def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config):
     from agent_workflow.mcp.security import authorize_context
+
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     with pytest.raises(PermissionError, match="OAuth"):
         authorize_context(None)
@@ -139,6 +137,7 @@ def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config
 
 def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
     from agent_workflow.mcp.server import create_mcp_server
+
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.delenv("WFC_AUTH0_ISSUER", raising=False)
     monkeypatch.delenv("WFC_AUTH0_ALLOWED_SUB", raising=False)
@@ -149,8 +148,8 @@ def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
 
 def test_auth0_transport_advertises_protected_resource(monkeypatch):
     from agent_workflow.mcp.server import create_mcp_server
+
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
-    monkeypatch.setenv("WFC_POC_NO_AUTH", "0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|owner")
     monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "https://chatgpt.com/oauth/client.json")
@@ -181,15 +180,21 @@ def test_oauth_diagnostics_report_only_fixed_codes(jwt_case, monkeypatch, caplog
         assert asyncio.run(verifier.verify_token(token)) is None
     assert asyncio.run(verifier.verify_token(sign())) is not None
 
-    event_text = "\n".join(r.message for r in caplog.records
-                           if "auth0_oauth_validation" in r.message)
+    event_text = "\n".join(
+        r.message for r in caplog.records if "auth0_oauth_validation" in r.message
+    )
     assert "code=subject_mismatch" in event_text
     assert "code=jwt_audience_mismatch" in event_text
     assert "code=client_mismatch" in event_text
     assert "code=verified" in event_text
-    for sensitive in (wrong_sub, wrong_aud, wrong_client,
-                      "auth0|someone-private", "private-client-id",
-                      "https://internal.private.example/mcp"):
+    for sensitive in (
+        wrong_sub,
+        wrong_aud,
+        wrong_client,
+        "auth0|someone-private",
+        "private-client-id",
+        "https://internal.private.example/mcp",
+    ):
         assert sensitive not in event_text
 
 
@@ -200,8 +205,9 @@ def test_oauth_diagnostics_bounded(jwt_case, monkeypatch, caplog):
     invalid = sign(sub="auth0|other")
     for _ in range(70):
         assert asyncio.run(verifier.verify_token(invalid)) is None
-    assert len([r for r in caplog.records
-                if "auth0_oauth_validation" in r.message]) == 40
+    assert (
+        len([r for r in caplog.records if "auth0_oauth_validation" in r.message]) == 40
+    )
 
 
 @pytest.mark.parametrize(
@@ -277,9 +283,7 @@ def test_client_id_env_conflicts_fail_closed(monkeypatch, auth_config):
     monkeypatch.setenv(
         "WFC_OAUTH_EXPECTED_CLIENT_ID", "https://chatgpt.com/oauth/client.json"
     )
-    monkeypatch.setenv(
-        "WFC_AUTH0_CLIENT_ID", "tpc_2cEspQ3q4E2X6saM9oKUE4"
-    )
+    monkeypatch.setenv("WFC_AUTH0_CLIENT_ID", "tpc_2cEspQ3q4E2X6saM9oKUE4")
     with pytest.raises(ValueError, match="conflicting"):
         load_auth0_config("test.example.org")
 

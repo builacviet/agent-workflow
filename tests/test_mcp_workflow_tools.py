@@ -42,7 +42,6 @@ def authorized_workflow(monkeypatch):
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", SUBJECT)
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
-    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
     monkeypatch.setenv("PG_RUNTIME_DSN", DSN)
     token = AccessToken(
         token="synthetic",
@@ -172,16 +171,49 @@ def test_dsn_errors_fail_closed(monkeypatch, authorized_workflow, dsn, message):
     open_factory.assert_not_called()
 
 
-def test_poc_no_auth_cannot_open_postgres(monkeypatch, tmp_path):
+@pytest.mark.parametrize("authorization", ["", "Bearer invalid"])
+def test_retired_flag_does_not_bypass_bearer(monkeypatch, tmp_path, authorization):
+    from types import SimpleNamespace
+
     monkeypatch.setenv("WFC_AUTH_MODE", "bearer")
+    monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
+    monkeypatch.setenv("WFC_REVIEWER_ID", "reviewer")
     monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
     monkeypatch.setenv("WFC_DB_PATH", str(tmp_path / "workflow-poc-unauth.sqlite3"))
     monkeypatch.setenv("PG_RUNTIME_DSN", DSN)
     open_factory = Mock()
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
+    request = SimpleNamespace(headers={"authorization": authorization})
+    ctx = SimpleNamespace(request_context=SimpleNamespace(request=request))
+    monkeypatch.setattr(type(mcp), "get_context", lambda self: ctx)
 
-    with pytest.raises(
-        ToolError, match="PostgreSQL workflow tools require authenticated"
-    ):
+    with pytest.raises(ToolError, match="workflow authorization required"):
         asyncio.run(mcp.call_tool("get_review_context", TASK))
+    open_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "subject, scopes",
+    [(None, []), ("auth0|other", ["wfc:workflow"]), (SUBJECT, ["wfc:techlead"])],
+)
+def test_denied_auth0_calls_do_not_open_postgres(
+    monkeypatch, authorized_workflow, subject, scopes
+):
+    open_factory = Mock()
+    monkeypatch.setattr(PostgresFactory, "open", open_factory)
+    user = (
+        AuthenticatedUser(
+            AccessToken(
+                token="synthetic", client_id="test", scopes=scopes, subject=subject
+            )
+        )
+        if subject is not None
+        else None
+    )
+    reset = auth_context_var.set(user)
+    try:
+        with pytest.raises(ToolError, match="workflow OAuth authorization required"):
+            asyncio.run(mcp.call_tool("get_review_context", TASK))
+    finally:
+        auth_context_var.reset(reset)
     open_factory.assert_not_called()

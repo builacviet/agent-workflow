@@ -39,12 +39,8 @@ GitHub token for the private `builacviet/agent-workflow` repo. The existing
 `my_wfc.github.GitHubVerifier` invokes `gh api`, so Docker does not inherit
 Windows `gh auth login`. Never mount the host's global gh credential store.
 
-The default `WFC_POC_NO_AUTH=0` in the sample protects all seven workflow tools.
-`ping` / `get_server_info` are public. If, for a short isolated synthetic test,
-you set `WFC_POC_NO_AUTH=1` in the local ignored file, **anyone who reaches the
-public ngrok endpoint can invoke all seven APIs**. Do not seed real history or
-copy real SQLite data into this volume. Stop the tunnel immediately afterwards.
-The path must remain exactly `/state/workflow-poc-unauth.sqlite3` in that mode.
+All seven workflow tools require authentication. `ping` and `get_server_info`
+are public in Bearer mode.
 
 ## Docker network address-pool exhaustion
 
