@@ -5,6 +5,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -13,10 +14,61 @@ from test_my_wfc import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
+from agent_workflow.composition.postgres_mcp import postgres_mcp_service
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+@pytest.mark.parametrize("require_ci", [True, False])
+def test_mcp_composition_owns_factory_and_config(require_ci):
+    config = AppConfig(
+        pg_runtime_dsn="postgresql+psycopg://user:password@localhost/test",
+        ci_gate_required=require_ci,
+    )
+    factory = Mock()
+    with patch.object(PostgresFactory, "open", return_value=factory) as open_factory:
+        with postgres_mcp_service(config) as service:
+            open_factory.assert_called_once_with(config)
+            assert isinstance(service.repository, PostgresWorkflowRepository)
+            assert service.repository.factory is factory
+            assert service.require_ci is require_ci
+            factory.close.assert_not_called()
+        factory.close.assert_called_once_with()
+
+
+def test_mcp_composition_closes_on_scope_and_construction_errors():
+    config = AppConfig(
+        pg_runtime_dsn="postgresql+psycopg://user:password@localhost/test"
+    )
+    factory = Mock()
+    with patch.object(PostgresFactory, "open", return_value=factory):
+        with pytest.raises(RuntimeError, match="scope error"):
+            with postgres_mcp_service(config):
+                raise RuntimeError("scope error")
+        factory.close.assert_called_once_with()
+        factory.reset_mock()
+        with patch(
+            "agent_workflow.composition.postgres_mcp.WorkflowService",
+            side_effect=RuntimeError("construction error"),
+        ):
+            with pytest.raises(RuntimeError, match="construction error"):
+                with postgres_mcp_service(config):
+                    pytest.fail("service must not be yielded")
+        factory.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("dsn", [None, "sqlite:///fallback.db", "invalid"])
+def test_mcp_composition_rejects_missing_or_invalid_dsn(dsn):
+    config = AppConfig.model_construct(pg_runtime_dsn=dsn)
+    with patch("agent_workflow.storage.postgres_connection.create_engine") as engine:
+        with patch("agent_workflow.domain.service.SQLiteWorkflowRepository") as sqlite:
+            with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
+                with postgres_mcp_service(config):
+                    pytest.fail("service must not be yielded")
+            engine.assert_not_called()
+            sqlite.assert_not_called()
 
 
 def test_factory_uow_deadline_hook_can_rollback_after_session_commit():
@@ -81,8 +133,14 @@ def ready(service, task_id):
 
 
 def test_service_history_and_replay(setup):
-    service, _, task_id, _ = setup
-    ready(service, task_id)
+    _, _, task_id, _ = setup
+    config = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"], ci_gate_required=False)
+    with postgres_mcp_service(config) as service:
+        ready(service, task_id)
+    with postgres_mcp_service(config) as service:
+        assert service.get_review_context(task_id)["current_head_sha"] == HEAD
+    # The fixture owns a separate factory for the remaining workflow and cleanup.
+    service, _, _, _ = setup
     with pytest.raises(WorkflowError, match="stale"):
         service.claim_review(task_id, NEXT, "lead")
     claim = service.claim_review(task_id, HEAD, "lead")
