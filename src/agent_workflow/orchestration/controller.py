@@ -107,12 +107,20 @@ def main() -> None:
     if "PG_RUNTIME_DSN" in os.environ:
         app_config = AppConfig.from_env()
         if (
-            args.ci_once == args.ci_watch
-            or args.once
-            or args.acknowledge
+            sum((args.once, args.ci_once, args.ci_watch)) != 1
+            or args.acknowledge is not None
             or args.reconciled
         ):
-            raise WorkflowError("PostgreSQL supports only --ci-once or --ci-watch")
+            raise WorkflowError(
+                "PostgreSQL supports only explicit --once, --ci-once or --ci-watch"
+            )
+        if args.once:
+            from agent_workflow.composition.postgres_dispatch_entrypoint import (
+                run_postgres_dispatch_once,
+            )
+
+            run_postgres_dispatch_once(config, app_config)
+            return
         from agent_workflow.composition.postgres_ci_entrypoint import (
             run_postgres_ci_once,
             run_postgres_ci_watch,

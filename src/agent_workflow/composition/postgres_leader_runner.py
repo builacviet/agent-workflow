@@ -40,12 +40,16 @@ def run_controller_once(
     task_ids: set[str],
     execute: Callable[[dict, dict, Callable[[], None]], str],
     timeout: int = 1800,
+    *,
+    on_finished: Callable[[str], None] | None = None,
 ) -> bool:
     """Attempt one dispatch; an active slot is retained when ownership is lost.
 
     The trusted callback receives a guard for its internal material boundaries.
     It must use that guard around its own Git/Worker/DB effects. This runner
     additionally fences the callback as a whole and never retries it.
+    Optional terminal cleanup is fenced after finish and before lock release;
+    cleanup errors retain the committed terminal state for recovery.
     """
     if assignment.repository is not dependencies.workflow:
         raise TypeError(
@@ -91,6 +95,15 @@ def run_controller_once(
             if leadership.is_held() is True:
                 _fenced(leadership, dependencies.dispatch.block, claim["dispatch_id"])
             raise
+        # Terminal state has committed. Cleanup failure must never rewrite it
+        # as BLOCKED; retain the pin for explicit operator recovery instead.
+        if on_finished is not None:
+            try:
+                _fenced(leadership, on_finished, claim["dispatch_id"])
+            except Exception:
+                raise WorkflowError(
+                    "terminal dispatch cleanup unconfirmed; reconcile engine pin"
+                ) from None
         return True
     finally:
         leadership.release()

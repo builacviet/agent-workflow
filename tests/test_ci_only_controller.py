@@ -61,7 +61,8 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(monkeypatch, tmp_path
     "flags",
     [
         [],
-        ["--once"],
+        ["--once", "--acknowledge", "x"],
+        ["--once", "--reconciled"],
         ["--ci-once", "--ci-watch"],
         ["--ci-watch", "--once"],
         ["--ci-watch", "--acknowledge", "x"],
