@@ -18,7 +18,10 @@ from test_ci_controller import FakeChecks
 from test_my_wfc import BASE, HEAD, NEXT, REPO, spec
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.composition.postgres_ci_entrypoint import run_postgres_ci_once
+from agent_workflow.composition.postgres_ci_entrypoint import (
+    run_postgres_ci_once,
+    run_postgres_ci_watch,
+)
 from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
@@ -401,6 +404,68 @@ def test_pg_ci_entrypoint_reconciles_one_real_inbox_delivery(setup):
     assert state.approved(task_id, HEAD)
     assert state.pending_events() == []
     assert len(observations(factory, task_id)) == 1
+
+
+def test_pg_ci_watch_two_passes_ack_once(setup):
+    config, factory, service, task_id, deliveries = setup
+    handoff(service, task_id, HEAD)
+    state = PostgresControllerCiState(factory)
+    state.track(task_id, PR, HEAD)
+    add_delivery(factory, deliveries[0])
+    checks = FakeChecks(head=HEAD)
+    sleeps = []
+
+    run_postgres_ci_watch(
+        {
+            "controller_github_app": {
+                "app_id": 1,
+                "installation_id": INSTALLATION,
+                "pem": "controller.pem",
+            }
+        },
+        config,
+        checks=checks,
+        sleep=sleeps.append,
+        stop=lambda: len(sleeps) == 2,
+    )
+
+    assert sleeps == [2, 2]
+    assert checks.calls > 0
+    assert state.approved(task_id, HEAD)
+    assert state.pending_events() == []
+    assert len(observations(factory, task_id)) == 1
+
+
+def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
+    config, factory, service, task_id, deliveries = setup
+    handoff(service, task_id, HEAD)
+    state = PostgresControllerCiState(factory)
+    state.track(task_id, PR, HEAD)
+    add_delivery(factory, deliveries[0])
+    checks = FakeChecks(head=HEAD)
+    leader = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
+    assert leader.try_acquire()
+    try:
+        with pytest.raises(WorkflowError, match="leadership unavailable"):
+            run_postgres_ci_watch(
+                {
+                    "controller_github_app": {
+                        "app_id": 1,
+                        "installation_id": INSTALLATION,
+                        "pem": "controller.pem",
+                    }
+                },
+                config,
+                checks=checks,
+                sleep=lambda _: pytest.fail("denied leader must not retry"),
+            )
+    finally:
+        leader.release()
+
+    assert checks.calls == 0
+    assert state.pending_events() == [deliveries[0]]
+    assert not state.approved(task_id, HEAD)
+    assert observations(factory, task_id) == []
 
 
 def test_pending_delivery_order_concurrent_settlement_and_fk(setup):

@@ -33,13 +33,14 @@ def test_ci_watch_mode_is_separate_from_dev_dispatch(monkeypatch):
     assert calls == [True]
 
 
-def test_explicit_pg_routes_before_sqlite_or_coder_runtime(monkeypatch, tmp_path):
+@pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
+def test_explicit_pg_routes_before_sqlite_or_coder_runtime(monkeypatch, tmp_path, mode):
     config_file = tmp_path / "controller.json"
     config_file.write_text(json.dumps({"controller_github_app": {}}))
     monkeypatch.setenv(
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
-    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--ci-once"])
+    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
@@ -47,7 +48,7 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(monkeypatch, tmp_path
     calls = []
     monkeypatch.setattr(
         postgres_ci_entrypoint,
-        "run_postgres_ci_once",
+        "run_postgres_ci_once" if mode == "--ci-once" else "run_postgres_ci_watch",
         lambda config, app_config: calls.append(app_config.pg_runtime_dsn),
     )
 
@@ -60,9 +61,11 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(monkeypatch, tmp_path
     "flags",
     [
         [],
-        ["--ci-watch"],
         ["--once"],
         ["--ci-once", "--ci-watch"],
+        ["--ci-watch", "--once"],
+        ["--ci-watch", "--acknowledge", "x"],
+        ["--ci-watch", "--reconciled"],
         ["--ci-once", "--once"],
         ["--ci-once", "--acknowledge", "x"],
         ["--ci-once", "--reconciled"],
@@ -78,7 +81,7 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags):
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
-    with pytest.raises(WorkflowError, match="PostgreSQL supports only --ci-once"):
+    with pytest.raises(WorkflowError, match="PostgreSQL supports only"):
         controller.main()
 
 
@@ -158,4 +161,102 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
 
     with pytest.raises(RuntimeError, match="failed"):
         postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=Mock())
+    factory.__exit__.assert_called_once()
+
+
+def _watch_setup(monkeypatch):
+    factory = Mock()
+    factory.__enter__ = Mock(return_value=factory)
+    factory.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(
+        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
+    )
+    watcher = object()
+    monkeypatch.setattr(
+        postgres_ci_entrypoint,
+        "compose_postgres_controller",
+        lambda _: Namespace(ci_watcher=watcher),
+    )
+    config = {
+        "controller_github_app": {
+            "app_id": 1,
+            "installation_id": 17,
+            "pem": "controller.pem",
+        }
+    }
+    app_config = AppConfig(
+        pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    return factory, watcher, config, app_config
+
+
+def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
+    factory, watcher, config, app_config = _watch_setup(monkeypatch)
+    verdicts = ["BLOCKED"] * 7 + ["SUCCESS", "SUCCESS"]
+    runner = Mock(side_effect=[(Namespace(verdict=verdict),) for verdict in verdicts])
+    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
+    sleeps = []
+    checks = Mock()
+
+    postgres_ci_entrypoint.run_postgres_ci_watch(
+        config,
+        app_config,
+        checks=checks,
+        sleep=sleeps.append,
+        stop=lambda: runner.call_count == len(verdicts),
+    )
+
+    assert [call.kwargs["startup"] for call in runner.call_args_list] == [
+        True,
+        *([False] * 8),
+    ]
+    assert all(
+        call.args == (watcher, checks) and call.kwargs["installation_id"] == 17
+        for call in runner.call_args_list
+    )
+    assert sleeps == [4, 8, 16, 32, 60, 60, 60, 2]
+    factory.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("lost leader")])
+def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure):
+    factory, _, config, app_config = _watch_setup(monkeypatch)
+    runner = Mock(side_effect=[(Namespace(verdict="SUCCESS"),), failure])
+    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
+    checks = Mock()
+    sleeps = []
+
+    with pytest.raises((WorkflowError, RuntimeError)):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config, app_config, checks=checks, sleep=sleeps.append
+        )
+
+    assert runner.call_count == 2
+    assert sleeps == [2]
+    checks.get_pull_request.assert_not_called()
+    factory.__exit__.assert_called_once()
+
+
+def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
+    factory, _, config, app_config = _watch_setup(monkeypatch)
+    runner = Mock(side_effect=OSError("database unavailable"))
+    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
+    with pytest.raises(OSError, match="database unavailable"):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config, app_config, checks=Mock(), sleep=Mock()
+        )
+    runner.assert_called_once()
+    factory.__exit__.assert_called_once()
+
+    factory.__exit__.reset_mock()
+    runner.reset_mock(side_effect=True)
+    runner.return_value = ()
+    with pytest.raises(KeyboardInterrupt):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config,
+            app_config,
+            checks=Mock(),
+            sleep=Mock(side_effect=KeyboardInterrupt),
+        )
+    runner.assert_called_once()
     factory.__exit__.assert_called_once()
