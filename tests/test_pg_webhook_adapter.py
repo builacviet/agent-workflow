@@ -1,11 +1,14 @@
 """PostgreSQL webhook inbox contract and live transaction tests."""
 
+import hmac
+import http.client
+import json
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from hashlib import sha256
-from threading import Barrier
+from threading import Barrier, Event, Thread
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.composition import webhook_entrypoint
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -228,3 +232,93 @@ def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, deliver
         finally:
             event.remove(engine, "before_cursor_execute", fail_read)
         assert inbox.get(delivery.delivery_id) == delivery
+
+
+def test_live_signed_http_pg_selection_and_replay(
+    config, delivery, monkeypatch, tmp_path
+):
+    secret = b"z" * 32
+    secret_path = tmp_path / "webhook-secret"
+    secret_path.write_bytes(secret)
+    monkeypatch.setenv("PG_RUNTIME_DSN", config.pg_runtime_dsn)
+    monkeypatch.setenv("WFC_WEBHOOK_SECRET_FILE", str(secret_path))
+    monkeypatch.setenv("WFC_CONTROLLER_INSTALLATION_ID", "3")
+    monkeypatch.setenv("WFC_WEBHOOK_PORT", "0")
+    monkeypatch.delenv("WFC_WEBHOOK_DB_PATH", raising=False)
+    ready = Event()
+    servers = []
+    failures = []
+    original_server = webhook_entrypoint.WebhookHTTPServer
+
+    class ObservedServer(original_server):
+        def serve_forever(self, poll_interval=0.5):
+            ready.set()
+            return super().serve_forever(poll_interval=poll_interval)
+
+    monkeypatch.setattr(webhook_entrypoint, "WebhookHTTPServer", ObservedServer)
+
+    def run():
+        try:
+            webhook_entrypoint.main()
+        except Exception as error:
+            failures.append(error)
+
+    original_init = ObservedServer.__init__
+
+    def capture_server(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        servers.append(self)
+
+    monkeypatch.setattr(ObservedServer, "__init__", capture_server)
+    thread = Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        assert ready.wait(10), failures
+        port = servers[0].server_address[1]
+
+        def post(body, delivery_id, signature=True):
+            headers = {
+                "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": delivery_id,
+                "X-Hub-Signature-256": "sha256="
+                + hmac.digest(secret, body, "sha256").hex(),
+            }
+            if not signature:
+                headers.pop("X-Hub-Signature-256")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                conn.request("POST", "/webhooks/github", body, headers)
+                response = conn.getresponse()
+                response.read()
+                return response.status
+            finally:
+                conn.close()
+
+        def body(installation=3, number=delivery.subject_id):
+            return json.dumps(
+                {
+                    "action": "synchronize",
+                    "repository": {"full_name": "builacviet/agent-workflow"},
+                    "installation": {"id": installation},
+                    "number": number,
+                    "pull_request": {"head": {"sha": delivery.head_sha}},
+                }
+            ).encode()
+
+        assert post(body(), delivery.delivery_id, signature=False) == 403
+        assert post(body(installation=4), delivery.delivery_id) == 403
+        with PostgresFactory.open(config) as check:
+            assert PostgresWebhookInbox(check).get(delivery.delivery_id) is None
+        assert post(body(), delivery.delivery_id) == 202
+        with PostgresFactory.open(config) as check:
+            persisted = PostgresWebhookInbox(check).get(delivery.delivery_id)
+            assert persisted is not None
+            assert persisted.subject_id == delivery.subject_id
+        assert post(body(), delivery.delivery_id) == 200
+        assert post(body(number=delivery.subject_id + 1), delivery.delivery_id) == 409
+    finally:
+        if servers:
+            servers[0].shutdown()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert not failures
