@@ -2,34 +2,9 @@
 
 import hmac
 import os
-from pathlib import Path
-
-
-def poc_unauthenticated_enabled() -> bool:
-    """Explicitly unsafe POC mode, restricted to a dedicated disposable SQLite file.
-
-    This does NOT make an Internet-exposed MCP endpoint private. Anyone holding
-    the tunnel URL may invoke all seven workflow tools while this mode is active.
-    """
-    if os.environ.get("WFC_POC_NO_AUTH") != "1":
-        return False
-    raw_path = os.environ.get("WFC_DB_PATH", "")
-    path = Path(raw_path).expanduser() if raw_path else None
-    if (
-        path is None
-        or not path.is_absolute()
-        or path.name != "workflow-poc-unauth.sqlite3"
-    ):
-        raise PermissionError(
-            "WFC_POC_NO_AUTH requires WFC_DB_PATH to be an absolute "
-            "path named workflow-poc-unauth.sqlite3"
-        )
-    return True
 
 
 def authorize_request(request) -> str:
-    if poc_unauthenticated_enabled():
-        return "poc-unauthenticated"
     token = os.environ.get("WFC_AUTH_TOKEN", "")
     reviewer = os.environ.get("WFC_REVIEWER_ID", "")
     if len(token) < 32 or not reviewer or request is None:
@@ -80,10 +55,7 @@ def authorize_techlead() -> None:
     """Require the Auth0 middleware's verified identity and a distinct TL scope."""
     from mcp.server.auth.middleware.auth_context import get_access_token
 
-    if (
-        os.environ.get("WFC_AUTH_MODE", "bearer").strip() != "auth0"
-        or os.environ.get("WFC_POC_NO_AUTH") == "1"
-    ):
+    if os.environ.get("WFC_AUTH_MODE", "bearer").strip() != "auth0":
         raise PermissionError("Tech Lead tools require Auth0 OAuth")
     verified = get_access_token()
     subject = os.environ.get("WFC_AUTH0_ALLOWED_SUB", "").strip()

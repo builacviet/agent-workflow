@@ -41,7 +41,6 @@ overwrite an already-running Compose service.
 - `WFC_AUTH0_SCOPE=wfc:workflow`: one required permission.
 - `WFC_PUBLIC_HOST=caddy-reopen-scotch.ngrok-free.dev`: DNS host only.
   The externally accessible resource URL is `https://HOST/mcp`.
-- `WFC_POC_NO_AUTH=0`: **must not** be public bypass mode.
 - `WFC_DB_PATH`: explicit absolute path for the isolated operator-owned
   test SQLite. If eventually testing the full Controller workflow, both MCP
   and Controller must use **the same physical database**, not copied files.

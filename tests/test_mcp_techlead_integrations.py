@@ -68,7 +68,6 @@ def auth_env(monkeypatch):
         monkeypatch.delenv(setting, raising=False)
     for setting, value in {
         "WFC_AUTH_MODE": "auth0",
-        "WFC_POC_NO_AUTH": "0",
         "WFC_PUBLIC_HOST": "test.example.org",
         "WFC_AUTH0_ISSUER": "https://example.us.auth0.com/",
         "WFC_AUTH0_ALLOWED_SUB": "auth0|test",
@@ -115,7 +114,6 @@ def test_optional_tools_preserve_nine_legacy_schemas(auth_env, monkeypatch):
         ("wrong_subject", "OAuth authorization required"),
         ("scope_collision", "OAuth authorization required"),
         ("bearer", "require Auth0"),
-        ("anonymous", "require Auth0"),
         ("disabled", "connection disabled or invalid"),
     ],
 )
@@ -135,8 +133,6 @@ def test_every_tool_checks_auth0_and_config_before_io(
         subject = "auth0|someone"
     if case == "bearer":
         monkeypatch.setenv("WFC_AUTH_MODE", "bearer")
-    if case == "anonymous":
-        monkeypatch.setenv("WFC_POC_NO_AUTH", "1")
     verified = AccessToken(
         token="synthetic", client_id="test", scopes=scopes, subject=subject
     )
@@ -828,14 +824,10 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
         assert upstream_calls == [BOT_ID]
 
 
-@pytest.mark.parametrize("poc_no_auth", ["0", "1"])
-def test_legacy_modes_have_nine_tools_and_no_oauth_discovery(
-    auth_env, monkeypatch, poc_no_auth
-):
+def test_bearer_mode_has_nine_tools_and_no_oauth_discovery(auth_env, monkeypatch):
     from starlette.testclient import TestClient
 
     monkeypatch.setenv("WFC_AUTH_MODE", "bearer")
-    monkeypatch.setenv("WFC_POC_NO_AUTH", poc_no_auth)
     legacy = _server()
     assert {tool.name for tool in asyncio.run(legacy.list_tools())} == LEGACY
     with TestClient(legacy.streamable_http_app()) as client:

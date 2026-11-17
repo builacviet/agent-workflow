@@ -147,7 +147,6 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, monkeypatch):
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|pg-test")
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
-    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
 
     async def invoke_tools():
         token = AccessToken(

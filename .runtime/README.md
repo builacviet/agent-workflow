@@ -51,7 +51,6 @@ aliases, and deprecation before deleting the old names.
 | `WFC_OAUTH_EXPECTED_CLIENT_ID` | Exact trusted OAuth / ChatGPT CIMD client identity URL | Operator, `controller-mcp.env` |
 | `WFC_AUTH0_SCOPE` | Required scope (normally `wfc:workflow`) | `controller-mcp.env` |
 | `WFC_AUTH0_DIAGNOSTICS` | Temporary diagnostic messages; keep off normally | `controller-mcp.env` |
-| `WFC_POC_NO_AUTH` | **Unsafe** unauthenticated POC switch; controller stack forces `0` | Compose |
 | `WFC_AUTH_TOKEN`, `WFC_REVIEWER_ID` | Legacy static Bearer credentials; **not used in Auth0 mode** | Legacy-only operator configuration |
 | `WFC_CONTROLLER_INSTALLATION_ID` | Read-only Controller **GitHub App installation ID**, not App ID | `controller-webhook.env` |
 | `WFC_WEBHOOK_DB_PATH`, `WFC_WEBHOOK_SECRET_FILE`, `WFC_WEBHOOK_PORT` | Webhook receiver database, HMAC secret path, listening port | Compose, not operator env file |
