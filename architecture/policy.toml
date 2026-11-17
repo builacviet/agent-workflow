@@ -125,11 +125,6 @@ module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
-path = "src/agent_workflow/mcp/tools.py"
-module = "agent_workflow.domain.service"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
 path = "src/agent_workflow/orchestration/controller.py"
 module = "agent_workflow.domain.service"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"

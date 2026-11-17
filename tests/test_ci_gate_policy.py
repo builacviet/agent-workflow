@@ -4,54 +4,49 @@ Tests never access live GitHub, Docker, credentials or production state.
 """
 
 from argparse import Namespace
+from unittest.mock import Mock
 
 import pytest
-
 from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.domain.service import WorkflowService, default_service
-from agent_workflow.integrations.ci_gate import CiEvidence
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError
-from agent_workflow.mcp.tools import configured_service_factory
+from agent_workflow.integrations.github import REPOSITORY
 from agent_workflow.orchestration import controller
-from agent_workflow.storage.ci_state import ControllerCiState
-
+from agent_workflow.storage.postgres_connection import PostgresFactory
 
 BASE = "a" * 40
 HEAD = "b" * 40
 
 
 def _ready(service):
-    service.provision_task({
-        "task_id": "R101",
-        "title": "Local CI policy fixture",
-        "description": "Synthetic policy test",
-        "acceptance_criteria": ["CI authorization must be exact-HEAD"],
-        "definition_of_done": "CI gate checked",
-        "repository": REPOSITORY,
-        "branch": "codex/r1-01",
-        "base_sha": BASE,
-        "requested_effort": "medium",
-        "risk_level": "low",
-        "require_verified_effort": False,
-        "context_paths": ["docs/handoff.md"],
-        "synthetic": True,
-    })
-    service.register_task_handoff(
-        "R101", REPOSITORY, "codex/r1-01", BASE, HEAD,
-        "docs/handoff.md", "synthetic tests passed",
+    service.provision_task(
+        {
+            "task_id": "R101",
+            "title": "Local CI policy fixture",
+            "description": "Synthetic policy test",
+            "acceptance_criteria": ["CI authorization must be exact-HEAD"],
+            "definition_of_done": "CI gate checked",
+            "repository": REPOSITORY,
+            "branch": "codex/r1-01",
+            "base_sha": BASE,
+            "requested_effort": "medium",
+            "risk_level": "low",
+            "require_verified_effort": False,
+            "context_paths": ["docs/handoff.md"],
+            "synthetic": True,
+        }
     )
-
-
-def _ci_success(path):
-    state = ControllerCiState(path)
-    state.track("R101", 23, HEAD)
-    state.record(CiEvidence(
-        "R101", REPOSITORY, 17, 23, HEAD, HEAD, HEAD,
-        "Python tests", "github-actions", "SUCCESS", "REQUIRED_CHECK_PASSED",
-        901, 902, 1, "2026-11-11T00:00:00Z", "2026-11-11T00:01:00Z",
-    ))
+    service.register_task_handoff(
+        "R101",
+        REPOSITORY,
+        "codex/r1-01",
+        BASE,
+        HEAD,
+        "docs/handoff.md",
+        "synthetic tests passed",
+    )
 
 
 @pytest.mark.parametrize(
@@ -59,7 +54,9 @@ def _ci_success(path):
     [(None, True), ("0", False), ("1", True)],
 )
 def test_loader_defaults_to_ci_required_and_parses_literal_bit(
-    monkeypatch, env_value, expected,
+    monkeypatch,
+    env_value,
+    expected,
 ):
     if env_value is None:
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
@@ -79,34 +76,26 @@ def test_loader_rejects_nonliteral_values(monkeypatch, invalid):
     ("env_value", "expected"),
     [(None, True), ("0", False), ("1", True)],
 )
-def test_mcp_factory_injects_policy_and_exact_head_check(
-    tmp_path, monkeypatch, env_value, expected,
-):
-    path = tmp_path / "workflow.db"
-    monkeypatch.setenv("WFC_DB_PATH", str(path))
+def test_mcp_provider_injects_ci_policy(monkeypatch, env_value, expected):
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@localhost/test"
+    )
+    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
+    factory = Mock()
+    monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
     if env_value is None:
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
 
-    service = configured_service_factory()
-    assert service.require_ci is expected
-    _ready(service)
-    if expected:
-        assert service.list_review_queue() == []
-        with pytest.raises(WorkflowError, match="exact-HEAD CI"):
-            service.claim_review("R101", HEAD, "reviewer")
-        _ci_success(path)
-    else:
-        # Deliberate local bypass without fake GitHub checks.
-        assert len(service.list_review_queue()) == 1
-
-    assert service.list_review_queue()[0]["head_sha"] == HEAD
-    assert service.claim_review("R101", HEAD, "reviewer")["reviewed_sha"] == HEAD
+    with postgres_workflow_provider() as service:
+        assert service.require_ci is expected
+    factory.close.assert_called_once_with()
 
 
 def test_direct_service_is_fail_closed_even_when_env_requests_bypass(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     path = tmp_path / "workflow.db"
     monkeypatch.setenv("WFC_DB_PATH", str(path))
@@ -131,7 +120,10 @@ def test_direct_service_is_fail_closed_even_when_env_requests_bypass(
     [(None, True), ("0", False), ("1", True)],
 )
 def test_controller_injects_same_policy_without_docker_launch(
-    tmp_path, monkeypatch, env_value, expected,
+    tmp_path,
+    monkeypatch,
+    env_value,
+    expected,
 ):
     from agent_workflow.runners import coder_runtime
 
@@ -165,15 +157,17 @@ def test_controller_injects_same_policy_without_docker_launch(
 
 
 def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from agent_workflow.runners import coder_runtime
 
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "false")
+    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
     path = tmp_path / "controller.db"
     monkeypatch.setenv("WFC_DB_PATH", str(path))
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
-        configured_service_factory()
+        postgres_workflow_provider()
     assert not path.exists()
 
     class MustNotLaunch:
@@ -197,7 +191,9 @@ def test_invalid_service_ci_policy_type_fails_before_database(tmp_path, invalid)
     assert not path.exists()
 
 
-def test_app_config_can_validate_supplied_mapping_without_reading_process_env(monkeypatch):
+def test_app_config_can_validate_supplied_mapping_without_reading_process_env(
+    monkeypatch,
+):
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     local_config = AppConfig.from_env({"WFC_CI_GATE_REQUIRED": "0"})
     assert local_config.ci_gate_required is False

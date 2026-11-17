@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 
 import httpx
@@ -16,6 +17,7 @@ from agent_workflow.app_config import (
     TechLeadGitHubConfig,
     TechLeadNotionConfig,
 )
+from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.mcp.server import create_mcp_server, get_server_info, ping
 from agent_workflow.mcp.techlead_github import TechLeadError, TechLeadGitHub
 from agent_workflow.mcp.techlead_notion import TechLeadNotion
@@ -76,11 +78,11 @@ def auth_env(monkeypatch):
         monkeypatch.setenv(setting, value)
 
 
-def _server(**registration_options):
+def _server(service_provider=postgres_workflow_provider):
     mcp = create_mcp_server()
     mcp.tool()(ping)
     mcp.tool()(get_server_info)
-    register_tools(mcp, **registration_options)
+    register_tools(mcp, service_provider)
     return mcp
 
 
@@ -726,7 +728,7 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
             assert requested_effort == "medium"
             return [{"task_id": "fixture"}]
 
-    server = _server(service_factory=FakeWorkflow)
+    server = _server(lambda: nullcontext(FakeWorkflow()))
     assert server.settings.auth.required_scopes == [scope]
     server.settings.json_response = True
     server.settings.stateless_http = True

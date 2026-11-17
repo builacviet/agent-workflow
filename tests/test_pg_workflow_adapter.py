@@ -1,5 +1,7 @@
 """Live PostgreSQL workflow contract checks on a disposable database."""
 
+import asyncio
+import json
 import os
 import time
 import uuid
@@ -8,6 +10,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_my_wfc import BASE, HEAD, NEXT, REPO, payload, spec
@@ -17,6 +22,7 @@ from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_mcp import postgres_mcp_service
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
@@ -130,6 +136,55 @@ def ready(service, task_id):
     service.register_task_handoff(
         task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
     )
+
+
+def test_mcp_handoff_persists_across_tool_invocations(setup, monkeypatch):
+    service, _, task_id, _ = setup
+    service.provision_task(spec(task_id))
+    assert service.get_review_context(task_id)["current_head_sha"] is None
+    monkeypatch.setenv("PG_RUNTIME_DSN", os.environ["PG_TEST_DSN"])
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+    monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
+    monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|pg-test")
+    monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
+    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
+
+    async def invoke_tools():
+        token = AccessToken(
+            token="synthetic",
+            client_id="test",
+            scopes=["wfc:workflow"],
+            subject="auth0|pg-test",
+        )
+        reset = auth_context_var.set(AuthenticatedUser(token))
+        try:
+            handoff = await mcp.call_tool(
+                "register_task_handoff",
+                {
+                    "task_id": task_id,
+                    "repository": REPO,
+                    "branch": "task/test",
+                    "base_sha": BASE,
+                    "new_head_sha": HEAD,
+                    "handoff_file_path": "docs/handoff.md",
+                    "test_summary": "PostgreSQL MCP fixture",
+                },
+            )
+            context = await mcp.call_tool("get_review_context", {"task_id": task_id})
+        finally:
+            auth_context_var.reset(reset)
+        return json.loads(handoff[0].text), json.loads(context[0].text)
+
+    handoff, context = asyncio.run(invoke_tools())
+    assert handoff == {
+        "task_id": task_id,
+        "status": "READY_IN_REVIEW",
+        "head_sha": HEAD,
+    }
+    assert context["task_id"] == task_id
+    assert context["current_head_sha"] == HEAD
+    assert context["status"] == "READY_IN_REVIEW"
+    assert context["events"][-1]["action"] == "HANDOFF"
 
 
 def test_service_history_and_replay(setup):

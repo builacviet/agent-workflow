@@ -7,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 
+from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.mcp.security import TECHLEAD_SCOPE, poc_unauthenticated_enabled
 from agent_workflow.mcp.tools import register_tools
 
@@ -124,15 +125,13 @@ def get_server_info() -> dict:
 mcp = create_mcp_server()
 mcp.tool()(ping)
 mcp.tool()(get_server_info)
-register_tools(mcp)
+register_tools(mcp, postgres_workflow_provider)
 
 
 def main() -> None:
     if poc_unauthenticated_enabled():
         print(
-            "WARNING: POC NO-AUTH MODE: all seven workflow tools are callable "
-            "without credentials by anyone who can reach this endpoint. "
-            "Use ONLY an isolated disposable SQLite DB and stop the tunnel after testing.",
+            "WARNING: WFC_POC_NO_AUTH=1 disables PostgreSQL workflow tool calls.",
             flush=True,
         )
     mcp.run(transport="streamable-http")
