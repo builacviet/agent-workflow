@@ -171,11 +171,17 @@ def _watch_setup(monkeypatch):
     monkeypatch.setattr(
         postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
     )
-    watcher = object()
+    watchers = []
+
+    def compose(_):
+        watcher = object()
+        watchers.append(watcher)
+        return Namespace(ci_watcher=watcher)
+
     monkeypatch.setattr(
         postgres_ci_entrypoint,
         "compose_postgres_controller",
-        lambda _: Namespace(ci_watcher=watcher),
+        compose,
     )
     config = {
         "controller_github_app": {
@@ -187,11 +193,11 @@ def _watch_setup(monkeypatch):
     app_config = AppConfig(
         pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
-    return factory, watcher, config, app_config
+    return factory, watchers, config, app_config
 
 
 def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
-    factory, watcher, config, app_config = _watch_setup(monkeypatch)
+    factory, watchers, config, app_config = _watch_setup(monkeypatch)
     verdicts = ["BLOCKED"] * 7 + ["SUCCESS", "SUCCESS"]
     runner = Mock(side_effect=[(Namespace(verdict=verdict),) for verdict in verdicts])
     monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
@@ -210,11 +216,14 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
         True,
         *([False] * 8),
     ]
+    assert len(watchers) == len(verdicts)
+    assert len({id(watcher) for watcher in watchers}) == len(verdicts)
     assert all(
         call.args == (watcher, checks) and call.kwargs["installation_id"] == 17
-        for call in runner.call_args_list
+        for call, watcher in zip(runner.call_args_list, watchers, strict=True)
     )
     assert sleeps == [4, 8, 16, 32, 60, 60, 60, 2]
+    factory.__enter__.assert_called_once()
     factory.__exit__.assert_called_once()
 
 

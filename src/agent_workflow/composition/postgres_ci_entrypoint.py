@@ -47,8 +47,8 @@ def run_postgres_ci_watch(
     delay = 2
     startup = True
     with PostgresFactory.open(app_config) as factory:
-        watcher = compose_postgres_controller(factory).ci_watcher
         while stop is None or not stop():
+            watcher = compose_postgres_controller(factory).ci_watcher
             observations = run_ci_watcher_once(
                 watcher, checks, installation_id=installation_id, startup=startup
             )
