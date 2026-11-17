@@ -10,7 +10,7 @@ import stat
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
@@ -21,7 +21,11 @@ from agent_workflow.integrations.github import (
     WorkflowError,
     canonical_repository,
 )
-from agent_workflow.runners.agent_runtime import AgentRuntime
+from agent_workflow.runners.agent_runtime import (
+    AgentRuntime,
+    CiTracking,
+    DispatchEvidence,
+)
 from agent_workflow.runners.runtime_plugins import (
     AgentRuntimePlugin,
     CodexCLIPlugin,
@@ -314,10 +318,47 @@ class CoderRuntime:
         service: WorkflowService,
         *,
         plugins: Iterable[AgentRuntimePlugin] = (),
+        dispatch: DispatchEvidence | None = None,
+        ci: CiTracking | None = None,
+        leadership_guard: Callable[[], bool] | None = None,
     ) -> None:
+        app_config = AppConfig.from_env()
+        injected = (
+            dispatch is not None or ci is not None or leadership_guard is not None
+        )
+        if injected:
+            if (
+                service is None
+                or dispatch is None
+                or not callable(getattr(dispatch, "is_pre_launch", None))
+                or not callable(getattr(dispatch, "retire_pre_launch", None))
+                or not callable(getattr(dispatch, "record_runtime_evidence", None))
+                or ci is None
+                or not callable(getattr(ci, "track", None))
+                or not callable(leadership_guard)
+            ):
+                raise TypeError(
+                    "Worker requires dispatch evidence, CI tracking and leadership"
+                )
+        else:
+            if app_config.pg_runtime_dsn is not None or (
+                isinstance(service, WorkflowService)
+                and not callable(getattr(service.repository, "raw_transaction", None))
+            ):
+                raise TypeError("PostgreSQL Worker state must be injected")
+            self._check_legacy_fences(config, service)
+            dispatch = DispatchLedger(service)
+            ci = _SqliteCiTracking(service)
+
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
-        state_dir = AppConfig.from_env().sandbox_state_dir
+        self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
+        self.agent_runtime = AgentRuntime(
+            self, dispatch, ci, leadership_guard, require_ci_tracking=injected
+        )
+
+    @staticmethod
+    def _check_legacy_fences(config: dict, service: WorkflowService) -> None:
         databases = (
             config.get("database"),
             getattr(getattr(service, "repository", None), "db_path", None),
@@ -341,10 +382,6 @@ class CoderRuntime:
                 raise WorkflowError(
                     "legacy sandbox fences require operator recovery before startup"
                 )
-        self.sandbox = SandboxManager(fence_dir=state_dir)
-        self.agent_runtime = AgentRuntime(
-            self, DispatchLedger(service), _SqliteCiTracking(service)
-        )
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
         runtime = self.config.get("runtime", "codex")
@@ -377,8 +414,10 @@ class CoderRuntime:
             output = self.docker(claim, source, "code", prompt, code_plan=plan)
             return self.registry.result(request, output)
 
+        policy = SandboxPolicy(timeout_seconds=self._remaining_seconds(claim))
+        self.agent_runtime.require_leadership()
         launch = self.sandbox.run(
-            SandboxPolicy(timeout_seconds=self._remaining_seconds(claim)),
+            policy,
             dispatch_id=claim["dispatch_id"],
             workspace=source,
             image=self.config["runtime_image"],
@@ -402,11 +441,13 @@ class CoderRuntime:
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
+        self.agent_runtime.require_leadership()
         if self.agent_runtime.dispatch.is_pre_launch(dispatch_id):
             if self.sandbox.has_launch_records(dispatch_id):
                 raise WorkflowError("pre-launch evidence conflicts with Docker records")
             return
         host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
+        self.agent_runtime.require_leadership()
         with cleanup_budget(), _bind_host(host):
             _assert_daemon(daemon_id)
             self.stop(dispatch_id)
@@ -460,6 +501,7 @@ class CoderRuntime:
         host = _DOCKER_HOST.get()
         if host is None:
             # The standalone probe/test entry point also needs a durable pin.
+            self.agent_runtime.require_leadership()
             existing = self.sandbox._engine_path(dispatch_id).exists()
             if (
                 existing
@@ -474,6 +516,7 @@ class CoderRuntime:
             )
             with _bind_host(host):
                 if not existing:
+                    self.agent_runtime.require_leadership()
                     self._record_engine(dispatch_id, host, _require_engine())
                 return self._docker_bound(claim, stage, mode, prompt, code_plan)
         return self._docker_bound(claim, stage, mode, prompt, code_plan)
@@ -549,9 +592,11 @@ class CoderRuntime:
             self.config["image"],
             *command,
         ]
+        self.agent_runtime.require_leadership()
         return run_container(args, prompt, remaining)
 
     def execute(self, claim: dict, context: dict) -> str:
+        self.agent_runtime.require_leadership()
         request = self._code_request(claim)
         plan = self.registry.plan(request)
         approved_image_id = self.registry.approved_image_id(request)
@@ -559,22 +604,27 @@ class CoderRuntime:
             raise WorkflowError("explicit sandbox image required for runtime plugin")
         host = _selected_host()
         with _bind_host(host):
+            self.agent_runtime.require_leadership()
             daemon_id = _require_engine()
             self._record_engine(claim["dispatch_id"], host, daemon_id)
             result = self._execute_bound(
                 claim, context, request, plan, approved_image_id
             )
+            self.agent_runtime.require_leadership()
             _assert_daemon(daemon_id)
+            self.agent_runtime.require_leadership()
             return result
 
     def _record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
         if self.service is not None:
             self.agent_runtime.require_leadership()
             self.agent_runtime.dispatch.retire_pre_launch(dispatch_id)
+        self.agent_runtime.require_leadership()
         self.sandbox.record_engine(dispatch_id, host, daemon_id)
 
     def release_engine(self, dispatch_id: str) -> None:
         """Drop the pin only after the dispatch ledger reaches a terminal state."""
+        self.agent_runtime.require_leadership()
         self.sandbox.clear_engine(dispatch_id)
 
     def _execute_bound(
