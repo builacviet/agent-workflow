@@ -1,5 +1,7 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
 
+from contextlib import contextmanager
+
 from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, TextContent
@@ -7,7 +9,6 @@ from pydantic import StrictInt
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.contracts import Submission
-from agent_workflow.domain.service import default_service
 from agent_workflow.mcp.security import (
     TECHLEAD_SCOPE,
     TechLeadScopeRequired,
@@ -18,45 +19,44 @@ from agent_workflow.mcp.techlead_github import TechLeadGitHub
 from agent_workflow.mcp.techlead_notion import TechLeadNotion
 
 
-def configured_service_factory():
-    """Read ENV only when constructing a service, not inside domain/use cases."""
-    return default_service(require_ci=AppConfig.from_env().ci_gate_required)
+def register_tools(mcp, service_provider):
+    """Use a fresh service context for each authorized workflow tool call."""
 
-
-def register_tools(mcp, service_factory=configured_service_factory):
+    @contextmanager
     def service(ctx):
         actor = authorize_context(ctx)
-        return service_factory(), actor
+        with service_provider() as engine:
+            yield engine, actor
 
     @mcp.tool()
     def list_review_queue(ctx: Context, requested_effort: str | None = None) -> dict:
         """Authenticated: list reviewable tasks, optionally filtered by requested effort."""
-        engine, _ = service(ctx)
-        return {"tasks": engine.list_review_queue(requested_effort)}
+        with service(ctx) as (engine, _):
+            return {"tasks": engine.list_review_queue(requested_effort)}
 
     @mcp.tool()
     def get_review_context(task_id: str, ctx: Context) -> dict:
         """Authenticated: full task, immutable prior reviews/findings and GitHub references."""
-        engine, _ = service(ctx)
-        return engine.get_review_context(task_id)
+        with service(ctx) as (engine, _):
+            return engine.get_review_context(task_id)
 
     @mcp.tool()
     def claim_review(task_id: str, expected_head_sha: str, ctx: Context) -> dict:
         """Authenticated mutation: atomically lease the exact current task SHA."""
-        engine, actor = service(ctx)
-        return engine.claim_review(task_id, expected_head_sha, actor)
+        with service(ctx) as (engine, actor):
+            return engine.claim_review(task_id, expected_head_sha, actor)
 
     @mcp.tool()
     def submit_review(submission: Submission, ctx: Context) -> dict:
         """Authenticated mutation: submit structured verdict using claim token as idempotency identity."""
-        engine, actor = service(ctx)
-        return engine.submit_review(submission.model_dump(), actor)
+        with service(ctx) as (engine, actor):
+            return engine.submit_review(submission.model_dump(), actor)
 
     @mcp.tool()
     def get_review_result(task_id: str, ctx: Context) -> dict:
         """Authenticated: persisted results, resolution history and approval validity."""
-        engine, _ = service(ctx)
-        return engine.get_review_result(task_id)
+        with service(ctx) as (engine, _):
+            return engine.get_review_result(task_id)
 
     @mcp.tool()
     def register_task_handoff(
@@ -70,22 +70,22 @@ def register_tools(mcp, service_factory=configured_service_factory):
         ctx: Context,
     ) -> dict:
         """Authenticated mutation: record reported handoff for a locally authorized task; no remote verification."""
-        engine, _ = service(ctx)
-        return engine.register_task_handoff(
-            task_id,
-            repository,
-            branch,
-            base_sha,
-            new_head_sha,
-            handoff_file_path,
-            test_summary,
-        )
+        with service(ctx) as (engine, _):
+            return engine.register_task_handoff(
+                task_id,
+                repository,
+                branch,
+                base_sha,
+                new_head_sha,
+                handoff_file_path,
+                test_summary,
+            )
 
     @mcp.tool()
     def get_coder_assignment(task_id: str, ctx: Context) -> dict:
         """Authenticated read only: task and unresolved findings; never dispatch Codex."""
-        engine, _ = service(ctx)
-        return engine.get_coder_assignment(task_id)
+        with service(ctx) as (engine, _):
+            return engine.get_coder_assignment(task_id)
 
     if mcp.settings.auth is None:
         return
