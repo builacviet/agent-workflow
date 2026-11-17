@@ -18,6 +18,7 @@ from test_ci_controller import FakeChecks
 from test_my_wfc import BASE, HEAD, NEXT, REPO, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.composition.postgres_ci_entrypoint import (
     run_postgres_ci_once,
     run_postgres_ci_watch,
@@ -41,6 +42,7 @@ from agent_workflow.storage.postgres_models import (
     CIObservation,
     CIProcessedDelivery,
     CITask,
+    ReviewAttempt,
     Task,
     TaskEvent,
     WebhookInboxRow,
@@ -78,12 +80,20 @@ def setup():
             yield config, factory, service, task_id, deliveries
         finally:
             with factory.transaction() as conn:
-                for row in (CIObservation, CITask, TaskEvent, Task):
+                for row in (ReviewAttempt, CIObservation, CITask, TaskEvent, Task):
                     conn.execute(delete(row).where(row.task_id == task_id))
                 for row in (CIProcessedDelivery, WebhookInboxRow):
                     conn.execute(
                         delete(row).where(row.delivery_id.in_([first, second]))
                     )
+
+
+@pytest.fixture
+def mcp_provider_env(setup, monkeypatch):
+    config, *_ = setup
+    monkeypatch.setenv("PG_RUNTIME_DSN", config.pg_runtime_dsn)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+    monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
 
 
 def handoff(service, task_id, head):
@@ -150,7 +160,7 @@ def run_race(*operations):
             future.result(timeout=15)
 
 
-def test_authorized_binding_and_exact_identity(setup):
+def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     _, factory, service, task_id, _ = setup
     state = PostgresControllerCiState(factory)
     with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
@@ -234,11 +244,44 @@ def test_authorized_binding_and_exact_identity(setup):
         )
     assert not state.approved(task_id, HEAD)
     assert state.tracked() == []
+    with (
+        postgres_workflow_provider() as mcp_service,
+        pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
+    ):
+        mcp_service.claim_review(task_id, NEXT, "lead")
     with pytest.raises(WorkflowError, match="HEAD differs"):
         state.track(task_id, PR, NEXT)
     with pytest.raises(WorkflowError, match="mismatched"):
         state.record(valid)
     assert len(observations(factory, task_id)) == 1
+
+
+@pytest.mark.parametrize("ci_required", ["1", "0"], ids=["required", "disabled"])
+def test_mcp_provider_claims_require_exact_head_ci(
+    setup, mcp_provider_env, monkeypatch, ci_required
+):
+    _, factory, service, task_id, _ = setup
+    handoff(service, task_id, HEAD)
+    state = PostgresControllerCiState(factory)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", ci_required)
+    assert not state.approved(task_id, HEAD)
+
+    if ci_required == "1":
+        with (
+            postgres_workflow_provider() as mcp_service,
+            pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
+        ):
+            mcp_service.claim_review(task_id, HEAD, "lead")
+        state.track(task_id, PR, HEAD)
+        state.record(evidence(task_id))
+        assert state.approved(task_id, HEAD)
+
+    with postgres_workflow_provider() as mcp_service:
+        with pytest.raises(WorkflowError, match="stale claim SHA"):
+            mcp_service.claim_review(task_id, NEXT, "lead")
+        claim = mcp_service.claim_review(task_id, HEAD, "lead")
+    assert claim["task_id"] == task_id
+    assert claim["reviewed_sha"] == HEAD
 
 
 def test_concurrent_observations_keep_sticky_failure_and_history(setup):
