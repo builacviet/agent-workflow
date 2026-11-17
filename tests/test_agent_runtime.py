@@ -129,7 +129,6 @@ def test_stage_order_and_injected_evidence_ci(monkeypatch):
         ),
         "handoff",
         ("ci", "TASK", 7, HEAD),
-        "stop",
     ]
 
 
@@ -142,7 +141,10 @@ def test_stage_failure_propagates_and_cleans_up(monkeypatch, failure):
     runtime = AgentRuntime(FakeHost(calls, fail_at=failure), FakeDispatch(calls))
     with pytest.raises(RuntimeError, match=f"uncertain {failure}"):
         run(runtime)
-    assert calls[-1] == "stop"
+    if failure == "validate_result":
+        assert calls[-3:] == ["publish", "stop", "validate_result"]
+    else:
+        assert calls[-2:] == [failure, "stop"]
     assert "handoff" not in calls
     assert not any(isinstance(call, tuple) and call[0] == "evidence" for call in calls)
     assert calls.count("publish") <= 1
@@ -194,7 +196,7 @@ def test_leadership_loss_during_evidence_blocks_handoff_and_ci(monkeypatch):
     assert "handoff" not in calls
     assert not any(isinstance(call, tuple) and call[0] == "ci" for call in calls)
     assert calls.count("publish") == 1
-    assert calls[-1] == "stop"
+    assert calls.count("stop") == 4
 
 
 @pytest.mark.parametrize("failed_port", ["evidence", "ci"])
@@ -221,7 +223,7 @@ def test_state_port_exception_propagates_without_republish(monkeypatch, failed_p
     with pytest.raises(RuntimeError, match=f"{failed_port} unavailable"):
         run(runtime)
     assert calls.count("publish") == 1
-    assert calls[-1] == "stop"
+    assert calls.count("stop") == 4
 
 
 def test_legacy_facade_wires_sqlite_by_default(monkeypatch, tmp_path):
@@ -231,3 +233,78 @@ def test_legacy_facade_wires_sqlite_by_default(monkeypatch, tmp_path):
     assert runtime.agent_runtime.dispatch.__class__.__name__ == "DispatchLedger"
     assert runtime.agent_runtime.ci.__class__.__name__ == "_SqliteCiTracking"
     assert runtime.agent_runtime.leadership_guard is None
+
+
+@pytest.mark.parametrize(
+    ("lose_after", "denied"),
+    [
+        ("stage", "prepare"),
+        ("source", "engine"),
+        ("engine", "code"),
+        ("digest", "test"),
+        ("verify_digest", "publish"),
+        ("validate_result", "evidence"),
+        ("evidence", "handoff"),
+        ("handoff", "ci"),
+        ("ci", None),
+    ],
+)
+def test_leadership_loss_fences_each_material_boundary(lose_after, denied):
+    calls = []
+    denied_checks = []
+
+    def guard():
+        events = [entry[0] if isinstance(entry, tuple) else entry for entry in calls]
+        if lose_after in events:
+            denied_checks.append(events)
+            return False
+        return True
+
+    runtime = AgentRuntime(
+        FakeHost(calls),
+        FakeDispatch(calls),
+        FakeCi(calls),
+        guard,
+        require_ci_tracking=True,
+    )
+    with pytest.raises(PermissionError, match="leadership guard"):
+        run(runtime)
+
+    events = [entry[0] if isinstance(entry, tuple) else entry for entry in calls]
+    assert denied_checks == [events]
+    assert events[-1] == lose_after
+    assert denied not in events
+    assert events.count("stop") == sum(
+        events.count(phase) for phase in ("prepare", "code", "test", "publish")
+    )
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, KeyboardInterrupt])
+def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
+    calls = []
+    owns_lock = True
+    host = FakeHost(calls)
+
+    def interrupt(*args):
+        nonlocal owns_lock
+        calls.append("code")
+        owns_lock = False
+        raise failure
+
+    host._run_code = interrupt
+    runtime = AgentRuntime(
+        host, FakeDispatch(calls), leadership_guard=lambda: owns_lock
+    )
+    with pytest.raises(failure):
+        run(runtime)
+    assert calls[-2:] == ["code", "stop"]
+    assert calls.count("stop") == 2
+    assert "test" not in calls
+
+
+def test_uncertain_cleanup_is_not_retried():
+    calls = []
+    runtime = AgentRuntime(FakeHost(calls, fail_at="stop"), FakeDispatch(calls))
+    with pytest.raises(RuntimeError, match="uncertain stop"):
+        run(runtime)
+    assert calls == ["stage", "prepare", "stop"]
