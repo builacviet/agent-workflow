@@ -8,6 +8,7 @@ from agent_workflow.composition.postgres_controller import (
     PostgresControllerDependencies,
 )
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
+from agent_workflow.integrations.github import WorkflowError
 
 SHA = "a" * 40
 CLAIM = {
@@ -157,3 +158,44 @@ def test_cancellation_releases_session_and_retains_slot_on_loss():
         run_controller_once(deps, assignment, {"T"}, execute)
     deps.dispatch.block.assert_not_called()
     assert deps.leadership.release_calls == 1
+
+
+@pytest.mark.parametrize("failure", [None, "cleanup", "finish", "lost"])
+def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure):
+    deps, assignment, execute = fixture()
+    events = []
+
+    def finish(*args):
+        events.append("finish")
+        if failure == "finish":
+            raise RuntimeError("finish uncertain")
+        if failure == "lost":
+            deps.leadership.held = False
+
+    def cleanup(dispatch_id):
+        assert deps.leadership.is_held()
+        assert deps.leadership.release_calls == 0
+        assert dispatch_id == "dispatch"
+        events.append("cleanup")
+        if failure == "cleanup":
+            raise RuntimeError("pin retained")
+
+    deps.dispatch.finish.side_effect = finish
+    if failure:
+        expected = {
+            "cleanup": WorkflowError,
+            "finish": RuntimeError,
+            "lost": PermissionError,
+        }[failure]
+        with pytest.raises(expected):
+            run_controller_once(deps, assignment, {"T"}, execute, on_finished=cleanup)
+    else:
+        assert run_controller_once(
+            deps, assignment, {"T"}, execute, on_finished=cleanup
+        )
+    assert events == (
+        ["finish", "cleanup"] if failure in {None, "cleanup"} else ["finish"]
+    )
+    assert deps.leadership.release_calls == 1
+    assert deps.dispatch.block.call_count == (1 if failure == "finish" else 0)
+    execute.assert_called_once()

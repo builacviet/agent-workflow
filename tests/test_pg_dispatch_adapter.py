@@ -381,3 +381,183 @@ def test_tampered_evidence_identity_keeps_slot(setup):
     with pytest.raises(WorkflowError, match="identity mismatch"):
         ledger.finish(claim["dispatch_id"], HEAD)
     assert ledger.claim({task_id}, 60) is None
+
+
+@pytest.mark.parametrize("fault", [None, "finish", "cleanup", "ownership"])
+def test_controller_entrypoint_fake_worker_pg_lifecycle(
+    setup, monkeypatch, tmp_path, fault
+):
+    """Hosted PG16 module: real composition/state; synthetic external effects only."""
+    from types import SimpleNamespace
+
+    from test_agent_runtime import FakeHost
+
+    from agent_workflow.composition import postgres_dispatch_entrypoint as entry
+    from agent_workflow.runners import coder_runtime
+
+    _, _, observer, task_id = setup
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
+    app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
+    # Admission settings are covered offline with inert credential fixtures.
+    # This PG test targets the real factory/guard/adapters and fake Worker seam.
+    monkeypatch.setattr(entry, "_validate", lambda *_: None)
+    opened = []
+    original_open = PostgresFactory.open
+    original_compose = entry.compose_postgres_worker
+    original_controller = entry.compose_postgres_controller
+    calls = []
+    pins = set()
+    dispatch_ids = []
+
+    def open_factory(settings):
+        factory = original_open(settings)
+        opened.append(factory)
+        return factory
+
+    def compose_controller(factory):
+        composition = original_controller(factory)
+        if fault == "finish":
+            monkeypatch.setattr(
+                composition.controller.dispatch,
+                "finish",
+                Mock(side_effect=RuntimeError("uncertain finish")),
+            )
+        return composition
+
+    def compose_worker(config, service, deps, *, leadership_guard):
+        runtime = original_compose(
+            config, service, deps, leadership_guard=leadership_guard
+        )
+        assert service.repository is deps.workflow
+        assert runtime.agent_runtime.dispatch is deps.dispatch
+        assert runtime.agent_runtime.ci is deps.ci_state
+        host = FakeHost(calls)
+        host._validated_result = lambda *_: {
+            "head_sha": HEAD,
+            "pr_url": "https://github.com/builacviet/agent-workflow/pull/7",
+        }
+
+        def handoff(context, result, summary):
+            leadership_guard()
+            calls.append("handoff")
+            service.register_task_handoff(
+                task_id,
+                context["repository"],
+                context["branch"],
+                context["base_sha"],
+                result["head_sha"],
+                "docs/handoff.md",
+                summary,
+            )
+
+        host._register_handoff = handoff
+        runtime.agent_runtime.host = host
+
+        def execute(claim, context):
+            leadership_guard()
+            dispatch_ids.append(claim["dispatch_id"])
+            assert claim["task_id"] == task_id
+            assert deps.dispatch.is_pre_launch(claim["dispatch_id"])
+            deps.dispatch.retire_pre_launch(claim["dispatch_id"])
+            assert not deps.dispatch.is_pre_launch(claim["dispatch_id"])
+            pins.add(claim["dispatch_id"])
+            result = runtime.agent_runtime.execute_bound(
+                claim,
+                context,
+                SimpleNamespace(spec=SimpleNamespace(runtime="fake")),
+                SimpleNamespace(),
+                None,
+            )
+            if fault == "ownership":
+                # Simulate abrupt session loss after evidence/handoff/CI commit.
+                deps.leadership.release()
+            return result
+
+        def clear(dispatch_id):
+            leadership_guard()
+            with observer.transaction() as conn:
+                assert (
+                    conn.execute(
+                        text(
+                            "SELECT status FROM agent_dispatches WHERE dispatch_id=:id"
+                        ),
+                        {"id": dispatch_id},
+                    ).scalar_one()
+                    == "DONE"
+                )
+            calls.append("clear")
+            if fault == "cleanup":
+                raise RuntimeError("uncertain cleanup")
+            pins.remove(dispatch_id)
+
+        monkeypatch.setattr(runtime, "execute", execute)
+        monkeypatch.setattr(runtime, "release_engine", clear)
+        return runtime
+
+    monkeypatch.setattr(entry.PostgresFactory, "open", open_factory)
+    monkeypatch.setattr(entry, "compose_postgres_controller", compose_controller)
+    monkeypatch.setattr(entry, "compose_postgres_worker", compose_worker)
+    monkeypatch.setattr(
+        coder_runtime, "docker_command", lambda *_: pytest.fail("real Docker forbidden")
+    )
+    monkeypatch.setattr(
+        coder_runtime, "run_container", lambda *_: pytest.fail("real Worker forbidden")
+    )
+    config = {"tasks": {task_id: {}}}
+    try:
+        if fault:
+            with pytest.raises((RuntimeError, WorkflowError, PermissionError)):
+                entry.run_postgres_dispatch_once(config, app)
+        else:
+            assert entry.run_postgres_dispatch_once(config, app)
+        assert len(opened) == 1 and opened[0]._closed
+        assert len(dispatch_ids) == 1
+        with observer.transaction() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT status,slot,result_sha FROM agent_dispatches WHERE dispatch_id=:id"
+                ),
+                {"id": dispatch_ids[0]},
+            ).one()
+            expected = (
+                "BLOCKED"
+                if fault == "finish"
+                else "ACTIVE"
+                if fault == "ownership"
+                else "DONE"
+            )
+            assert tuple(row) == (
+                expected,
+                1 if expected != "DONE" else None,
+                HEAD if expected == "DONE" else None,
+            )
+            binding = conn.execute(
+                text(
+                    "SELECT head_sha,verdict FROM controller_ci_tasks WHERE task_id=:task"
+                ),
+                {"task": task_id},
+            ).one()
+            assert tuple(binding) == (HEAD, "BLOCKED")
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT published_head_sha FROM agent_execution_evidence WHERE dispatch_id=:id"
+                    ),
+                    {"id": dispatch_ids[0]},
+                ).scalar_one()
+                == HEAD
+            )
+        assert bool(pins) == bool(fault)
+        assert ("clear" in calls) == (fault in {None, "cleanup"})
+        # A fresh owner and factory must never replay the synthetic publication,
+        # even when the first owner crashed after the handoff or cleanup failed.
+        assert not entry.run_postgres_dispatch_once(config, app)
+        assert len(dispatch_ids) == 1
+        assert calls.count("publish") == 1
+        assert all(factory._closed for factory in opened)
+    finally:
+        with observer.transaction() as conn:
+            conn.execute(
+                text("DELETE FROM controller_ci_tasks WHERE task_id=:task"),
+                {"task": task_id},
+            )

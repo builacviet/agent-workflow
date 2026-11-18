@@ -110,12 +110,14 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
             raise WorkflowError("v2 paths are forbidden")
 
 
-def validate_config(config: dict) -> None:
+def validate_config(config: dict, *, require_database: bool = True) -> None:
     if canonical_repository(
         config.get("repository", "")
     ) != REPOSITORY or not config.get("tasks"):
         raise WorkflowError("explicit repository and task allowlist required")
-    for key in ("database", "pem", "scratch"):
+    for key in (
+        ("database", "pem", "scratch") if require_database else ("pem", "scratch")
+    ):
         path = Path(config[key])
         if not path.is_absolute():
             raise WorkflowError("absolute operator paths required")
