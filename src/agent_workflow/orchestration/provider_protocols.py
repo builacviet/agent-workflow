@@ -66,6 +66,41 @@ def _json_schema(contract: StructuredOutput) -> dict[str, object]:
     return cast(dict[str, object], thaw(contract.json_schema))
 
 
+def _require_strict_schema(contract: StructuredOutput) -> None:
+    """Reject schemas the protocol request cannot send with strict=true."""
+    schema = contract.json_schema
+    if schema.get("type") != "object":
+        _fail(
+            "unsupported_schema", "strict structured schemas must have an object root"
+        )
+
+    def compatible(node: Mapping[str, object]) -> bool:
+        if node.get("type") == "object":
+            properties = node.get("properties", {})
+            required = node.get("required", ())
+            if (
+                node.get("additionalProperties") is not False
+                or not isinstance(properties, Mapping)
+                or not isinstance(required, tuple)
+                or len(required) != len(properties)
+                or set(required) != set(properties)
+            ):
+                return False
+            if any(not compatible(child) for child in properties.values()):
+                return False
+        if node.get("type") == "array":
+            item_schema = node.get("items")
+            if not isinstance(item_schema, Mapping) or not compatible(item_schema):
+                return False
+        return True
+
+    if not compatible(schema):
+        _fail(
+            "unsupported_schema",
+            "schema is incompatible with strict object requirements",
+        )
+
+
 def _validate_tools(
     tools: Mapping[str, ToolDefinition] | None,
     allowed_tools: frozenset[str],
@@ -131,12 +166,16 @@ def encode_request(
         structured_output, StructuredOutput
     ):
         _fail("invalid_schema", "structured output contract is invalid")
+    if structured_output is not None:
+        _require_strict_schema(structured_output)
     allowed = (
         context.allowed_tools
         if isinstance(context, TrustedTaskContext)
         else frozenset()
     )
     definitions = _validate_tools(tools, allowed)
+    for definition in definitions:
+        _require_strict_schema(definition.json_schema)
     selected_choice = _tool_choice(tool_choice, definitions)
     required = set()
     if structured_output is not None:
@@ -310,9 +349,16 @@ def normalize_response(
         if call_id in seen_ids:
             _fail("invalid_tool_call", "tool call IDs must be unique")
         seen_ids.add(call_id)
+        arguments = call.get("arguments")
+        if not isinstance(arguments, str):
+            _fail("invalid_arguments", "tool arguments must be a JSON string")
+        parsed_arguments = _load_json(arguments)
+        if not isinstance(parsed_arguments, Mapping):
+            _fail("invalid_arguments", "tool arguments must be a JSON object")
+        normalized_call = {**call, "arguments": parsed_arguments}
         normalized_calls.append(
             normalize_tool_call(
-                call,
+                normalized_call,
                 allowed_tools=allowed_tools,
                 tools=trusted_tools,
             )
@@ -321,7 +367,13 @@ def normalize_response(
     if output is not None:
         if structured_output is None:
             _fail("unsupported_output", "text output has no trusted schema")
-        normalized_output = validate_structured_output(output, structured_output)
+        parsed_output = _load_json(output)
+        canonical_output = json.dumps(
+            parsed_output, separators=(",", ":"), sort_keys=True, allow_nan=False
+        )
+        normalized_output = validate_structured_output(
+            canonical_output, structured_output
+        )
     return NormalizedResponse(normalized_output, tuple(normalized_calls))
 
 

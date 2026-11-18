@@ -104,6 +104,74 @@ def test_request_encoding_uses_selected_provider_model_and_protocol(protocol):
     assert len(request.body["tools"]) == 1
 
 
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "string"},
+        {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        {"type": "object", "properties": {}, "required": []},
+        {
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                }
+            },
+            "required": ["nested"],
+            "additionalProperties": False,
+        },
+    ],
+)
+def test_rejects_structured_schemas_incompatible_with_strict_mode(protocol, schema):
+    with pytest.raises(ProfileError) as error:
+        encode_request(
+            _config(protocol),
+            _context(),
+            "Do work.",
+            structured_output=StructuredOutput(schema),
+        )
+    assert error.value.code == "unsupported_schema"
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "string"},
+        {
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                }
+            },
+            "required": ["nested"],
+            "additionalProperties": False,
+        },
+    ],
+)
+def test_rejects_tool_parameter_schemas_incompatible_with_strict_mode(protocol, schema):
+    definitions = {"lookup": ToolDefinition("lookup", StructuredOutput(schema))}
+    with pytest.raises(ProfileError) as error:
+        encode_request(
+            _config(protocol),
+            _context(allowed=frozenset({"lookup"})),
+            "Do work.",
+            tools=definitions,
+        )
+    assert error.value.code == "unsupported_schema"
+
+
 def test_profiles_are_independent_and_default_effort_is_omitted():
     config = _config()
     request = encode_request(config, _context(), "Do the task.")
@@ -513,6 +581,76 @@ def test_rejects_duplicate_json_keys_and_nested_nonfinite_exponents(protocol):
             protocol, json.dumps(fixture), structured_output=nested_schema
         )
     assert nonfinite_error.value.code == "invalid_json"
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize("payload_kind", ["structured_output", "tool_arguments"])
+def test_rejects_duplicate_keys_in_embedded_json(protocol, payload_kind):
+    if payload_kind == "structured_output":
+        content = '{"answer":"safe","answer":"unsafe"}'
+        fixture = (
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content},
+                    }
+                ]
+            }
+            if protocol == "chat_completions"
+            else {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": content}],
+                    }
+                ],
+            }
+        )
+        kwargs = {"structured_output": RESULT_SCHEMA}
+    else:
+        arguments = '{"term":"safe","term":"unsafe"}'
+        fixture = (
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_a",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": arguments,
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+            if protocol == "chat_completions"
+            else {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "lookup",
+                        "arguments": arguments,
+                        "call_id": "call_a",
+                    }
+                ],
+            }
+        )
+        kwargs = {"tools": TOOLS, "allowed_tools": frozenset({"lookup"})}
+    with pytest.raises(ProfileError) as error:
+        normalize_response(protocol, json.dumps(fixture), **kwargs)
+    assert error.value.code == "ambiguous_response"
 
 
 @pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
