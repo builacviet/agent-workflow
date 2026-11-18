@@ -13,7 +13,7 @@ from agent_workflow.integrations.github_app_checks import ControllerAppToken
 from agent_workflow.runners.coder_runtime import validate_config
 from agent_workflow.runners.runtime_plugins import CodexCLIPlugin
 from agent_workflow.storage.postgres_connection import PostgresFactory
-from coder_worker.app_auth import GitHubApp
+from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
 
 def _validate(config: dict, app_config: AppConfig) -> None:

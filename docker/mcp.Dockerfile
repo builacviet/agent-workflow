@@ -10,8 +10,6 @@ RUN apt-get update \
 
 COPY pyproject.toml /app/pyproject.toml
 COPY src/agent_workflow /app/src/agent_workflow
-COPY src/my_wfc /app/src/my_wfc
-COPY src/order_service /app/src/order_service
 RUN python -m pip install --no-cache-dir ".[mcp]" \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /state \

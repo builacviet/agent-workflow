@@ -5,20 +5,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-from pathlib import Path
 import shutil
 import stat
 import sys
 import time
 import uuid
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_workflow.runners.coder_runtime import CoderRuntime, safe_path
-from coder_worker.repository import git
-from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.service import WorkflowService  # noqa: E402
+from agent_workflow.integrations.github import WorkflowError  # noqa: E402
+from agent_workflow.runners.coder_runtime import CoderRuntime, safe_path  # noqa: E402
+from agent_workflow.workers.trusted_git.repository import git  # noqa: E402
 
 
 def main() -> None:
@@ -47,9 +47,7 @@ def main() -> None:
         if not source.exists() and not source.is_symlink():
             continue  # tracked deletion in an uncommitted refactor
         if not stat.S_ISREG(source.lstat().st_mode):
-            raise WorkflowError(
-                "smoke source contains a linked/nonregular file"
-            )
+            raise WorkflowError("smoke source contains a linked/nonregular file")
         target = stage / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)

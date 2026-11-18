@@ -1,6 +1,6 @@
 # Agent Workflow architecture — canonical entrypoint
 
-**CURRENT source baseline:** main@81f9bf10d3bcb2752cd6010f8821ae7c7872c87d (merged PR #37, 2026-11-11). This is a source fact, **not** proof of production deployment. Recheck GitHub before treating it as current.
+**Cleanup task baseline:** main@9a3762db121d2e89f99373727074c06fa6d641b8 (merged PR #87, 2026-11-18). The package layout below reflects this cleanup branch; it is not proof of deployment.
 
 **Architecture governance (merged [PR #40](https://github.com/builacviet/agent-workflow/pull/40)):** [ADR-AW-001](adr/AW-001-clean-architecture-governance.md), [import policy](../architecture/policy.toml), [Worker Adapter contract](architecture/worker-runtime-plugins.md) and [Task Contract](templates/agent-task-contract.md). These are project design/consistency references, not proof that every proposed runtime component is implemented.
 
@@ -14,9 +14,9 @@
 | agent_workflow/mcp | MCP server and nine tools (7 workflow + ping/info), Auth0 OAuth and legacy Bearer options |
 | agent_workflow/orchestration | Trusted host Dev Controller and independent CI-only watcher CLI |
 | agent_workflow/runners | Docker phase coordination, sandbox/watchdog, Codex and approved Dev/Code runtime plugin selection |
-| coder_worker | Trusted worker for Prepare/Publish, separate GitHub App credentials and Git operations |
-| my_wfc and flat agent_workflow wrappers | Legacy CLI/import compatibility, not a new architectural layer |
-| order_service | Independent in-memory POC sample; removal requires dependency check |
+| agent_workflow.workers.trusted_git | Trusted worker for Prepare/Publish, separate GitHub App credentials and Git operations |
+| my_wfc and order_service | Retired source packages; historical workflow, task and migration evidence is retained |
+| flat agent_workflow wrappers | Legacy import compatibility, not a new architectural layer |
 
 **CURRENT Compose:** mcp, webhook, nginx router, optional ngrok tunnel; shared SQLite persistence. No merged Controller or PostgreSQL Compose service. Controllers run as host CLIs; no deployed systemd unit files are claimed. Worker stages (Prepare → Code → Test → Publish) are ephemeral Docker containers; Code/Test are credential-free.
 
@@ -38,4 +38,4 @@ PR #37 merged CI/webhook wiring. Local supervised smoke previously checked OAuth
 - Approved V1 scope: [V1 scope and gates](v1-scope-and-gates.md) and the task's Owner approval.
 - ADR-AW-001 is merged documentation ([PR #40](https://github.com/builacviet/agent-workflow/pull/40)); actual merged source/tests and verified deployment evidence govern what is implemented. The ADR does not authorize production cutover.
 - HISTORICAL: CL-12 target design for SQLite/Compose Controller/Podman Executor, including [CL-12 architecture](adr/CL-12-architecture.md), [deployment](adr/CL-12-deployment.md) and [persistence](adr/CL-12-persistence.md), now superseded in the proposed target by Owner's PostgreSQL decision. Historical ADRs are not erased.
-- Legacy POC references: [my-wfc](my-wfc.md), [order_service](../src/order_service/) and [historical notes](migration-my-wfc.md). Do not read them for new-workflow architectural authority.
+- Historical POC references: [my-wfc guide](my-wfc.md) and [migration notes](migration-my-wfc.md). They preserve historical context and are not current package or entrypoint instructions.

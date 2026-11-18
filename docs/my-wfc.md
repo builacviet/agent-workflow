@@ -1,6 +1,6 @@
 > **HISTORICAL / PARTIALLY SUPERSEDED (Phase 2.2-era WFC guide).** For **CURRENT Phase 3.1** roles, dispatch, GitHub verification and recovery, use [Phase 3.1 runbook](phase-3.1.md) and the [source/test-oriented recovery map](guides/dispatch-recovery.md) first. This file preserves older WFC API/schema and migration notes; its `gh` remote verification, future-safe-controller, Bearer-vs-OAuth and deployment claims are *dated historical descriptions*, **not** instructions to enable/modify today's services. Verify each claim against current source and active operator configuration. The original historical sections below are retained as evidence.
 
-# my_wfc consolidated operator guide
+# Historical my_wfc consolidated operator guide
 
 This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI reviews, start a scheduler, dispatch Codex, manage worktrees or merge code. The existing streamable-http transport, loopback bind, port 8000, /mcp path, DNS-rebinding host list and public ping/get_server_info are preserved. Only server_info version/mode describe the new capabilities.
 
@@ -14,7 +14,7 @@ This extends the existing MCP SDK 1.30.0 FastMCP server. It does not perform AI 
 - src/agent_workflow/security.py: constant-time Bearer-header validation and configured operator identity.
 - src/agent_workflow/tools.py: authenticated MCP adapter, injected SDK request context, lazy service initialization.
 - src/agent_workflow/admin.py: local-only task authorization, historical import, disposable seed/reset. No remote provision/reset tools.
-- tests/test_my_wfc.py: deterministic unit/concurrency/transaction/security tests and real loopback HTTP/MCP test with mocked GitHub.
+- tests/test_agent_workflow.py: deterministic unit/concurrency/transaction/security tests and real loopback HTTP/MCP test with mocked GitHub.
 - tests/live_my_wfc_smoke.py: actual server subprocess restart/reconnect check against seeded SQLite, without submitting verdicts.
 - src/agent_workflow/resources/TASK-001-reference.md: copied real task document from the reference repository; not invented source contents.
 - pyproject.toml: mcp optional extra pins SDK 1.30.0; test extra supplies pytest; package data includes SQL and historical reference.

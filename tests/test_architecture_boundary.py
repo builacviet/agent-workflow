@@ -1,23 +1,23 @@
 """Architecture boundary regressions for local WFC and worker-owned publication."""
 
-from argparse import Namespace
-from contextlib import contextmanager
 import inspect
 import json
 import socket
 import subprocess
+from argparse import Namespace
+from contextlib import contextmanager
 
 import pytest
+from test_agent_workflow import payload, spec
+from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.orchestration.controller import operate, run_once
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
-from test_my_wfc import spec, payload
-from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
+from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 
 @pytest.fixture(autouse=True)
@@ -25,9 +25,7 @@ def isolated_sandbox_state(tmp_path, monkeypatch):
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
 
 
-def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
-    tmp_path, monkeypatch
-):
+def test_wfc_full_lifecycle_needs_no_network_or_subprocess(tmp_path, monkeypatch):
     def denied(*args, **kwargs):
         raise AssertionError("WFC attempted external access")
 
@@ -50,9 +48,7 @@ def test_wfc_full_lifecycle_needs_no_network_or_subprocess(
     result = service.get_review_result("TEST")
     assert result["approval_current"] is None
     assert result["remote_verification"] == "not_performed_by_wfc"
-    assert service.submit_review(payload(claim, "APPROVED"), "lead")[
-        "duplicate"
-    ]
+    assert service.submit_review(payload(claim, "APPROVED"), "lead")["duplicate"]
     assert service.get_coder_assignment("TEST")["completed_review_rounds"] == 1
 
 
@@ -61,7 +57,9 @@ def test_service_has_no_sql_or_external_adapter():
 
     text = inspect.getsource(service)
     assert "sqlite3" not in text and ".execute(" not in text
-    assert "verify_remote" not in text and "coder_worker" not in text
+    assert (
+        "verify_remote" not in text and "agent_workflow.workers.trusted_git" not in text
+    )
     import agent_workflow.orchestration.controller as controller
 
     assert "GitHubApp" not in inspect.getsource(controller)
@@ -150,7 +148,9 @@ def test_controller_only_launches_phases_and_receives_result(
     model = "gpt-6-luna" if runtime_name == "codex" else "fixture-model"
     if failure == "unsupported model":
         model = "unapproved-model"
-    effort = "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
+    effort = (
+        "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
+    )
     runtime = CoderRuntime(
         {
             "tasks": {"TEST": task},
@@ -200,7 +200,9 @@ def test_controller_only_launches_phases_and_receives_result(
             if failure == "result":
                 result["branch"] = "unexpected"
             if failure == "pr_url":
-                result["pr_url"] = "https://github.com/builacviet/techlead-review-poc/pull/7"
+                result["pr_url"] = (
+                    "https://github.com/builacviet/techlead-review-poc/pull/7"
+                )
             (stage / "result.json").write_text(json.dumps(result))
         return b"success"
 
@@ -236,13 +238,14 @@ def test_controller_only_launches_phases_and_receives_result(
         assert ledger.claim({"TEST"}, 60) is None
     else:
         assert run_once(
-            service, ledger, {"TEST"}, runtime.execute,
+            service,
+            ledger,
+            {"TEST"},
+            runtime.execute,
             on_finished=runtime.release_engine,
         )
         assert not list((tmp_path / "state.db.sandbox-fences").glob("*.engine"))
-        assert (
-            service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
-        )
+        assert service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
         assert [x for x in calls if x != "stop"] == [
             "prepare",
             "code",
@@ -251,8 +254,6 @@ def test_controller_only_launches_phases_and_receives_result(
         ]
     assert service.get_review_context("TEST")["completed_review_rounds"] == 0
     assert calls[-1] == "stop"
-
-
 
 
 @pytest.fixture
@@ -267,7 +268,9 @@ def recovery_dispatch(tmp_path):
 
 def _blocked_dispatch(service):
     with service.repository.raw_connection() as db:
-        row = db.execute("SELECT dispatch_id, status FROM coder_dispatches WHERE slot=1").fetchone()
+        row = db.execute(
+            "SELECT dispatch_id, status FROM coder_dispatches WHERE slot=1"
+        ).fetchone()
     assert row["status"] == "BLOCKED"
     return row["dispatch_id"]
 
@@ -277,18 +280,24 @@ def _acknowledge(config, dispatch_id):
 
 
 @pytest.mark.parametrize("failure", ["invalid-model", "docker-unavailable"])
-def test_operator_can_acknowledge_proven_pre_launch(recovery_dispatch, monkeypatch, failure):
+def test_operator_can_acknowledge_proven_pre_launch(
+    recovery_dispatch, monkeypatch, failure
+):
     config, service, ledger = recovery_dispatch
 
     def no_docker(*args):
-        pytest.fail("reconciliation must not contact Docker for a proven pre-launch dispatch")
+        pytest.fail(
+            "reconciliation must not contact Docker for a proven pre-launch dispatch"
+        )
 
     monkeypatch.setattr(sandbox, "_require_engine", no_docker)
     if failure == "invalid-model":
         config["model"] = "unsupported"
         monkeypatch.setattr(coder_runtime, "_selected_host", no_docker)
     else:
-        monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+        monkeypatch.setattr(
+            coder_runtime, "_selected_host", lambda: "unix:///fixture.sock"
+        )
 
         def unavailable():
             raise WorkflowError("synthetic Docker outage")
@@ -306,7 +315,9 @@ def test_operator_can_acknowledge_proven_pre_launch(recovery_dispatch, monkeypat
 
 
 @pytest.mark.parametrize("pin_written", [False, True])
-def test_missing_pin_after_pre_launch_retirement_holds_slot(recovery_dispatch, monkeypatch, pin_written):
+def test_missing_pin_after_pre_launch_retirement_holds_slot(
+    recovery_dispatch, monkeypatch, pin_written
+):
     config, service, ledger = recovery_dispatch
     runtime = CoderRuntime(config, service)
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
@@ -347,7 +358,9 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
 
 
 @pytest.mark.parametrize("suffix", [".engine", ".scope", ""])
-def test_pre_launch_marker_cannot_override_existing_launch_records(recovery_dispatch, suffix):
+def test_pre_launch_marker_cannot_override_existing_launch_records(
+    recovery_dispatch, suffix
+):
     config, service, ledger = recovery_dispatch
     dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
     ledger.block(dispatch_id)
@@ -355,13 +368,17 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(recovery_disp
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
     path.parent.mkdir()
     path.touch()
-    with pytest.raises(WorkflowError, match="pre-launch evidence conflicts with Docker records"):
+    with pytest.raises(
+        WorkflowError, match="pre-launch evidence conflicts with Docker records"
+    ):
         _acknowledge(config, dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
 
 @pytest.mark.parametrize("definitive", [False, True])
-def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, monkeypatch, definitive):
+def test_global_slot_release_requires_affirmative_create_settlement(
+    tmp_path, monkeypatch, definitive
+):
     database = tmp_path / "state.db"
     config = {"database": str(database)}
     service = WorkflowService(database, require_ci=False)
@@ -386,11 +403,13 @@ def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, mo
             raise WorkflowError("simulated create timeout")
         if args[:2] == ["container", "ls"]:
             if visible:
-                return json.dumps({
-                    "ID": identifier,
-                    "Names": name,
-                    "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch_id}",
-                }).encode()
+                return json.dumps(
+                    {
+                        "ID": identifier,
+                        "Names": name,
+                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch_id}",
+                    }
+                ).encode()
             return b""
         if args == ["rm", "-f", identifier]:
             assert visible
@@ -407,7 +426,9 @@ def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, mo
     def execute(claim, _context):
         nonlocal dispatch_id
         dispatch_id = claim["dispatch_id"]
-        runtime.sandbox.record_engine(dispatch_id, "unix:///fixture.sock", "fixture-daemon-a")
+        runtime.sandbox.record_engine(
+            dispatch_id, "unix:///fixture.sock", "fixture-daemon-a"
+        )
         runtime.sandbox.run(
             sandbox.SandboxPolicy(),
             dispatch_id=dispatch_id,
@@ -436,8 +457,8 @@ def test_global_slot_release_requires_affirmative_create_settlement(tmp_path, mo
 
 
 def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
-    import coder_worker.main as worker
-    from coder_worker.app_auth import BOT
+    import agent_workflow.workers.trusted_git.main as worker
+    from agent_workflow.workers.trusted_git.app_auth import BOT
 
     root = tmp_path
     (root / "repo").mkdir()
@@ -448,9 +469,7 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
     monkeypatch.setattr(
         worker,
         "changes",
-        lambda *args: [
-            {"path": "src/a.py", "content": b"change", "mode": "100644"}
-        ],
+        lambda *args: [{"path": "src/a.py", "content": b"change", "mode": "100644"}],
     )
 
     def git(repo, *args):
@@ -460,9 +479,7 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
         return b"b" * 40 if args[0] == "rev-parse" else b""
 
     monkeypatch.setattr(worker, "git", git)
-    monkeypatch.setattr(
-        worker, "git_auth", lambda app, repo, *args: calls.append(args)
-    )
+    monkeypatch.setattr(worker, "git_auth", lambda app, repo, *args: calls.append(args))
     monkeypatch.setattr(worker, "AppVerifier", lambda app: lambda *args: None)
 
     class App:
@@ -495,18 +512,14 @@ def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):
     push = next(call for call in calls if call[0] == "push")
     assert "--force" not in push and push[-1] == "HEAD:refs/heads/task/test"
     assert ("config", "user.name", BOT) in calls
-    assert (
-        json.loads((root / "result.json").read_text())["head_sha"] == "b" * 40
-    )
+    assert json.loads((root / "result.json").read_text())["head_sha"] == "b" * 40
 
 
 @pytest.mark.parametrize("ignored", [False, True])
-def test_worker_real_git_push_to_disposable_bare_remote(
-    tmp_path, monkeypatch, ignored
-):
-    import coder_worker.main as worker
-    from coder_worker.repository import git, snapshot
-    from coder_worker.app_auth import BOT
+def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch, ignored):
+    import agent_workflow.workers.trusted_git.main as worker
+    from agent_workflow.workers.trusted_git.app_auth import BOT
+    from agent_workflow.workers.trusted_git.repository import git, snapshot
 
     bare = tmp_path / "remote.git"
     bare.mkdir()
@@ -533,9 +546,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
     if ignored:
         (source / "src/ignored.py").write_text("tested ignored addition")
     monkeypatch.setattr(worker, "ROOT", tmp_path)
-    monkeypatch.setattr(
-        worker, "git_auth", lambda app, root, *args: git(root, *args)
-    )
+    monkeypatch.setattr(worker, "git_auth", lambda app, root, *args: git(root, *args))
     monkeypatch.setattr(worker, "AppVerifier", lambda app: lambda *args: None)
 
     class App:
@@ -565,9 +576,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
     )
     head = git(repo, "rev-parse", "HEAD").decode().strip()
     assert head != base
-    assert (
-        git(bare, "rev-parse", "refs/heads/task/test").decode().strip() == head
-    )
+    assert git(bare, "rev-parse", "refs/heads/task/test").decode().strip() == head
     assert (
         git(repo, "log", "-1", "--format=%an|%ae").decode().strip()
         == BOT + "|123+" + BOT + "@users.noreply.github.com"
@@ -578,10 +587,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(
         == (repo / "docs/handoff.md").read_bytes()
     )
     if ignored:
-        assert (
-            git(repo, "show", "HEAD:src/ignored.py")
-            == b"tested ignored addition"
-        )
+        assert git(repo, "show", "HEAD:src/ignored.py") == b"tested ignored addition"
 
 
 def test_source_digest_frames_paths_and_contents(tmp_path):
@@ -600,8 +606,8 @@ def test_source_digest_frames_paths_and_contents(tmp_path):
 
 
 def test_controller_compose_parses_without_starting_services():
-    from pathlib import Path
     import shutil
+    from pathlib import Path
 
     if shutil.which("docker") is None:
         pytest.skip("Docker CLI needed for compose syntax validation")
@@ -637,9 +643,9 @@ def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeyp
 
     def run(args, prompt, remaining):
         assert "--network=none" in args
-        assert {args[index + 1] for index, arg in enumerate(args) if arg == "--env"} >= {
-            name + "=" for name in sandbox._PROXY_NAMES
-        }
+        assert {
+            args[index + 1] for index, arg in enumerate(args) if arg == "--env"
+        } >= {name + "=" for name in sandbox._PROXY_NAMES}
         invocation, env = sandbox._docker_invocation(args)
         assert invocation[:3] == ["docker", "--host", host]
         assert "HTTPS_PROXY" not in env and "DOCKER_CONTEXT" not in env
@@ -647,7 +653,11 @@ def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeyp
         return b"synthetic test output"
 
     monkeypatch.setattr(coder_runtime, "run_container", run)
-    assert runtime.docker(
-        {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},
-        tmp_path, "test",
-    ) == b"synthetic test output"
+    assert (
+        runtime.docker(
+            {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},
+            tmp_path,
+            "test",
+        )
+        == b"synthetic test output"
+    )

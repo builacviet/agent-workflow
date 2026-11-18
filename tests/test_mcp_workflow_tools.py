@@ -9,7 +9,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
-from test_my_wfc import BASE, HEAD, REPO, payload
+from test_agent_workflow import BASE, HEAD, REPO, payload
 
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.mcp.server import mcp

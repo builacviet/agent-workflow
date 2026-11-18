@@ -15,7 +15,7 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from test_my_wfc import BASE, HEAD, NEXT, REPO, payload, spec
+from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget

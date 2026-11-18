@@ -34,10 +34,10 @@ Copy-Item .runtime/ngrok.env.example .runtime/ngrok.env
 ```
 
 Set `NGROK_AUTHTOKEN` in `.runtime/ngrok.env` without posting it in chat or Git.
-Set `GH_TOKEN` in `.runtime/mcp.env` to an appropriately scoped **read-only**
-GitHub token for the private `builacviet/agent-workflow` repo. The existing
-`my_wfc.github.GitHubVerifier` invokes `gh api`, so Docker does not inherit
-Windows `gh auth login`. Never mount the host's global gh credential store.
+The MCP container does not need GitHub credentials or a GitHub client. Trusted
+Prepare/Publish operations use the separate
+`agent_workflow.workers.trusted_git` entrypoint and its scoped GitHub App
+credential mount; that credential must never be added to the MCP container.
 
 All seven workflow tools require authentication. `ping` and `get_server_info`
 are public in Bearer mode.

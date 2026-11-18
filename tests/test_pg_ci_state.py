@@ -14,8 +14,8 @@ from sqlalchemy import create_engine, delete, event, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
+from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 from test_ci_controller import FakeChecks
-from test_my_wfc import BASE, HEAD, NEXT, REPO, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider

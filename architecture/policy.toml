@@ -3,16 +3,16 @@
 version = 1
 
 [forbidden_imports]
-domain = ["agent_workflow.application", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "agent_workflow.paths", "coder_worker"]
-application = ["agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "coder_worker"]
-storage = ["agent_workflow.domain.service", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
-integrations = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
-runners = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
-mcp = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "coder_worker"]
-orchestration = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "coder_worker"]
-interfaces = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.infrastructure", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "coder_worker"]
-infrastructure = ["agent_workflow.mcp", "agent_workflow.interfaces", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "coder_worker"]
-coder_worker = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap"]
+domain = ["agent_workflow.application", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "agent_workflow.paths", "agent_workflow.workers.trusted_git"]
+application = ["agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "agent_workflow.workers.trusted_git"]
+storage = ["agent_workflow.domain.service", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.workers.trusted_git"]
+integrations = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.workers.trusted_git"]
+runners = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.workers.trusted_git"]
+mcp = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.workers.trusted_git"]
+orchestration = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.workers.trusted_git"]
+interfaces = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.infrastructure", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "agent_workflow.workers.trusted_git"]
+infrastructure = ["agent_workflow.mcp", "agent_workflow.interfaces", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "agent_workflow.workers.trusted_git"]
+trusted_git = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap"]
 
 [ownership]
 "src/agent_workflow/domain/**" = "domain"
@@ -26,7 +26,7 @@ coder_worker = ["agent_workflow.domain.service", "agent_workflow.storage", "agen
 "src/agent_workflow/runners/**" = "runtime-legacy"
 "src/agent_workflow/mcp/**" = "mcp-legacy"
 "src/agent_workflow/orchestration/**" = "orchestration-legacy"
-"src/coder_worker/**" = "trusted-worker"
+"src/agent_workflow/workers/trusted_git/**" = "trusted-worker"
 "architecture/**" = "architecture-governance"
 "docs/adr/AW-001-clean-architecture-governance.md" = "architecture-governance"
 
@@ -160,11 +160,11 @@ module = "agent_workflow.storage.ci_state"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
-path = "src/coder_worker/app_auth.py"
+path = "src/agent_workflow/workers/trusted_git/app_auth.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
-path = "src/coder_worker/github.py"
+path = "src/agent_workflow/workers/trusted_git/github.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"

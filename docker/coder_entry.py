@@ -1,9 +1,9 @@
 """Small trusted image entrypoint; no GitHub credentials or workflow mutations."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
 def run(args: list[str]) -> int:
@@ -17,7 +17,9 @@ def run(args: list[str]) -> int:
 
 
 if sys.argv[1:] in (["prepare"], ["publish"]):
-    raise SystemExit(run(["python", "-m", "coder_worker.main", sys.argv[1]]))
+    raise SystemExit(
+        run(["python", "-m", "agent_workflow.workers.trusted_git.main", sys.argv[1]])
+    )
 if sys.argv[1:] == ["probe"]:
     Path(os.environ["CODEX_HOME"]).mkdir(parents=True, exist_ok=True)
     probe = """

@@ -245,6 +245,8 @@ def test_techlead_template_defaults() -> None:
     dockerfile = (ROOT / "docker/mcp.Dockerfile").read_text(encoding="utf-8")
     assert "--uid 10001" in dockerfile
     assert "USER appuser" in dockerfile
+    assert "COPY src/my_wfc" not in dockerfile
+    assert "COPY src/order_service" not in dockerfile
     assert not (ROOT / "compose.techlead.yaml").exists()
 
 

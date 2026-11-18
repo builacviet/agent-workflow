@@ -6,13 +6,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from coder_worker.app_auth import AppVerifier, BOT, GitHubApp, REPOSITORY
-from agent_workflow.runners.coder_runtime import safe_path, validate_config
-from coder_worker.repository import changes
-from agent_workflow.orchestration.controller import run_once
-from agent_workflow.storage.dispatch_repository import DispatchLedger
-from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
 from agent_workflow.domain.service import WorkflowService, encode
+from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
+from agent_workflow.orchestration.controller import run_once
+from agent_workflow.runners.coder_runtime import safe_path, validate_config
+from agent_workflow.storage.dispatch_repository import DispatchLedger
+from agent_workflow.workers.trusted_git.app_auth import (
+    BOT,
+    REPOSITORY,
+    AppVerifier,
+    GitHubApp,
+)
+from agent_workflow.workers.trusted_git.repository import changes
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -107,8 +112,13 @@ def test_pre_rename_task_can_dispatch_and_handoff_without_rewriting_repository(s
     def execute(claim, context):
         assert context["repository"] == REPOSITORY
         state.register_task_handoff(
-            "P31", LEGACY_REPOSITORY, "codex/test", BASE, HEAD,
-            "docs/handoff.md", "synthetic tests",
+            "P31",
+            LEGACY_REPOSITORY,
+            "codex/test",
+            BASE,
+            HEAD,
+            "docs/handoff.md",
+            "synthetic tests",
         )
         return HEAD
 
@@ -277,9 +287,7 @@ def app(tmp_path):
 
 def test_jwt_cache_refresh_scope_and_identity(app):
     client, transport, now = app
-    claims = json.loads(
-        base64.urlsafe_b64decode(client.jwt().split(".")[1] + "==")
-    )
+    claims = json.loads(base64.urlsafe_b64decode(client.jwt().split(".")[1] + "=="))
     assert claims == {"iat": 940, "exp": 1540, "iss": "1"}
     assert client.token() == "synthetic-only"
     assert client.token() == "synthetic-only"
@@ -295,10 +303,7 @@ def test_jwt_cache_refresh_scope_and_identity(app):
     now[0] += 3500
     client.token()
     assert (
-        sum(
-            endpoint.endswith("/access_tokens")
-            for _, endpoint, _ in transport.calls
-        )
+        sum(endpoint.endswith("/access_tokens") for _, endpoint, _ in transport.calls)
         == 2
     )
     client.revoke()
@@ -313,7 +318,10 @@ def test_app_identity_and_stale_sha_fail_closed(app):
     transport.slug = "builacviet-wfc-coder"
     verifier = AppVerifier(client)
     verifier(LEGACY_REPOSITORY, "codex/test", BASE, HEAD)
-    assert transport.calls[-2][1] == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
+    assert (
+        transport.calls[-2][1]
+        == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
+    )
     with pytest.raises(WorkflowError):
         verifier(REPOSITORY, "codex/test", BASE, BASE)
     with pytest.raises(WorkflowError):
@@ -333,7 +341,8 @@ def test_configuration_requires_explicit_scope():
 
 def test_snapshot_real_baseline_includes_safe_templates(tmp_path):
     import subprocess
-    from coder_worker.repository import snapshot
+
+    from agent_workflow.workers.trusted_git.repository import snapshot
 
     root = tmp_path / "source"
     root.mkdir()
@@ -401,7 +410,7 @@ def test_malformed_and_expired_installation_tokens(app):
 
 
 def test_app_http_error_never_exposes_token(monkeypatch):
-    import coder_worker.app_auth as module
+    import agent_workflow.workers.trusted_git.app_auth as module
 
     def fail(data):
         raise OSError("secret synthetic-token")
@@ -479,8 +488,6 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
         validate_config(config)
 
 
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -510,9 +517,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    sample = json.loads(
-        (root / ".runtime/controller.json.example").read_text()
-    )
+    sample = json.loads((root / ".runtime/controller.json.example").read_text())
     assert sample["database"].endswith("data/controller/workflow.sqlite3")
     for key in (
         "pem",
@@ -525,9 +530,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     sample["database"] = str(tmp_path / "data/controller/workflow.sqlite3")
     sample["tasks"] = config["tasks"]
     validate_config(sample)
-    sample["database"] = str(
-        tmp_path / "agent_workflow_v2/data/workflow.sqlite3"
-    )
+    sample["database"] = str(tmp_path / "agent_workflow_v2/data/workflow.sqlite3")
     with pytest.raises(WorkflowError, match="v2 paths"):
         validate_config(sample)
 
@@ -557,9 +560,12 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state, tmp_path):
 
     monkeypatch.setattr(runtime, "docker_command", command)
     from agent_workflow.runners import sandbox
+
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     controller_runtime = runtime.CoderRuntime({}, state)
-    controller_runtime.sandbox.record_engine("a" * 32, "unix:///fixture.sock", "fixture-daemon-a")
+    controller_runtime.sandbox.record_engine(
+        "a" * 32, "unix:///fixture.sock", "fixture-daemon-a"
+    )
     with budget.dispatch_budget(1001):
         now[0] = 1002
         controller_runtime.stop("a" * 32)

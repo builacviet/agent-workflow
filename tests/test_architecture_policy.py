@@ -1,15 +1,16 @@
 """Executable architecture-policy gate: AST imports, exact legacy debt and runner cycles."""
 
 import ast
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src"
-POLICY = tomllib.loads((ROOT / "architecture" / "policy.toml").read_text(encoding="utf-8"))
+POLICY = tomllib.loads(
+    (ROOT / "architecture" / "policy.toml").read_text(encoding="utf-8")
+)
 
 
 def source_files():
@@ -18,8 +19,13 @@ def source_files():
 
 def area_for(path: Path) -> str | None:
     parts = path.relative_to(SOURCE).parts
-    if parts[0] == "coder_worker":
-        return "coder_worker"
+    if (
+        len(parts) > 2
+        and parts[0] == "agent_workflow"
+        and parts[1] == "workers"
+        and parts[2] == "trusted_git"
+    ):
+        return "trusted_git"
     if len(parts) > 2 and parts[0] == "agent_workflow":
         return parts[1] if parts[1] in POLICY["forbidden_imports"] else None
     return None
@@ -38,6 +44,7 @@ def imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 import importlib.util
+
                 resolved = importlib.util.resolve_name(
                     "." * node.level + (node.module or ""), package
                 )
@@ -66,9 +73,7 @@ def test_no_new_cross_layer_imports_and_no_stale_exceptions():
         for module in imports(path)
         if forbidden(area, module)
     }
-    declared = [
-        (item["path"], item["module"]) for item in POLICY["legacy_imports"]
-    ]
+    declared = [(item["path"], item["module"]) for item in POLICY["legacy_imports"]]
     assert len(declared) == len(set(declared)), "duplicate architecture exemptions"
     assert all(item["reason"].strip() for item in POLICY["legacy_imports"])
     assert actual == set(declared), (
@@ -83,8 +88,16 @@ def test_no_new_cross_layer_imports_and_no_stale_exceptions():
 @pytest.mark.parametrize("area", ["domain", "application"])
 def test_pure_core_must_not_import_io_or_sql(area):
     external = (
-        "sqlite3", "psycopg", "psycopg2", "subprocess", "socket",
-        "requests", "httpx", "urllib.request", "docker", "mcp",
+        "sqlite3",
+        "psycopg",
+        "psycopg2",
+        "subprocess",
+        "socket",
+        "requests",
+        "httpx",
+        "urllib.request",
+        "docker",
+        "mcp",
     )
     for path in source_files():
         if area_for(path) != area:
@@ -97,7 +110,7 @@ def test_pure_core_must_not_import_io_or_sql(area):
 
 def test_trusted_worker_never_imports_workflow_db_drivers():
     for path in source_files():
-        if area_for(path) != "coder_worker":
+        if area_for(path) != "trusted_git":
             continue
         for module in imports(path):
             assert not any(
@@ -110,7 +123,8 @@ def test_runner_dependency_cycles_have_exact_legacy_inventory():
     paths = list((SOURCE / "agent_workflow" / "runners").glob("*.py"))
     modules = {
         "agent_workflow.runners." + path.stem: path
-        for path in paths if path.name != "__init__.py"
+        for path in paths
+        if path.name != "__init__.py"
     }
     edges = {
         name: {other for other in imports(path) if other in modules}
@@ -122,8 +136,7 @@ def test_runner_dependency_cycles_have_exact_legacy_inventory():
         for target in edges[current]:
             if target == start and len(route) > 1:
                 variants = [
-                    tuple(route[index:] + route[:index])
-                    for index in range(len(route))
+                    tuple(route[index:] + route[:index]) for index in range(len(route))
                 ]
                 cycles.add(min(variants))
             elif target not in route and len(route) < len(modules):
@@ -141,6 +154,13 @@ def test_runner_dependency_cycles_have_exact_legacy_inventory():
 def test_import_policy_rejects_future_violations():
     assert forbidden("domain", "agent_workflow.storage.postgres")
     assert forbidden("application", "agent_workflow.runners.sandbox")
-    assert forbidden("coder_worker", "agent_workflow.storage.repository")
+    assert forbidden("domain", "agent_workflow.workers.trusted_git.main")
+    assert forbidden("application", "agent_workflow.workers.trusted_git.app_auth")
+    assert forbidden("trusted_git", "agent_workflow.storage.repository")
     assert not forbidden("application", "agent_workflow.domain.contracts")
     assert not forbidden("infrastructure", "agent_workflow.application.ports.execution")
+
+
+def test_nested_trusted_git_package_is_classified():
+    path = SOURCE / "agent_workflow" / "workers" / "trusted_git" / "main.py"
+    assert area_for(path) == "trusted_git"
