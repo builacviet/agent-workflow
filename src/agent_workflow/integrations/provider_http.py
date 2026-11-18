@@ -58,7 +58,8 @@ def _endpoint(value: str, approved_endpoints: frozenset[str]) -> tuple[str, int,
         raise ProviderTransportError("invalid_endpoint")
     try:
         parsed = urlsplit(value)
-        port = parsed.port or 443
+        declared_port = parsed.port
+        port = 443 if declared_port is None else declared_port
         valid = (
             parsed.scheme == "https"
             and bool(parsed.hostname)
@@ -92,6 +93,40 @@ def _encode_body(body: object) -> bytes:
     if len(encoded) > MAX_REQUEST_BYTES:
         raise ProviderTransportError("payload_too_large")
     return encoded
+
+
+def _contains_secret_value(value: object, secret: str) -> bool:
+    if isinstance(value, str):
+        return secret in value
+    if isinstance(value, Mapping):
+        return any(
+            _contains_secret_value(key, secret) or _contains_secret_value(item, secret)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_secret_value(item, secret) for item in value)
+    return False
+
+
+def _json_contains_secret(text: str, secret: str) -> bool:
+    """Inspect decoded JSON strings, including escaped strings and object keys."""
+    found = False
+
+    def object_hook(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        nonlocal found
+        result: dict[str, object] = {}
+        for name, value in pairs:
+            if secret in name or _contains_secret_value(value, secret):
+                found = True
+            result[name] = value
+        return result
+
+    decoded = json.loads(
+        text,
+        object_pairs_hook=object_hook,
+        parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+    )
+    return found or _contains_secret_value(decoded, secret)
 
 
 def _read_response(response: http.client.HTTPResponse) -> _Response:
@@ -175,8 +210,13 @@ def post_json(
         or any(ord(char) < 32 or ord(char) == 127 for char in key)
     ):
         raise ProviderTransportError("credential_unavailable")
-    if key.encode("ascii") in body:
-        raise ProviderTransportError("credential_in_payload")
+    try:
+        if _json_contains_secret(body.decode("utf-8"), key):
+            raise ProviderTransportError("credential_in_payload")
+    except ProviderTransportError:
+        raise
+    except (UnicodeError, ValueError, TypeError, RecursionError):
+        raise ProviderTransportError("invalid_payload") from None
 
     connection: _Connection | None = None
     try:
@@ -217,12 +257,9 @@ def post_json(
         raise ProviderTransportError("http_error")
     try:
         text = response.body.decode("utf-8", errors="strict")
-        json.loads(
-            text,
-            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
-        )
+        contains_secret = _json_contains_secret(text, key)
     except (UnicodeError, ValueError, TypeError, RecursionError):
         raise ProviderTransportError("invalid_payload") from None
-    if key in text:
+    if contains_secret:
         raise ProviderTransportError("credential_in_response")
     return text

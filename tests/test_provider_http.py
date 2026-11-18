@@ -96,9 +96,14 @@ class _FakeSocket:
 
 class Harness:
     def __init__(
-        self, response: FakeResponse | None = None, failure: Exception | None = None
+        self,
+        response: FakeResponse | None = None,
+        failure: Exception | None = None,
+        *,
+        key: str = KEY,
     ):
         self.connection = FakeConnection(response or FakeResponse(), failure)
+        self.key = key
         self.factories: list[tuple[str, int, float]] = []
         self.secret_refs: list[str] = []
 
@@ -108,7 +113,7 @@ class Harness:
 
     def resolve(self, reference: str) -> str:
         self.secret_refs.append(reference)
-        return KEY
+        return self.key
 
 
 @dataclass(frozen=True)
@@ -284,6 +289,15 @@ def test_non_allowlisted_endpoint_fails_before_io() -> None:
     assert not harness.factories
 
 
+def test_explicit_zero_port_is_rejected_before_secret_resolution_or_io() -> None:
+    endpoint = "https://provider.test:0/v1"
+    harness = Harness()
+    with pytest.raises(ProviderTransportError, match="invalid_endpoint"):
+        _post(harness, endpoint=endpoint, approved=frozenset({endpoint}))
+    assert not harness.secret_refs
+    assert not harness.factories
+
+
 @pytest.mark.parametrize(
     "protocol_request",
     [Request("chat_completions", "/responses", {}), Request("vendor", "/x", {})],
@@ -359,6 +373,35 @@ def test_credential_cannot_be_in_request_body_or_response() -> None:
     with pytest.raises(ProviderTransportError, match="credential_in_response") as error:
         _post(harness)
     assert KEY not in str(error.value)
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+@pytest.mark.parametrize("secret", ['fake"quoted-key', "fake\\backslash-key"])
+def test_escaped_credentials_in_nested_request_json_are_rejected(
+    protocol: str, secret: str
+) -> None:
+    harness = Harness(key=secret)
+    request = Request(protocol, PATHS[protocol], {"nested": [{"prompt": secret}]})
+    with pytest.raises(ProviderTransportError, match="credential_in_payload"):
+        _post(harness, request)
+    assert not harness.factories
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses"])
+def test_escaped_and_unicode_escaped_response_credentials_are_rejected(
+    protocol: str,
+) -> None:
+    # JSON escapes make the raw secret substring absent from the response bytes.
+    body = b'{"nested":{"echo":"f\\u0061ke-test-key-never-real"}}'
+    harness = Harness(FakeResponse(body=body))
+    with pytest.raises(ProviderTransportError, match="credential_in_response"):
+        _post(harness, _request(protocol))
+
+    quoted_key = 'fake"response-key'
+    body = json.dumps({"nested": [{quoted_key: "echoed"}]}).encode()
+    harness = Harness(FakeResponse(body=body), key=quoted_key)
+    with pytest.raises(ProviderTransportError, match="credential_in_response"):
+        _post(harness, _request(protocol))
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308, 401, 403, 429, 500, 503])
