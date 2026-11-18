@@ -24,6 +24,7 @@ ROLE_PHASES: Mapping[str, frozenset[str]] = MappingProxyType(
 )
 CAPABILITY_CATALOG_VERSION = "v1"
 _IDENTIFIER = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$")
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
 _SECRET_REF = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9_./-]{0,254}$")
 _PROTOCOLS = frozenset({"chat_completions", "responses"})
 
@@ -38,6 +39,22 @@ class ProfileError(ValueError):
 
 def _identifier(value: object) -> bool:
     return isinstance(value, str) and _IDENTIFIER.fullmatch(value) is not None
+
+
+def _model_identifier(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _MODEL_ID.fullmatch(value) is not None
+        and not value.endswith("/")
+        and "//" not in value
+    )
+
+
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not isfinite(parsed):
+        raise ValueError("non-finite numbers are not valid JSON")
+    return parsed
 
 
 def _reject_nonfinite_json(_value: str) -> None:
@@ -65,7 +82,7 @@ class RoleProfile:
     level: str
 
     def __post_init__(self) -> None:
-        if not all(_identifier(value) for value in (self.provider, self.model)):
+        if not _identifier(self.provider) or not _model_identifier(self.model):
             raise ProfileError("invalid_profile", "provider and model are required")
         if self.level != "default" and not _identifier(self.level):
             raise ProfileError("invalid_level", "invalid internal reasoning level")
@@ -124,7 +141,7 @@ class ModelCapabilities:
     default_omits_effort: bool = False
 
     def __post_init__(self) -> None:
-        if not _identifier(self.provider) or not _identifier(self.model):
+        if not _identifier(self.provider) or not _model_identifier(self.model):
             raise ProfileError("invalid_catalog", "invalid provider/model catalog key")
         if (
             not isinstance(self.protocols, frozenset)
@@ -266,6 +283,15 @@ class RoleProfiles:
             ):
                 raise ProfileError(
                     "unsupported_level", "reasoning level is unsupported"
+                )
+            if (
+                profile.level != "default"
+                and profile.level
+                not in model.effort_levels.get(provider.protocol, frozenset())
+            ):
+                raise ProfileError(
+                    "unsupported_level",
+                    "protocol cannot represent this role's reasoning level",
                 )
         object.__setattr__(self, "profiles", MappingProxyType(profiles))
         object.__setattr__(self, "providers", MappingProxyType(providers))
@@ -459,7 +485,11 @@ def _validate_schema(schema: Mapping[str, object], depth: int = 0) -> None:
 
 def validate_structured_output(output: str, contract: StructuredOutput) -> object:
     try:
-        value = json.loads(output, parse_constant=_reject_nonfinite_json)
+        value = json.loads(
+            output,
+            parse_constant=_reject_nonfinite_json,
+            parse_float=_parse_finite_float,
+        )
     except (TypeError, ValueError, json.JSONDecodeError):
         raise ProfileError(
             "invalid_json", "structured output is not valid JSON"
@@ -495,7 +525,11 @@ def normalize_tool_call(
         value = dict(arguments)
     elif isinstance(arguments, str):
         try:
-            value = json.loads(arguments, parse_constant=_reject_nonfinite_json)
+            value = json.loads(
+                arguments,
+                parse_constant=_reject_nonfinite_json,
+                parse_float=_parse_finite_float,
+            )
         except (ValueError, json.JSONDecodeError):
             raise ProfileError(
                 "invalid_arguments", "tool arguments are not valid JSON"
@@ -504,7 +538,9 @@ def normalize_tool_call(
             raise ProfileError(
                 "invalid_arguments", "tool arguments must be a JSON object"
             )
-        argument_json = json.dumps(value, separators=(",", ":"), sort_keys=True)
+        argument_json = json.dumps(
+            value, separators=(",", ":"), sort_keys=True, allow_nan=False
+        )
     else:
         raise ProfileError("invalid_arguments", "tool arguments must be JSON")
     definition = tools.get(name)

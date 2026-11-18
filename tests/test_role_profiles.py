@@ -159,6 +159,59 @@ def test_invalid_and_unsupported_levels_are_rejected():
     assert unsupported.value.code == "unsupported_level"
 
 
+def test_effort_support_is_validated_for_inactive_profiles_during_construction():
+    config = _config()
+    models = dict(config.catalog.models)
+    model = models[("beta", "large")]
+    models[("beta", "large")] = ModelCapabilities(
+        provider=model.provider,
+        model=model.model,
+        protocols=model.protocols,
+        approved_base_urls=model.approved_base_urls,
+        capabilities=model.capabilities,
+        reasoning_levels=model.reasoning_levels,
+        effort_levels={"chat_completions": frozenset({"low", "high"})},
+        default_omits_effort=True,
+    )
+    # QC is inactive in a dev/code request, but the trusted profile must still fail at load.
+    with pytest.raises(ProfileError) as exc:
+        RoleProfiles(
+            config.profiles,
+            config.providers,
+            CapabilityCatalog("v1", models),
+        )
+    assert exc.value.code == "unsupported_level"
+
+
+def test_model_ids_accept_gateway_slugs_and_reject_whitespace_or_controls():
+    slug = "deepseek/deepseek-chat"
+    assert RoleProfile("alpha", slug, "low").model == slug
+    config = RoleProfiles(
+        profiles={
+            "dev": RoleProfile("alpha", slug, "low"),
+            "qc": RoleProfile("alpha", slug, "medium"),
+            "tl-reviewer": RoleProfile("alpha", slug, "default"),
+        },
+        providers={
+            "alpha": ProviderConfig(
+                URL_A, "chat_completions", "secret://p/a", BASE_CAPS
+            )
+        },
+        catalog=CapabilityCatalog(
+            "v1", {("alpha", slug): _model("alpha", slug, URL_A)}
+        ),
+    )
+    assert config.for_role("dev").model == slug
+    for invalid in (
+        "deepseek/model name",
+        "deepseek/model\nname",
+        "deepseek/model\x01",
+    ):
+        with pytest.raises(ProfileError) as exc:
+            RoleProfile("alpha", invalid, "low")
+        assert exc.value.code == "invalid_profile"
+
+
 def test_default_level_requires_explicit_catalog_effort_omission_policy():
     model = _model("alpha", "small", URL_A)
     model_without_default = ModelCapabilities(
@@ -271,6 +324,47 @@ def test_structured_output_schema_validation_and_normalized_errors():
     assert malformed_schema.value.code == "invalid_schema"
 
 
+def test_nested_json_exponent_overflow_is_rejected_for_output_and_tool_arguments():
+    output = StructuredOutput(
+        {
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": {"score": {"type": "number"}},
+                    "required": ["score"],
+                }
+            },
+            "required": ["nested"],
+        }
+    )
+    with pytest.raises(ProfileError) as output_error:
+        validate_structured_output('{"nested":{"score":1e999}}', output)
+    assert output_error.value.code == "invalid_json"
+
+    tool = ToolDefinition(
+        "record_score",
+        StructuredOutput(
+            {
+                "type": "object",
+                "properties": {"score": {"type": "number"}},
+                "required": ["score"],
+            }
+        ),
+    )
+    with pytest.raises(ProfileError) as tool_error:
+        normalize_tool_call(
+            {
+                "name": "record_score",
+                "arguments": '{"score":1e999}',
+                "call_id": "call-9",
+            },
+            allowed_tools=frozenset({"record_score"}),
+            tools={"record_score": tool},
+        )
+    assert tool_error.value.code == "invalid_arguments"
+
+
 def test_tool_call_envelope_checks_allowlist_json_and_schema():
     tool = ToolDefinition(
         "write_doc",
@@ -330,19 +424,18 @@ def test_responses_protocol_is_a_single_protocol_contract_and_effort_mismatch_fa
         effort_levels={},
         default_omits_effort=True,
     )
-    config = RoleProfiles(
-        profiles={
-            "dev": RoleProfile("alpha", "small", "low"),
-            "qc": RoleProfile("alpha", "small", "default"),
-            "tl-reviewer": RoleProfile("alpha", "small", "default"),
-        },
-        providers={
-            "alpha": ProviderConfig(URL_A, "responses", "secret://p/a", BASE_CAPS)
-        },
-        catalog=CapabilityCatalog("v1", {("alpha", "small"): model}),
-    )
     with pytest.raises(ProfileError) as exc:
-        config.protocol_effort("dev")
+        RoleProfiles(
+            profiles={
+                "dev": RoleProfile("alpha", "small", "low"),
+                "qc": RoleProfile("alpha", "small", "default"),
+                "tl-reviewer": RoleProfile("alpha", "small", "default"),
+            },
+            providers={
+                "alpha": ProviderConfig(URL_A, "responses", "secret://p/a", BASE_CAPS)
+            },
+            catalog=CapabilityCatalog("v1", {("alpha", "small"): model}),
+        )
     assert exc.value.code == "unsupported_level"
 
 
