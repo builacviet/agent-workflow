@@ -8,6 +8,7 @@
 | PostgreSQL ORM/DTO or transaction lifecycle | [ORM/DTO](conventions/engineering-standards.md#postgresql-orm-and-dto-conventions) and [Session/transaction ownership](conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) |
 | Architecture or cross-module interfaces | [As-built architecture](architecture.md), [import policy](../architecture/policy.toml) and related tests |
 | Worktrees and manual Git commands | [Local worktree guide](guides/local-worktrees.md) |
+| Trusted HTTPS provider transport | [Provider HTTPS transport](guides/provider-https-transport.md) |
 | Controller/Docker recovery | [Phase 3.1 runbook](phase-3.1.md) and [dispatch/recovery guide](guides/dispatch-recovery.md) |
 | OAuth / GitHub integration | [OAuth runbook](auth0-oauth.md), relevant integration source/tests |
 | Product orchestration features and gates | [V1 scope contract](v1-scope-and-gates.md), then the task-specific product specs |
