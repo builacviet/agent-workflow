@@ -10,7 +10,7 @@ The active Python distribution remains under `src/agent_workflow/`. [PR #88](htt
 
 | Package / process | Merged responsibility and limitation |
 | --- | --- |
-| `domain/` | Contracts, workflow states/identity and CI evidence; `domain/service.py` still mixes task handoff, review business rules, database transactions and legacy SQLite defaults. It is **not** yet a pure Domain. |
+| `domain/` | Contracts, workflow states/identity and CI evidence; `domain/states.py` already defines canonical `WorkflowStatus`, `DispatchStatus` and `CiVerdict` as `StrEnum` (PR #43). `domain/service.py` still mixes task handoff, review business rules, database transactions and legacy SQLite defaults; it is **not** yet a pure Domain. |
 | `storage/` | Legacy SQLite persistence alongside **implemented PostgreSQL** workflow, dispatch, CI and webhook repositories, ORM models and sync `PostgresFactory`. Repository Protocol placement and cross-layer coupling still need refactoring. |
 | `infrastructure/` | PostgreSQL leadership/advisory-lock implementation; other adapters remain distributed under legacy packages. |
 | `composition/` | Implemented PostgreSQL MCP, Controller, CI-watcher, dispatch and worker wiring. Still not the clean, feature-specific `database.py` / `*_deps.py` structure proposed for R2. |
@@ -52,7 +52,7 @@ The active Python distribution remains under `src/agent_workflow/`. [PR #88](htt
 - **`composition/`:** easy-to-read `database.py`, `task_deps.py`, `review_deps.py`, `dispatch_deps.py`, `runtime_deps.py` and similar pure dependency wiring, modeled on the demo's `dependencies/database.py` and `*_deps.py`. Do not create DB sessions at import time or let handlers construct repositories.
 - **`workers/trusted_git/`:** focused Prepare/Publish, Git/GitHub, auth and snapshot modules without a second nested Clean Architecture stack; retain the independent GitHub App authority and **no workflow DB**.
 - **Observability:** safe JSON structured logs, validated request/correlation IDs across process boundaries, per-service liveness/readiness, failures/secret-redaction tests.
-- **Five quality gates:** full Ruff+C901, Import Linter+AST/negative fixtures, Mypy Strict, meaningful unit tests for every new Use Case plus ≥90% **Domain/Application** line and branch coverage, and Alembic PostgreSQL schema drift detection. **Legacy SQLite code is explicitly excluded from new R2 coverage investment**; retire it, do not improve it.
+- **Five quality gates:** full Ruff+C901, Import Linter+AST/negative fixtures (including canonical `StrEnum` vs magic string/duplicate enums), Mypy Strict, meaningful unit tests for every new Use Case plus ≥90% **Domain/Application** line and branch coverage, and Alembic PostgreSQL schema drift detection. **Legacy SQLite code is explicitly excluded from new R2 coverage investment**; retire it, do not improve it.
 - **Incremental source PRs:** PostgreSQL/domain/application first, then bounded integration, interfaces and enforcement. Remove unused legacy SQLite when eligible; do not preserve it forever for backwards compatibility.
 
 Details: [full R2 folder/use-case skeleton](architecture/r2-clean-architecture-blueprint.md) and [quality/architecture unit-test matrix](architecture/r2-quality-gates-and-tests.md). These documents alone authorize **no** source, CI, schema, policy, privilege or deployment edit.
