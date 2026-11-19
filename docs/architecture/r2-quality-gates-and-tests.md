@@ -3,6 +3,22 @@
 **Status:** PROPOSED / NOT YET ENFORCED. Companion to [R2 architecture blueprint](r2-clean-architecture-blueprint.md).
 **Compared sources:** `clean_arch_demo` at `b274fe483c88f1524cce0ac275ade266f03ec145`, Agent Workflow `main@33cebc9d7b53094477c48e24852cc06a936b9bbe`. This is a **target test contract** and a prioritized audit, not evidence that missing checks already run. CI/security file edits are protected and require their own approved task/review.
 
+## Exact reference files in the Owner's demo — read source, not only README
+
+**Reference SHA:** [`clean_arch_demo@b274fe4`](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145). When implementing R2 checks, Codex must inspect the following exact files:
+
+| Demo file | What it really enforces / what to adapt |
+| --- | --- |
+| [`pyproject.toml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/pyproject.toml) | `[tool.importlinter]` declares **separate** `layers`, `independence`, `forbidden` contracts; Ruff `C901`, Mypy strict and coverage branch settings. Demo's root `src` is **not** the Agent Workflow import namespace; use `root_package = "agent_workflow"` and enforce `interfaces`/composition separation instead. |
+| [`tests/architecture/test_architecture.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/tests/architecture/test_architecture.py) | **Independent AST tests**, not the Import Linter: forbid I/O functions/dynamic imports in core, require UseCase constructor types and unit-test files, `I*` port naming and pure domain entities. Adapt from `unittest` to existing pytest and strengthen weak checks. |
+| [`.github/workflows/ci.yml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/.github/workflows/ci.yml) | Runs `lint-imports` **AND** the AST/coverage tests, Ruff format/lint, Mypy and Alembic. R2 must preserve Agent Workflow's existing 3 CI job categories, trusted exact HEAD and security tests. |
+| [`src/domain/order/entities.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/src/domain/order/entities.py) | Useful pure dataclass/value behavior; the pinned code currently types `Order.status` as `str`, so do **not** copy this defect. Agent Workflow already has canonical `WorkflowStatus`, `DispatchStatus`, `CiVerdict` in `domain/states.py`. |
+| [`tests/unit/test_register_user_use_case.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/tests/unit/test_register_user_use_case.py) | Use Case test examples for happy path, rejection and post-commit notification failure; expand to actual fault, rollback, concurrency and exact-SHA cases appropriate to Agent Workflow. |
+
+**Important distinction:** Import Linter is configured through `pyproject.toml` and invoked with `lint-imports`; `test_architecture.py` is a separate AST-based test suite. Keep Agent Workflow's existing `tests/test_architecture_policy.py` as a third, exact-debt/worker-specific backstop. Do not replace one with another.
+
+**Known demo gate limitations to improve:** its `Any` guard detects only bare `ast.Name("Any")`, not aliases/`typing.Any`/nested generics; its test-file rule can pass a vacuous `test_*` function; its `coverage report --fail-under=90` uses an aggregate threshold and does **not** establish per-package line **and** branch rates. Add negative fixtures for all bypasses and check real behavior, not just filenames. The demo uses `PYTHONPATH=.` because it imports `src.*`; Agent Workflow has the `agent_workflow` package under `src/`, so use an editable install or `PYTHONPATH=src`. Keep the existing pytest runner rather than rewriting tests to `unittest` solely for stylistic uniformity.
+
 ## 1. Baseline: what exists and what is missing
 
 | Gate | Current Agent Workflow CI (`.github/workflows/v1-ci.yml`) | Target borrowing from demo |
@@ -66,6 +82,8 @@ Apply to the **`agent_workflow` namespace**, not demo's installable `src` namesp
 
 ## 3. Architecture test review: specific upgrades
 
+**Existing StrEnum gate:** `src/agent_workflow/domain/states.py` already provides canonical `WorkflowStatus(StrEnum)`, `DispatchStatus(StrEnum)` and `CiVerdict(StrEnum)` (R2-01A-P1 / PR #43). Future refactor must reuse these classes, preserve exact `.value` serialization and introduce no second enum authority. Converting `Literal`/Pydantic/MCP boundaries to enum-typed core is a separately tested compatibility change. Enumerate only genuinely closed business sets; never arbitrary plugin/provider IDs.
+
 ### Existing tests to preserve
 
 - `tests/test_architecture_policy.py::test_no_new_cross_layer_imports_and_no_stale_exceptions` compares full import inventory to exact, reasoned exceptions; retain and **reduce** entries as migration proceeds.
@@ -84,6 +102,7 @@ Apply to the **`agent_workflow` namespace**, not demo's installable `src` namesp
 | `test_ports_are_protocols_and_typed` | Non-`Protocol` ports, missing type annotations, `Any` dependencies in new UseCase constructors; keep sane style naming `IReviewRepository`/`IReviewUnitOfWork` |
 | `test_each_use_case_has_behavior_tests` | New `*UseCase` with no unit test **or** only an empty/smoke assertion; check scenario metadata/behavior manifest, not only filename existence |
 | `test_domain_entities_are_pure` | Entity inherits ORM/Pydantic base class or performs filesystem/network/DB I/O |
+| `test_canonical_strenum_states` | New closed Domain state is typed as raw `str`, known status comparisons use magic strings, duplicate/shadow `WorkflowStatus`/`DispatchStatus`/`CiVerdict` declarations appear, invalid wire enum value is silently accepted or an existing persisted value changes |
 | `test_no_unapproved_dynamic_imports` | `__import__`, `importlib`, `eval`, `exec`, `open`/`print` in core; avoid false positives for known safe standard-library use |
 | `test_composition_is_assembly_only` | Use-case decisions/`commit()`/SQL/privilege grants in `*_deps.py` or `database.py`; no hidden DB connection on module import |
 | `test_trusted_worker_capability_boundary` | Worker imports workflow DB state or passes installation tokens into Code/Test; the negative must fail independently of AST import detection |
