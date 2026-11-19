@@ -15,6 +15,8 @@ Make workflow business behavior discoverable by **feature and use case**, as in 
 - `composition` = **dependency assembly only**, named `database.py`/`task_deps.py`/`review_deps.py`/`dispatch_deps.py`/`runtime_deps.py`/`health_deps.py`; builds factory/UoW/repository/use-case graph with a controlled lifetime. No feature behavior, policy duplication or transaction commits here.
 - `workers/trusted_git` = separate trusted Prepare/Publish executable and GitHub App authority. Split by responsibility, **not** a second nested Domain/Application stack. Its sole credential boundary remains independent of credential-free Code/Test containers and workflow DB.
 
+**PostgreSQL-only R2 investment:** Legacy SQLite source remains in the as-built repository, but **is not an R2 feature, refactor, unit-test or 90% coverage target**. Do not write new SQLite repositories, compatibility facades, migration shims or tests. Inventory and retire remaining active SQLite entrypoints under a separately authorized bounded cleanup/cutover; retain only essential safety/operational checks until that path is actually retired. All new Domain/Application/Repository/UoW work is PostgreSQL-oriented. Remove dead SQLite code early when its consumers are safely replaced, rather than preserving it until the end of R2.
+
 **Source layout choice:** For the first R2 refactor PRs, retain the current `src/agent_workflow/` physical layout and `agent_workflow.*` import names. The final optional shorter tree `agent_workflow/` at repository root (removing **only `src/`**) is a distinct, late packaging change requiring isolated approval, CI, wheel/Docker checks and migration verification. Do not combine relocation with business refactoring.
 
 ## 2. Target folder skeleton (illustrative; create only when a use case needs it)
@@ -96,7 +98,7 @@ agent-workflow/
 └── pyproject.toml
 ```
 
-The braces group *candidate* files, not a request to add empty placeholders. Existing source, `tests/test_r2_00_characterization.py`, and security/integration tests stay in place until each behavior has a verified replacement. Do not rename imports, `src/`, `mcp` or the worker executable across the codebase in a single commit.
+The braces group *candidate* files, not a request to add empty placeholders. Existing source, `tests/test_r2_00_characterization.py`, and critical **PostgreSQL/security** tests remain as the behavior baseline until their replacements are verified. SQLite-only tests are **retirement inventory**, not targets for new tests, coverage repair or one-for-one porting; delete them alongside the approved removal of their obsolete code after checking active consumers. Do not rename imports, `src/`, `mcp` or the worker executable across the codebase in a single commit.
 
 ### Feature ownership / readable entrypoints
 
@@ -197,12 +199,12 @@ Runtime adapter contracts stay plug-and-play for approved `Dev/Code` only. Intro
 | Slice | Scope and acceptance | Existing implementation to migrate | Gate |
 | --- | --- | --- | --- |
 | **R2-ARCH-00 Docs** (this PR) | Blueprint + quality/test contract; no runtime/CI edits | ADR-AW-001, tests, policy, demo | Documentation diff only |
-| **R2-01 Baseline** | Capture architecture graph, exceptions, test/coverage/type/complexity counts, public DTOs and behavior; no silent exemptions | `tests/test_r2_00_characterization.py`, `tests/test_architecture_policy.py`, `architecture/policy.toml` | Baseline report + negative regression fixtures; current CI remains required |
+| **R2-01 Baseline** | Capture PostgreSQL-first architecture graph, exceptions, core test/type/complexity counts and public DTOs; inventory legacy SQLite solely for retirement, with no coverage remediation; no silent exemptions | `tests/test_r2_00_characterization.py`, `tests/test_architecture_policy.py`, `architecture/policy.toml` | Baseline report + negative regression fixtures; current CI remains required |
 | **R2-02 Domain/Application** | Split task/review/CI policies and named use cases, typed DTOs/ports; legacy facade forwards temporarily | `domain/service.py` (~531 lines), `domain/contracts.py`, `mcp/tools.py` | Unit + characterization + contract tests, remove exact exemptions as fixed |
-| **R2-03 DB/Config** | UoW owns transaction; repositories map typed entities; sync first, optional async factory; safe config consolidation | `storage/postgres_*.py`, `storage/repository.py`, `app_config.py`, `composition/postgres_*.py` | PostgreSQL concurrency, Alembic, rollback, scope/lifetime, failures |
+| **R2-03 DB/Config** | PostgreSQL-only UoW owns transaction; repositories map typed entities; sync first, optional async factory; safe config consolidation; retire obsolete SQLite paths when no longer active | `storage/postgres_*.py`, `storage/repository.py`, `app_config.py`, `composition/postgres_*.py` | PostgreSQL concurrency, Alembic, rollback, scope/lifetime, failures |
 | **R2-04 Dispatch/Runtime** | Extract dispatch/reconcile use cases, backend/plugin interfaces; simplify trusted worker | `orchestration/*`, `runners/*`, `workers/trusted_git/*` | Sandbox, credential isolation, uncertain publish, leadership, pinned image tests |
 | **R2-05 Interfaces/Observability** | Move inbound MCP/webhook/CLI adapters under `interfaces/`; one `composition/`; JSON logging and service-scoped health | `mcp/*`, `bootstrap/*`, `integrations/webhook_http.py` | Auth0, webhook signature, secret-safe logs, correlation, health failure tests |
-| **R2-06 Quality enforcement** | Independently enable full mandatory quality gates after measuring/fixing legacy; retire compatibility shims only after consumers are migrated | `.github/workflows/v1-ci.yml`, `pyproject.toml`, architecture/security tests | All five new gates plus existing exact-SHA, PG and sandbox gates |
+| **R2-06 Quality enforcement** | Independently enable full mandatory quality gates on the completed PostgreSQL-first package; remove obsolete SQLite code/tests instead of remediating them to satisfy new coverage targets; retire only remaining temporary facades after consumers migrate | `.github/workflows/v1-ci.yml`, `pyproject.toml`, architecture/security tests | All five new gates plus existing exact-SHA, PG and sandbox gates |
 
 Slices are an ordering proposal, **not preauthorization of protected files**. Each source/CI/policy/schema change requires a specific approved Notion task (PRIMARY/RELATED/PROTECTED envelope), one Draft PR, exact-HEAD CI and independent TL review; **Owner alone merges**. Never modify CI/policy and use that same PR's green checks as independent evidence of gate integrity.
 
@@ -214,7 +216,7 @@ Slices are an ordering proposal, **not preauthorization of protected files**. Ea
 4. MCP/OAuth/webhook/CLI/Controller/Worker behavior, entrypoints and serialized contracts remain compatible until explicitly changed and independently verified. Only the Owner may authorize deployment/cutover.
 5. Trusted worker never accesses workflow DB and credential-free Code/Test never receives GitHub App secrets; external effects are not falsely claimed atomic with DB.
 6. JSON logs with validated correlation IDs, bounded per-service liveness/readiness and negative tests exist; no sensitive payload/credential logging.
-7. R2 quality contract gates are green on the reviewed PR HEAD with truthful coverage/type/import/migration evidence; no blanket excludes, fabricated passes or bypasses.
+7. R2 quality contract gates are green on the reviewed PR HEAD with truthful PostgreSQL-first core coverage/type/import/migration evidence; removed SQLite modules and their retired tests are not included in the new 90% core target. No blanket excludes, fabricated passes or bypasses.
 8. The final package layout remains a single `agent_workflow` namespace. No `agent_workflow_v2`, duplicate source trees, or second deployed stack.
 
-**Non-goals:** Microservices, RabbitMQ/Celery copy from demo, artificial interface-per-class, runtime/provider expansion beyond approved V1, host execution for untrusted worker, production cutover and root-package move in the same PR as a use-case refactor.
+**Non-goals:** Investment in obsolete SQLite feature parity, new SQLite unit tests/coverage, migration scaffolding merely to preserve SQLite; microservices, RabbitMQ/Celery copy from demo, artificial interface-per-class, runtime/provider expansion beyond approved V1, host execution for untrusted worker, production cutover and root-package move in the same PR as a use-case refactor.
