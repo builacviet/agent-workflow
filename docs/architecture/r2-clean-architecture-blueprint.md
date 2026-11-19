@@ -28,9 +28,10 @@ agent-workflow/
 │   ├── domain/
 │   │   ├── shared/{exceptions.py,values.py}
 │   │   ├── task/{entities.py,policies.py,exceptions.py}
-│   │   ├── review/{entities.py,policies.py,states.py,exceptions.py}
+│   │   ├── workflow/{states.py}           # Canonical WorkflowStatus, if retained as shared context
+│   │   ├── review/{entities.py,policies.py,exceptions.py}
 │   │   ├── dispatch/{entities.py,policies.py,states.py}
-│   │   ├── ci/{evidence.py,policies.py}
+│   │   ├── ci/{evidence.py,policies.py,states.py}
 │   │   └── runtime/{values.py,policies.py}
 │   ├── application/
 │   │   ├── shared/{unit_of_work.py,errors.py}
@@ -121,8 +122,10 @@ Example method names are design targets; **do not invent new workflow states, po
 
 ```python
 # domain/review/policies.py
-def ensure_reviewable(status: str, completed_rounds: int) -> None:
-    if status != "READY_IN_REVIEW" or completed_rounds >= 2:
+from agent_workflow.domain.states import WorkflowStatus  # existing canonical enum
+
+def ensure_reviewable(status: WorkflowStatus, completed_rounds: int) -> None:
+    if status is not WorkflowStatus.READY_IN_REVIEW or completed_rounds >= 2:
         raise ReviewNotAllowed()  # pure domain error, no database or HTTP
 
 # application/review/ports.py
@@ -141,6 +144,30 @@ class IReviewUnitOfWork(Protocol):
 ```
 
 The snippets omit imports, error fields and version-specific protocol details for readability. Production implementations must use typed DTOs and real entity models. **One UoW owns the transaction and exposes repositories bound to that same session**; use cases must not separately construct/commit a `Session`, and repositories must not create independent transactions. Use optimistic/row-level locking, idempotency and fencing where the existing workflow requires them.
+
+#### Fixed state values — canonical `StrEnum`, never scattered strings
+
+**Existing merged implementation:** [`src/agent_workflow/domain/states.py`](../../src/agent_workflow/domain/states.py) already defines `WorkflowStatus(StrEnum)`, `DispatchStatus(StrEnum)` and `CiVerdict(StrEnum)` (merged R2-01A-P1, PR #43). **Reuse these exact enum classes and values first**; R2 must not define shadow `WorkflowStatus`/`DispatchStatus`/`CiVerdict` classes elsewhere.
+
+```python
+from enum import StrEnum
+
+class ReviewResolution(StrEnum):  # example of a NEW closed set only, if approved
+    FIXED = "FIXED"
+    NOT_FIXED = "NOT_FIXED"
+    PARTIALLY_FIXED = "PARTIALLY_FIXED"
+    NOT_VERIFIED = "NOT_VERIFIED"
+
+# For current workflow states, import and use the existing canonical definition:
+# from agent_workflow.domain.states import WorkflowStatus
+# status = WorkflowStatus.READY_IN_REVIEW
+```
+
+- Define a `StrEnum` for **finite, stable domain state, verdict or resolution sets**. Members are named constants, with **explicit persisted/wire values**; never use `auto()` where a serialized value is a contract. Compare in Domain/Application with `WorkflowStatus.READY_IN_REVIEW`, not `"READY_IN_REVIEW"`; annotate entity state and UseCase commands/results with canonical enum types. Derive transition sets from enum members, not copy-pasted string arrays.
+- One **authoritative definition per bounded domain concept**. The eventual feature-sliced target may relocate `WorkflowStatus` under a canonical workflow feature, `DispatchStatus` under `domain/dispatch/states.py` and `CiVerdict` under `domain/ci/states.py`, but **move one at a time and temporarily re-export the SAME enum class** from the old path when necessary. Never redefine it under both paths; migrate consumer imports only with tests.
+- Preserve current exact uppercase enum `.value` values, database text, JSON/MCP representations and public DTO validation. Convert strings to enums once at the boundary; reject unknown values explicitly (no silent fallback). Existing Pydantic/`Literal` wire DTOs are **migration constraints**, not justification for a second Domain enum or unapproved public schema changes.
+- Do **not** use `StrEnum` for open-ended identifiers such as task/branch names, provider names, arbitrary plugin/role IDs or externally configured values. A new enum requires a genuine closed business set, not a style-only class.
+- Future CI architecture tests must reject: new raw known status-string comparisons/assignments inside migrated core, duplicate enum definitions/shadow classes, use of an untyped `str` for new closed Domain state, unknown-status acceptance, and accidental change of persisted/serialized enum values. Use focused positive/negative fixtures so legitimate transport parsing and legacy paths are not falsely marked PASS.
 
 ### 3.2 One named Use Case — small and auditable
 
