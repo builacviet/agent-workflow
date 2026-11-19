@@ -3,21 +3,22 @@
 **Status:** PROPOSED / NOT YET ENFORCED. Companion to [R2 architecture blueprint](r2-clean-architecture-blueprint.md).
 **Compared sources:** `clean_arch_demo` at `b274fe483c88f1524cce0ac275ade266f03ec145`, Agent Workflow `main@33cebc9d7b53094477c48e24852cc06a936b9bbe`. This is a **target test contract** and a prioritized audit, not evidence that missing checks already run. CI/security file edits are protected and require their own approved task/review.
 
-## Exact reference files in the Owner's demo — read source, not only README
+## Demo files to consult for R2 quality gates
 
-**Reference SHA:** [`clean_arch_demo@b274fe4`](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145). When implementing R2 checks, Codex must inspect the following exact files:
+Pinned demo: [`clean_arch_demo@b274fe4`](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145).
 
-| Demo file | What it really enforces / what to adapt |
-| --- | --- |
-| [`pyproject.toml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/pyproject.toml) | `[tool.importlinter]` declares **separate** `layers`, `independence`, `forbidden` contracts; Ruff `C901`, Mypy strict and coverage branch settings. Demo's root `src` is **not** the Agent Workflow import namespace; use `root_package = "agent_workflow"` and enforce `interfaces`/composition separation instead. |
-| [`tests/architecture/test_architecture.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/tests/architecture/test_architecture.py) | **Independent AST tests**, not the Import Linter: forbid I/O functions/dynamic imports in core, require UseCase constructor types and unit-test files, `I*` port naming and pure domain entities. Adapt from `unittest` to existing pytest and strengthen weak checks. |
-| [`.github/workflows/ci.yml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/.github/workflows/ci.yml) | Runs `lint-imports` **AND** the AST/coverage tests, Ruff format/lint, Mypy and Alembic. R2 must preserve Agent Workflow's existing 3 CI job categories, trusted exact HEAD and security tests. |
-| [`src/domain/order/entities.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/src/domain/order/entities.py) | Useful pure dataclass/value behavior; **the pinned source does not yet contain the `OrderStatus(StrEnum)` class from the Owner's pasted example**, and still types `Order.status` as `str`. Treat the pasted example as an Owner **design instruction**, not claim that the pinned repo implemented it. Agent Workflow already has canonical `WorkflowStatus`, `DispatchStatus`, `CiVerdict` in `domain/states.py`. |
-| [`tests/unit/test_register_user_use_case.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/tests/unit/test_register_user_use_case.py) | Use Case test examples for happy path, rejection and post-commit notification failure; expand to actual fault, rollback, concurrency and exact-SHA cases appropriate to Agent Workflow. |
+- [`pyproject.toml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/pyproject.toml): Import Linter (`layers`, `independence`, `forbidden`), Ruff C901, Mypy Strict and coverage configuration.
+- [`tests/architecture/test_architecture.py`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/tests/architecture/test_architecture.py): additional AST architecture rules and mandatory UseCase unit-test checks.
+- [`.github/workflows/ci.yml`](https://github.com/builacviet/clean_arch_demo/blob/b274fe483c88f1524cce0ac275ade266f03ec145/.github/workflows/ci.yml): five gates in GitHub Actions.
 
-**Important distinction:** Import Linter is configured through `pyproject.toml` and invoked with `lint-imports`; `test_architecture.py` is a separate AST-based test suite. Keep Agent Workflow's existing `tests/test_architecture_policy.py` as a third, exact-debt/worker-specific backstop. Do not replace one with another.
+Import Linter and AST tests are **two separate checks**. Adapt the root to `agent_workflow` (not demo's `src`), keep the existing pytest runner/architecture tests, and reuse existing Agent Workflow security mechanisms rather than rebuilding them.
 
-**Known demo gate limitations to improve:** its `Any` guard detects only bare `ast.Name("Any")`, not aliases/`typing.Any`/nested generics; its test-file rule can pass a vacuous `test_*` function; its `coverage report --fail-under=90` uses an aggregate threshold and does **not** establish per-package line **and** branch rates. Add negative fixtures for all bypasses and check real behavior, not just filenames. The demo uses `PYTHONPATH=.` because it imports `src.*`; Agent Workflow has the `agent_workflow` package under `src/`, so use an editable install or `PYTHONPATH=src`. Keep the existing pytest runner rather than rewriting tests to `unittest` solely for stylistic uniformity.
+## Two-stage execution contract (when each R2 gate is enabled)
+
+1. **Manual Codex local pre-push:** after coding, run all five enabled gates in the isolated task worktree. Fix failures before claiming `READY_FOR_TL_REVIEW`. Schema check runs against an explicitly authorized disposable PostgreSQL database; never production. During staged rollout, run the new-file gates and report any known legacy baseline violations truthfully instead of bypassing them.
+2. **GitHub Actions post-push / Draft PR:** automatically rerun the same five mandatory gates on the pushed HEAD / PR merge ref, retaining the existing PostgreSQL, architecture, exact-SHA and sandbox checks. Independent TL review uses the actual run evidence, not Codex's local claims. **Only Owner merges.**
+
+If a local gate cannot run because the environment lacks Docker/PostgreSQL or is denied permission, name the exact blocked gate and proceed with safe in-scope checks; do **not** report it PASS or treat a PR submission as proof it passed locally. Enabling a gate in Actions requires a separately approved CI/policy task; this Markdown PR does not activate the checks.
 
 ## 1. Baseline: what exists and what is missing
 
