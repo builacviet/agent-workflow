@@ -16,6 +16,10 @@ from agent_workflow.domain.workflow_identity import WorkflowError
 class GetReviewContextInput:
     task_id: str
 
+    def __post_init__(self) -> None:
+        if not self.task_id.strip():
+            raise WorkflowError("task_id must not be blank")
+
 
 @dataclass(frozen=True)
 class GetReviewContextOutput:

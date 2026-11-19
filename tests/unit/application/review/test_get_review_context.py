@@ -164,11 +164,27 @@ def test_prior_review_retains_findings_and_caps_round(
     assert result.events == snapshot.events
 
 
-def test_unknown_task_fails_closed() -> None:
+@pytest.mark.parametrize(
+    "task_id",
+    ["", "   ", "\t\r\n", "\u00a0"],
+    ids=["empty", "spaces", "control", "unicode"],
+)
+def test_blank_task_id_is_rejected_before_read(task_id: str) -> None:
+    reader = FakeReviewContextReader(None)
+    use_case = GetReviewContextUseCase(reader)
+
+    with pytest.raises(WorkflowError, match="^task_id must not be blank$"):
+        use_case.execute(GetReviewContextInput(task_id))
+
+    assert reader.reads == []
+
+
+@pytest.mark.parametrize("task_id", ["missing", " missing "])
+def test_unknown_task_fails_closed(task_id: str) -> None:
     reader = FakeReviewContextReader(None)
     with pytest.raises(WorkflowError, match="^unknown authorized task$"):
-        GetReviewContextUseCase(reader).execute(GetReviewContextInput("missing"))
-    assert reader.reads == ["missing"]
+        GetReviewContextUseCase(reader).execute(GetReviewContextInput(task_id))
+    assert reader.reads == [task_id]
 
 
 def test_invalid_persisted_status_and_read_failure_propagate() -> None:

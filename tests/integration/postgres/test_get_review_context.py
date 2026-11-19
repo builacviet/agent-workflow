@@ -9,7 +9,7 @@ from unittest.mock import Mock
 from urllib.parse import quote
 
 import pytest
-from sqlalchemy import delete, event, text
+from sqlalchemy import delete, event, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
@@ -284,3 +284,20 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
     assert rollbacks == failed_connections
     assert failed_connections[0].closed
     assert use_case.execute(request).task.current_head_sha is None
+
+
+def test_context_rejects_unknown_persisted_event_status(
+    context_db: ContextDatabase,
+) -> None:
+    factory, service, task_id = context_db
+    service.provision_task(task_spec(task_id))
+    with factory.transaction() as connection:
+        connection.execute(
+            update(TaskEvent)
+            .where(TaskEvent.task_id == task_id)
+            .values(next_status="UNKNOWN_WORKFLOW_STATUS")
+        )
+
+    use_case = create_get_review_context_use_case(factory)
+    with pytest.raises(ValueError, match="is not a valid WorkflowStatus"):
+        use_case.execute(GetReviewContextInput(task_id))
