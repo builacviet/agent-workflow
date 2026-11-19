@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from agent_workflow.budget import check_deadline, operation_timeout
 from agent_workflow.integrations.github import REPOSITORY
-from coder_worker.github import GitHubVerifier, WorkflowError
+from agent_workflow.workers.trusted_git.github import GitHubVerifier, WorkflowError
 
 BOT = "builacviet-wfc-coder[bot]"
 
@@ -112,12 +112,9 @@ class GitHubApp:
         clock: Callable[[], float] = time.time,
     ) -> None:
         if any(
-            type(value) is not int or value <= 0
-            for value in (app_id, installation_id)
+            type(value) is not int or value <= 0 for value in (app_id, installation_id)
         ):
-            raise WorkflowError(
-                "positive integer App and installation IDs required"
-            )
+            raise WorkflowError("positive integer App and installation IDs required")
         pem = pem.resolve(strict=True)
         if (
             any("agent_workflow" in part.lower() for part in pem.parts)
@@ -162,9 +159,7 @@ class GitHubApp:
             return self._token
         jwt = self.jwt()
         app = self._request("GET", "/app", jwt)
-        installation = self._request(
-            "GET", f"/repos/{REPOSITORY}/installation", jwt
-        )
+        installation = self._request("GET", f"/repos/{REPOSITORY}/installation", jwt)
         if (
             app.get("id") != self.app_id
             or app.get("slug") != BOT[:-5]
@@ -194,15 +189,11 @@ class GitHubApp:
             ):
                 raise ValueError
         except (KeyError, TypeError, ValueError):
-            raise WorkflowError(
-                "invalid installation token response"
-            ) from None
+            raise WorkflowError("invalid installation token response") from None
         self._token, self._expires = token, expires
         return token
 
-    def api(
-        self, method: str, endpoint: str, payload: dict | None = None
-    ) -> Any:
+    def api(self, method: str, endpoint: str, payload: dict | None = None) -> Any:
         return self._request(method, endpoint, self.token(), payload)
 
     def identity(self) -> tuple[str, str]:

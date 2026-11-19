@@ -4,6 +4,7 @@ These tests inject an error *after* a simulated remote write was accepted.
 They prove local fail-closed behavior, not remote receipt verification, durable
 publication intent, real GitHub races, or atomicity across SQLite and GitHub.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -12,8 +13,7 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.orchestration.controller import run_once
 from agent_workflow.storage.dispatch_repository import DispatchLedger
-from coder_worker.app_auth import BOT
-
+from agent_workflow.workers.trusted_git.app_auth import BOT
 
 BASE = "a" * 40
 PUBLISHED = "b" * 40
@@ -23,10 +23,12 @@ HANDOFF = "docs/handoff.md"
 
 @pytest.mark.parametrize("ambiguous_step", ["push", "post", "patch"])
 def test_publish_uncertainty_never_emits_success_receipt(
-    tmp_path, monkeypatch, ambiguous_step,
+    tmp_path,
+    monkeypatch,
+    ambiguous_step,
 ):
     """Lost push/POST/PATCH response cannot become a trusted result.json."""
-    import coder_worker.main as worker
+    import agent_workflow.workers.trusted_git.main as worker
 
     root = tmp_path
     (root / "repo").mkdir()
@@ -70,11 +72,13 @@ def test_publish_uncertainty_never_emits_success_receipt(
             api_calls.append((method, endpoint))
             if method == "GET":
                 if ambiguous_step == "patch":
-                    return [{
-                        "draft": True,
-                        "number": 7,
-                        "user": {"login": BOT},
-                    }]
+                    return [
+                        {
+                            "draft": True,
+                            "number": 7,
+                            "user": {"login": BOT},
+                        }
+                    ]
                 return []
             # Remote request was hypothetically accepted, response was lost.
             raise WorkflowError("uncertain PR write response")
@@ -151,8 +155,6 @@ def test_ambiguous_publish_keeps_durable_dispatch_blocked_after_restart(tmp_path
     assert statuses == ["BLOCKED"]
     context = restarted.get_review_context("R104")
     assert context["status"] == "AWAITING_HANDOFF"
-    assert [event["action"] for event in context["events"]] == [
-        "LOCAL_AUTHORIZATION"
-    ]
+    assert [event["action"] for event in context["events"]] == ["LOCAL_AUTHORIZATION"]
     # Crucially, no automatic retry or second publish after service restart.
     assert len(invocations) == 1

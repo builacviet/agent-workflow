@@ -18,7 +18,7 @@ from agent_workflow.admin import (
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.security import authorize_request
-from coder_worker.github import GitHubVerifier
+from agent_workflow.workers.trusted_git.github import GitHubVerifier
 
 HEAD = "a" * 40
 NEXT = "b" * 40

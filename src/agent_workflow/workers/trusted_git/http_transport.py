@@ -16,9 +16,7 @@ class NoRedirect(HTTPRedirectHandler):
         raise ValueError("redirect refused")
 
 
-def request(
-    method: str, endpoint: str, token: str, payload: dict | None
-) -> bytes:
+def request(method: str, endpoint: str, token: str, payload: dict | None) -> bytes:
     if not endpoint.startswith("/") or endpoint.startswith("//"):
         raise ValueError("invalid endpoint")
     data = None if payload is None else json.dumps(payload).encode()
@@ -49,9 +47,7 @@ def main() -> None:
         if len(raw) > MAX_INPUT_BYTES:
             raise ValueError("request too large")
         data = json.loads(raw)
-        body = request(
-            data["method"], data["endpoint"], data["token"], data["payload"]
-        )
+        body = request(data["method"], data["endpoint"], data["token"], data["payload"])
         sys.stdout.buffer.write(body)
     except Exception:
         # No traceback, headers, response or credentials on worker stderr.

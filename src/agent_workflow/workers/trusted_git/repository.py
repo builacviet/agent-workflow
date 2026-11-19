@@ -1,9 +1,12 @@
 """Worker-only Git and snapshot validation."""
 
+import os
+import stat
+import subprocess
 from pathlib import Path, PurePosixPath
-import os, stat, subprocess
+
 from agent_workflow.budget import check_deadline, operation_timeout
-from coder_worker.github import WorkflowError
+from agent_workflow.workers.trusted_git.github import WorkflowError
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -82,20 +85,14 @@ def command(
         check_deadline()
         return result
     except (OSError, subprocess.SubprocessError):
-        raise WorkflowError(
-            "trusted command failed; output withheld"
-        ) from None
+        raise WorkflowError("trusted command failed; output withheld") from None
 
 
 def git(root: Path, *args: str) -> bytes:
-    return command(
-        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args]
-    )
+    return command(["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args])
 
 
-def snapshot(
-    root: Path, sha: str, destination: Path
-) -> dict[str, tuple[str, bytes]]:
+def snapshot(root: Path, sha: str, destination: Path) -> dict[str, tuple[str, bytes]]:
     baseline = {}
     for entry in git(root, "ls-tree", "-rz", sha).split(b"\0"):
         if not entry:
@@ -115,8 +112,7 @@ def snapshot(
             safe_path(path)
         content = git(root, "cat-file", "blob", oid)
         if (
-            len(content) + sum(len(item[1]) for item in baseline.values())
-            > MAX_BYTES
+            len(content) + sum(len(item[1]) for item in baseline.values()) > MAX_BYTES
             or len(baseline) >= 2000
         ):
             raise WorkflowError("source snapshot limit exceeded")

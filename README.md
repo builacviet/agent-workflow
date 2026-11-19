@@ -2,28 +2,30 @@
 
 **Agent onboarding:** Start with [AGENTS.md](AGENTS.md) and the [documentation map](docs/INDEX.md), then the current approved task and only its relevant source/tests. [CURRENT architecture](docs/architecture.md) and [TARGET CL-12 ADR](docs/adr/CL-12-architecture.md) are different; merged design decisions are **not** deployed features. For handoff use the [short template](docs/templates/handoff.md); the [historical log](docs/history/handoff-log.md) is not required startup context.
 
-Two independently importable Python packages share this repository:
-
-- `order_service`: small immutable in-memory order domain using Decimal. Application source and tests are unchanged from target main.
-- `agent_workflow`: migrated FastMCP workflow engine with SQLite, authenticated workflow tools, leases, GitHub SHA checks and two-round review history. It does not import or call order_service.
+The `agent_workflow` package contains the FastMCP workflow engine, storage and
+trusted Prepare/Publish Git worker. The trusted worker lives at
+`agent_workflow.workers.trusted_git`; its GitHub App credentials and Git/GitHub
+operations remain isolated to the Prepare/Publish execution path.
 
 Requires Python 3.11+. From the checkout root:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e '.[mcp,test]'
+.venv\Scripts\python.exe -m pip install -e '.[mcp,test,postgres]'
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe -m agent_workflow.admin seed-history
 .venv\Scripts\python.exe -m agent_workflow.admin seed-synthetic
 .venv\Scripts\python.exe -m agent_workflow.server
 ```
 
-The legacy `python -m my_wfc.admin`, `my_wfc.controller` and `my_wfc.server`
-commands still work. Use `agent_workflow` for Python imports. Existing Controller
-config and task records may use the former repository slug as an alias. GitHub
-requests and review links use `builacviet/agent-workflow`.
+Current Python entrypoints use `agent_workflow`, for example
+`python -m agent_workflow.admin` and `python -m agent_workflow.mcp.server`.
+Existing Controller config and task records may use the former repository slug
+as an alias. GitHub requests and review links use `builacviet/agent-workflow`.
 
-The `mcp` extra is optional: `pip install -e '.[test]'` suffices for the sample application and its tests (`python -m pytest tests/test_order_service.py -q`). Running the full suite requires both extras. There are no mandatory distribution runtime dependencies for the order package.
+The `mcp`, `test` and `postgres` extras provide the dependencies used by the
+full test suite. The retired `my_wfc` and `order_service` source packages are no
+longer distributed; the SQLite state location remains compatible.
 
 The server defaults to loopback port 8000 and /mcp. Do not start it on a port occupied by the original server. Migration verification uses temporary loopback ports; it does not switch the existing server, tunnel or plugin. Only ping/server_info are public; all seven workflow tools require protected transport authentication. No verified-effort attestation is configured, so verified High approval remains blocked.
 
@@ -33,8 +35,8 @@ TASK-001 historical state is imported as ESCALATED, two completed rounds, with o
 
 - [Project rules](AGENTS.md)
 - [Architecture](docs/architecture.md)
-- [Workflow tools, schema, state machine and security](docs/my-wfc.md)
-- [Migration provenance, state backup/copy, fixture strategy and rollback](docs/migration-my-wfc.md)
+- [Historical WFC workflow guide](docs/my-wfc.md)
+- [Historical migration provenance and state-copy record](docs/migration-my-wfc.md)
 - [Handoff and actual verification evidence](docs/handoff.md)
 - [Review policy](docs/review-policy.md)
 - [Historical TASK-001 specification](docs/tasks/TASK-001.md)

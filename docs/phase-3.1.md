@@ -4,7 +4,7 @@ CURRENT source/runbook architecture: approved 2026-11-05 and merged as [Phase 3.
 
 ## Responsibilities
 
-Worker dev (`coder_worker`) owns GitHub App and all Git/GitHub calls. Tech Lead uses its GitHub plugin for exact-SHA diff/comments/inline review and checks head/base ancestry immediately before verdict. `agent_workflow` stores authorized tasks, handoff, claims, findings and verdicts, validates local SHA/state/round rules and never contacts GitHub. Controller polls SQLite every 60 seconds, one atomic dispatch slot, starts/stops Docker worker phases and records worker-reported results; it does not push or verify remote state.
+The trusted worker (`agent_workflow.workers.trusted_git`) owns GitHub App and all Prepare/Publish Git/GitHub calls. Tech Lead uses its GitHub plugin for exact-SHA diff/comments/inline review and checks head/base ancestry immediately before verdict. `agent_workflow` stores authorized tasks, handoff, claims, findings and verdicts, validates local SHA/state/round rules and never contacts GitHub. Controller polls SQLite every 60 seconds, one atomic dispatch slot, starts/stops Docker worker phases and records worker-reported results; it does not push or verify remote state.
 
 DB access uses WorkflowRepository and WorkflowUnit interfaces. WorkflowService contains no SQL or sqlite3 calls. SQLiteWorkflowRepository handles schema initialization, reads and atomic writes. Dispatch storage is a separate SQLite adapter. Service accepts a repository implementation via constructor; tests inject a memory repository. Existing version-1 schema/history stay compatible. No evidence-schema expansion was made. Authenticated clients remain trusted reporters; per-role authorization is still an operating contract, not implemented RBAC.
 

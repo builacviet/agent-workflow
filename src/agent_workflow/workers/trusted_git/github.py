@@ -4,8 +4,11 @@ import json
 import subprocess
 from urllib.parse import quote
 
-
-from agent_workflow.integrations.github import WorkflowError, canonical_repository, validate_sha
+from agent_workflow.integrations.github import (
+    WorkflowError,
+    canonical_repository,
+    validate_sha,
+)
 
 
 class GitHubVerifier:
@@ -26,21 +29,15 @@ class GitHubVerifier:
             # Do not return credential-bearing subprocess output or headers.
             raise WorkflowError("GitHub verification unavailable") from None
 
-    def __call__(
-        self, repository: str, branch: str, base: str, head: str
-    ) -> None:
+    def __call__(self, repository: str, branch: str, base: str, head: str) -> None:
         repository = canonical_repository(repository)
         if repository not in self.allowed:
             raise WorkflowError("repository is not authorized")
         validate_sha(base)
         validate_sha(head)
-        branch_data = self._get(
-            f"repos/{repository}/branches/{quote(branch, safe='')}"
-        )
+        branch_data = self._get(f"repos/{repository}/branches/{quote(branch, safe='')}")
         if branch_data.get("commit", {}).get("sha") != head:
-            raise WorkflowError(
-                "remote branch head is stale or does not match"
-            )
+            raise WorkflowError("remote branch head is stale or does not match")
         comparison = self._get(f"repos/{repository}/compare/{base}...{head}")
         if comparison.get("status") not in {"ahead", "identical"}:
             raise WorkflowError("base is not an ancestor of remote head")

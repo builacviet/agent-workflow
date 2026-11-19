@@ -1,7 +1,7 @@
 """Migration-specific packaging and path checks, independent of workflow behavior."""
+
 import importlib
 from pathlib import Path
-import runpy
 
 import pytest
 
@@ -37,7 +37,9 @@ def test_packaged_reference_and_schema_available():
 
 def test_installed_default_preserves_legacy_state_path(monkeypatch, tmp_path):
     monkeypatch.delenv("WFC_DB_PATH", raising=False)
-    monkeypatch.setattr(paths, "__file__", str(tmp_path / "agent_workflow" / "paths.py"))
+    monkeypatch.setattr(
+        paths, "__file__", str(tmp_path / "agent_workflow" / "paths.py")
+    )
     assert database_path() == Path.home() / ".my_wfc/data/workflow.sqlite3"
 
 
@@ -63,10 +65,18 @@ def test_flat_imports_resolve_to_the_same_module(module, package):
     assert original is implementation
 
 
-@pytest.mark.parametrize("module", ["admin", "controller", "server"])
-def test_legacy_module_command_forwards_to_current_entrypoint(monkeypatch, module):
-    current = importlib.import_module(f"agent_workflow.{module}")
-    calls = []
-    monkeypatch.setattr(current, "main", lambda: calls.append(module))
-    runpy.run_module(f"my_wfc.{module}", run_name="__main__")
-    assert calls == [module]
+def test_retired_poc_packages_are_not_importable():
+    source = Path(__file__).resolve().parents[1] / "src"
+    assert not (source / "my_wfc").exists()
+    assert not (source / "order_service").exists()
+
+
+def test_trusted_worker_imports_from_agent_workflow_package():
+    for module in (
+        "agent_workflow.workers.trusted_git.main",
+        "agent_workflow.workers.trusted_git.app_auth",
+        "agent_workflow.workers.trusted_git.repository",
+        "agent_workflow.workers.trusted_git.github",
+        "agent_workflow.workers.trusted_git.http_transport",
+    ):
+        assert importlib.import_module(module)

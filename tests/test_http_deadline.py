@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from coder_worker import app_auth
 from agent_workflow.budget import cleanup_budget, dispatch_budget
+from agent_workflow.domain.service import WorkflowService
+from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.orchestration.controller import run_once
 from agent_workflow.storage.dispatch_repository import DispatchLedger
-from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.workers.trusted_git import app_auth
 
 
 @pytest.fixture
@@ -110,9 +110,7 @@ def loopback(monkeypatch):
 
 
 @pytest.mark.parametrize("endpoint", ["/slow_headers", "/trickle"])
-def test_http_total_deadline_kills_and_reaps_request_worker(
-    loopback, endpoint
-):
+def test_http_total_deadline_kills_and_reaps_request_worker(loopback, endpoint):
     started = time.monotonic()
     with dispatch_budget(time.time() + 5):
         with pytest.raises(WorkflowError) as error:
@@ -131,9 +129,7 @@ def test_http_total_deadline_kills_and_reaps_request_worker(
 
 def test_fast_response_and_redirect_refusal(loopback):
     with dispatch_budget(time.time() + 10):
-        assert app_auth.request_json("GET", "/fast", "synthetic") == {
-            "ok": True
-        }
+        assert app_auth.request_json("GET", "/fast", "synthetic") == {"ok": True}
         with pytest.raises(WorkflowError):
             app_auth.request_json("GET", "/redirect", "synthetic")
     assert loopback.paths == ["/fast", "/redirect"]
@@ -180,9 +176,7 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
     assert effects == ["cleanup"]
     assert all(process.poll() is not None for process in loopback.processes)
     with service.repository.raw_connection() as db:
-        dispatch = dict(
-            db.execute("SELECT * FROM coder_dispatches").fetchone()
-        )
+        dispatch = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
     assert dispatch["status"] == "BLOCKED" and dispatch["slot"] == 1
     context = service.get_review_context("HTTP-DEADLINE")
     assert context["status"] == "AWAITING_HANDOFF"

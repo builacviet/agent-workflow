@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from test_my_wfc import HEAD, NEXT, spec
+from test_agent_workflow import HEAD, NEXT, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget

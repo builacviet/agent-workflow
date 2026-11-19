@@ -19,7 +19,7 @@ from agent_workflow.orchestration import controller
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import CITask, Task
-from coder_worker import main as trusted_worker
+from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
 INPUT = "b" * 40

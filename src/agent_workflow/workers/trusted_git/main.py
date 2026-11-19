@@ -1,17 +1,28 @@
 """Trusted developer-worker prepare/publish phases, never workflow DB access."""
 
 from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlencode
 
-from coder_worker.app_auth import GitHubApp, AppVerifier, REPOSITORY, BOT
-from coder_worker.repository import snapshot, changes, writable, git
-from coder_worker.github import WorkflowError, validate_sha
-from agent_workflow.budget import dispatch_budget, operation_timeout, check_deadline
+from agent_workflow.budget import check_deadline, dispatch_budget, operation_timeout
+from agent_workflow.workers.trusted_git.app_auth import (
+    BOT,
+    REPOSITORY,
+    AppVerifier,
+    GitHubApp,
+)
+from agent_workflow.workers.trusted_git.github import WorkflowError, validate_sha
+from agent_workflow.workers.trusted_git.repository import (
+    changes,
+    git,
+    snapshot,
+    writable,
+)
 
 ROOT = Path("/workspace")
 
@@ -26,9 +37,7 @@ def git_auth(app: GitHubApp, repo: Path, *args: str) -> bytes:
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
             "GIT_CONFIG_VALUE_0": "Authorization: Basic "
-            + base64.b64encode(
-                ("x-access-token:" + app.token()).encode()
-            ).decode(),
+            + base64.b64encode(("x-access-token:" + app.token()).encode()).decode(),
         }
     )
     try:
@@ -62,9 +71,7 @@ def prepare(data: dict, app: GitHubApp) -> None:
     repo = ROOT / "repo"
     repo.mkdir()
     git(repo, "init")
-    git(
-        repo, "remote", "add", "origin", f"https://github.com/{REPOSITORY}.git"
-    )
+    git(repo, "remote", "add", "origin", f"https://github.com/{REPOSITORY}.git")
     git_auth(
         app,
         repo,
@@ -73,10 +80,7 @@ def prepare(data: dict, app: GitHubApp) -> None:
         "origin",
         "refs/heads/" + context["branch"],
     )
-    if (
-        git(repo, "rev-parse", "FETCH_HEAD").decode().strip()
-        != data["input_sha"]
-    ):
+    if git(repo, "rev-parse", "FETCH_HEAD").decode().strip() != data["input_sha"]:
         raise WorkflowError("remote moved during worker fetch")
     git(repo, "checkout", "-b", context["branch"], "FETCH_HEAD")
     source = ROOT / "source"
@@ -134,9 +138,7 @@ def publish(data: dict, app: GitHubApp) -> None:
             if git(repo, "ls-files", "--", entry["path"]).strip():
                 raise WorkflowError("deleted path remains staged")
         elif git(repo, "show", ":" + entry["path"]) != entry["content"]:
-            raise WorkflowError(
-                "staged content differs from tested source/handoff"
-            )
+            raise WorkflowError("staged content differs from tested source/handoff")
     git(
         repo,
         "-c",
@@ -147,12 +149,8 @@ def publish(data: dict, app: GitHubApp) -> None:
     )
     sha = git(repo, "rev-parse", "HEAD").decode().strip()
     verify = AppVerifier(app)
-    verify(
-        REPOSITORY, context["branch"], context["base_sha"], data["input_sha"]
-    )
-    git_auth(
-        app, repo, "push", "origin", "HEAD:refs/heads/" + context["branch"]
-    )
+    verify(REPOSITORY, context["branch"], context["base_sha"], data["input_sha"])
+    git_auth(app, repo, "push", "origin", "HEAD:refs/heads/" + context["branch"])
     verify(REPOSITORY, context["branch"], context["base_sha"], sha)
     prefix = f"/repos/{REPOSITORY}/pulls"
     existing = app.api(
@@ -175,9 +173,7 @@ def publish(data: dict, app: GitHubApp) -> None:
             or existing[0]["user"]["login"] != BOT
         ):
             raise WorkflowError("unexpected existing PR")
-        pr = app.api(
-            "PATCH", prefix + "/" + str(existing[0]["number"]), {"body": body}
-        )
+        pr = app.api("PATCH", prefix + "/" + str(existing[0]["number"]), {"body": body})
     else:
         pr = app.api(
             "POST",
@@ -193,12 +189,9 @@ def publish(data: dict, app: GitHubApp) -> None:
     if not pr["draft"] or pr["user"]["login"] != BOT:
         raise WorkflowError("PR attribution mismatch")
     result = {
-        key: context[key]
-        for key in ("task_id", "repository", "branch", "base_sha")
+        key: context[key] for key in ("task_id", "repository", "branch", "base_sha")
     }
-    result.update(
-        head_sha=sha, input_sha=data["input_sha"], pr_url=pr["html_url"]
-    )
+    result.update(head_sha=sha, input_sha=data["input_sha"], pr_url=pr["html_url"])
     (ROOT / "result.json").write_text(json.dumps(result))
 
 
@@ -227,6 +220,4 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        raise SystemExit(
-            "worker failed; operator reconciliation required"
-        ) from None
+        raise SystemExit("worker failed; operator reconciliation required") from None
