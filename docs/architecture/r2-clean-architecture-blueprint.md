@@ -196,7 +196,7 @@ Runtime adapter contracts stay plug-and-play for approved `Dev/Code` only. Intro
 
 | Slice | Scope and acceptance | Existing implementation to migrate | Gate |
 | --- | --- | --- | --- |
-| **R2-00 Docs** (this PR) | Blueprint + quality/test contract; no runtime/CI edits | ADR-AW-001, tests, policy, demo | Documentation diff only |
+| **R2-ARCH-00 Docs** (this PR) | Blueprint + quality/test contract; no runtime/CI edits | ADR-AW-001, tests, policy, demo | Documentation diff only |
 | **R2-01 Baseline** | Capture architecture graph, exceptions, test/coverage/type/complexity counts, public DTOs and behavior; no silent exemptions | `tests/test_r2_00_characterization.py`, `tests/test_architecture_policy.py`, `architecture/policy.toml` | Baseline report + negative regression fixtures; current CI remains required |
 | **R2-02 Domain/Application** | Split task/review/CI policies and named use cases, typed DTOs/ports; legacy facade forwards temporarily | `domain/service.py` (~531 lines), `domain/contracts.py`, `mcp/tools.py` | Unit + characterization + contract tests, remove exact exemptions as fixed |
 | **R2-03 DB/Config** | UoW owns transaction; repositories map typed entities; sync first, optional async factory; safe config consolidation | `storage/postgres_*.py`, `storage/repository.py`, `app_config.py`, `composition/postgres_*.py` | PostgreSQL concurrency, Alembic, rollback, scope/lifetime, failures |
