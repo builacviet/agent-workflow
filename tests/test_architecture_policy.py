@@ -34,9 +34,13 @@ def area_for(path: Path) -> str | None:
 def imports(path: Path) -> set[str]:
     """AST catches imports even inside functions and conditional blocks."""
     source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
     module_path = path.relative_to(SOURCE).with_suffix("").parts
     package = ".".join(module_path if path.name == "__init__.py" else module_path[:-1])
+    return imports_from_source(source, package)
+
+
+def imports_from_source(source: str, package: str) -> set[str]:
+    tree = ast.parse(source)
     found = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -48,13 +52,31 @@ def imports(path: Path) -> set[str]:
                 resolved = importlib.util.resolve_name(
                     "." * node.level + (node.module or ""), package
                 )
+            else:
+                resolved = node.module or ""
+            if resolved:
                 found.add(resolved)
-                if not node.module:
-                    found.update(resolved + "." + alias.name for alias in node.names)
-            elif node.module:
-                found.add(node.module)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                imported = f"{resolved}.{alias.name}" if resolved else alias.name
+                protected_alias = any(
+                    prefix == imported or prefix.startswith(imported + ".")
+                    for forbidden_imports in POLICY["forbidden_imports"].values()
+                    for prefix in forbidden_imports
+                )
+                if protected_alias:
+                    # `from package import child` can name a parent of a
+                    # forbidden nested package. Record that protected alias
+                    # too because AST cannot expose later attribute use.
+                    found.update(
+                        prefix
+                        for forbidden_imports in POLICY["forbidden_imports"].values()
+                        for prefix in forbidden_imports
+                        if prefix == imported or prefix.startswith(imported + ".")
+                    )
                 if node.module == "agent_workflow.runners":
-                    found.update(node.module + "." + alias.name for alias in node.names)
+                    found.add(imported)
     return found
 
 
@@ -159,6 +181,28 @@ def test_import_policy_rejects_future_violations():
     assert forbidden("trusted_git", "agent_workflow.storage.repository")
     assert not forbidden("application", "agent_workflow.domain.contracts")
     assert not forbidden("infrastructure", "agent_workflow.application.ports.execution")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from agent_workflow.workers import trusted_git",
+        "from agent_workflow import workers",
+    ],
+)
+def test_import_policy_rejects_nested_worker_parent_aliases(source):
+    modules = imports_from_source(source, "agent_workflow.domain")
+    assert any(forbidden("domain", module) for module in modules)
+
+
+def test_import_policy_allows_composition_to_import_worker():
+    path = SOURCE / "agent_workflow" / "composition" / "postgres_dispatch_entrypoint.py"
+    modules = imports(path)
+    worker_imports = {
+        module for module in modules if module.startswith("agent_workflow.workers")
+    }
+    assert "agent_workflow.workers.trusted_git.app_auth" in worker_imports
+    assert area_for(path) is None
 
 
 def test_nested_trusted_git_package_is_classified():
