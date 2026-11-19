@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
+from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 
 EXPECTED_REVISION = "pg02d_webhook_digest"
 
@@ -94,30 +95,23 @@ class PostgresFactory:
                 yield connection
 
     @contextmanager
+    def get_sync_session(self, connection: Connection) -> Iterator[Session]:
+        """Lend an ORM Session on the caller's connection and close it on exit."""
+        with Session(bind=connection, join_transaction_mode="rollback_only") as session:
+            yield session
+
+    @contextmanager
     def unit_of_work_session(
         self,
         *,
         read_only: bool = False,
         after_session_commit: Callable[[], None] | None = None,
     ) -> Iterator[Session]:
-        """Keep an ORM Session inside one externally owned UoW transaction.
-
-        The post-Session-commit hook still runs before the outer transaction
-        commits, so a deadline failure can roll back the entire UoW.
-        """
-        with self.transaction() as connection:
-            if read_only:
-                connection.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                )
-            with Session(
-                bind=connection, join_transaction_mode="rollback_only"
-            ) as session:
-                yield session
-                if not read_only:
-                    session.commit()
-                    if after_session_commit is not None:
-                        after_session_commit()
+        """Compatibility scope for callers that commit on successful return."""
+        with SqlAlchemyUnitOfWork.legacy_session(
+            self, read_only=read_only, after_session_commit=after_session_commit
+        ) as session:
+            yield session
 
     @contextmanager
     def repository_session(
@@ -128,9 +122,7 @@ class PostgresFactory:
         try:
             with connection_scope() as connection:
                 _set_repository_transaction_options(connection, read_only=read_only)
-                with Session(
-                    bind=connection, join_transaction_mode="rollback_only"
-                ) as session:
+                with self.get_sync_session(connection) as session:
                     yield session
                     if not read_only:
                         session.flush()
