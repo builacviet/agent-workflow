@@ -1,41 +1,65 @@
 # Agent Workflow architecture — canonical entrypoint
 
-**Cleanup task baseline:** main@9a3762db121d2e89f99373727074c06fa6d641b8 (merged PR #87, 2026-11-18). The package layout below reflects this cleanup branch; it is not proof of deployment.
+**Verified source baseline:** `main@33cebc9d7b53094477c48e24852cc06a936b9bbe` after [PR #88](https://github.com/builacviet/agent-workflow/pull/88), 2026-11-19. This page distinguishes **merged source**, **deployment/operational evidence**, **legacy code to retire**, and **proposed R2**. Merged source and CI are **not** proof of an activated production system.
 
-**Architecture governance (merged [PR #40](https://github.com/builacviet/agent-workflow/pull/40)):** [ADR-AW-001](adr/AW-001-clean-architecture-governance.md), [import policy](../architecture/policy.toml), [Worker Adapter contract](architecture/worker-runtime-plugins.md) and [Task Contract](templates/agent-task-contract.md). These are project design/consistency references, not proof that every proposed runtime component is implemented.
+**Governance:** [ADR-AW-001](adr/AW-001-clean-architecture-governance.md) ([merged PR #40](https://github.com/builacviet/agent-workflow/pull/40)), [exact architecture import policy](../architecture/policy.toml), [Worker Runtime contract](architecture/worker-runtime-plugins.md) and [task contract](templates/agent-task-contract.md). [R2 Blueprint](architecture/r2-clean-architecture-blueprint.md) and [R2 Quality/Test Contract](architecture/r2-quality-gates-and-tests.md) are **proposed** in Draft PR #90 until Owner merge, not features already implemented.
 
-## CURRENT — as-built
+## CURRENT — as-built source on main
 
-| Package/process | Actual responsibility and known limitations |
+The active Python distribution remains under `src/agent_workflow/`. [PR #88](https://github.com/builacviet/agent-workflow/pull/88) moved trusted Git worker code into the package and removed `src/my_wfc/` and `src/order_service/`. The target feature-sliced `application/*/use_cases` and `interfaces/` layout is not yet implemented.
+
+| Package / process | Merged responsibility and limitation |
 | --- | --- |
-| agent_workflow/domain | Public workflow contracts; service.py still combines application use cases and SQLite default composition |
-| agent_workflow/storage | SQLite workflow, dispatch, CI and webhook ledgers/migrations; adapters import concrete service/integration in places |
-| agent_workflow/integrations | GitHub identity, read-only Controller GitHub App Checks, CI coordination and signed webhook HTTP handling |
-| agent_workflow/mcp | MCP server and nine tools (7 workflow + ping/info), Auth0 OAuth and legacy Bearer options |
-| agent_workflow/orchestration | Trusted host Dev Controller and independent CI-only watcher CLI |
-| agent_workflow/runners | Docker phase coordination, sandbox/watchdog, Codex and approved Dev/Code runtime plugin selection |
-| agent_workflow.workers.trusted_git | Trusted worker for Prepare/Publish, separate GitHub App credentials and Git operations |
-| my_wfc and order_service | Retired source packages; historical workflow, task and migration evidence is retained |
-| flat agent_workflow wrappers | Legacy import compatibility, not a new architectural layer |
+| `domain/` | Contracts, workflow states/identity and CI evidence; `domain/states.py` already defines canonical `WorkflowStatus`, `DispatchStatus` and `CiVerdict` as `StrEnum` (PR #43). `domain/service.py` still mixes task handoff, review business rules, database transactions and legacy SQLite defaults; it is **not** yet a pure Domain. |
+| `storage/` | Legacy SQLite persistence alongside **implemented PostgreSQL** workflow, dispatch, CI and webhook repositories, ORM models and sync `PostgresFactory`. Repository Protocol placement and cross-layer coupling still need refactoring. |
+| `infrastructure/` | PostgreSQL leadership/advisory-lock implementation; other adapters remain distributed under legacy packages. |
+| `composition/` | Implemented PostgreSQL MCP, Controller, CI-watcher, dispatch and worker wiring. Still not the clean, feature-specific `database.py` / `*_deps.py` structure proposed for R2. |
+| `bootstrap/` | PostgreSQL MCP provider/config activation seam; overlaps conceptually with `composition/`. |
+| `integrations/` | GitHub authentication/CI checks and webhook transport/coordination, with some legacy Storage coupling. |
+| `mcp/` | MCP tools, Auth0 OAuth / bearer transport and Tech Lead GitHub/Notion integration endpoints; its server wires a **PostgreSQL** workflow provider. |
+| `orchestration/` | Trusted Controller, CI-watcher coordination, role profiles and existing CLI paths. |
+| `runners/` | Docker phase coordination, sandbox/watchdog and runtime plugin selection for approved Dev/Code. A runner import cycle remains in the exact architecture debt inventory. |
+| `workers/trusted_git/` | Trusted Prepare/Publish worker with GitHub App credentials, Git verification, snapshots and path safety. It is **not** a general-purpose untrusted Coder agent or database client. |
+| Root `agent_workflow/*.py` wrappers | Older compatibility import/CLI entrypoints, not a dedicated architecture layer. |
 
-**CURRENT Compose:** mcp, webhook, nginx router, optional ngrok tunnel; shared SQLite persistence. No merged Controller or PostgreSQL Compose service. Controllers run as host CLIs; no deployed systemd unit files are claimed. Worker stages (Prepare → Code → Test → Publish) are ephemeral Docker containers; Code/Test are credential-free.
+**Architecture debt remains:** `domain/service.py` still imports Storage/GitHub/paths through enumerated legacy exceptions; `architecture/policy.toml` also tracks other legacy imports and one runner cycle. `tests/test_architecture_policy.py` rejects **new** forbidden edges and stale exceptions; a passing gate is not a claim that all existing dependencies are clean.
 
-PR #37 merged CI/webhook wiring. Local supervised smoke previously checked OAuth discovery, anonymous MCP denial, signed/unsigned webhook responses and read-only GitHub App Checks. Full trusted worker → CI tracking → Controller verdict → review E2E remains deferred and no production stack is proven. Exact-SHA GitHub Actions tests are **test evidence**, not deployment evidence.
+## CURRENT — PostgreSQL, legacy SQLite, deployment and tests
 
-**Known correctness debt:** R1-01 uses immutable Pydantic `AppConfig.from_env()` to validate `WFC_CI_GATE_REQUIRED` (`0`/`1`, default `1`) at MCP/Controller composition boundaries. An explicit `0` bypasses CI for an isolated local test but must never be used with real GitHub publishing or public MCP deployments. `WorkflowService` does not read ENV; direct callers default to requiring CI. READY_IN_REVIEW still rejects a different repair HEAD even after trusted CI failure; Controller/Worker external publication cannot be atomically committed with the DB. Source modules have cross-layer dependencies and one runner import cycle. See Kimi's read-only audit and validate against source/HEAD before treating findings as fixed.
+- **PostgreSQL source exists:** Alembic migrations, PostgreSQL workflow/CI/dispatch/webhook adapters, sync `PostgresFactory` with schema-revision validation, transaction/session ownership, leadership and concrete Controller/Worker composition. `composition/postgres_dispatch_entrypoint.py` supplies an explicit one-shot PostgreSQL execution path. These are merged **implementation**, not proof that the Owner has activated it live.
+- **Tracked Compose files differ:** `compose.postgres.dev.yaml` supplies an isolated development PostgreSQL service. Root `compose.yaml` still declares MCP, webhook, router and optional ngrok with **legacy SQLite state mounts**, and no PostgreSQL or Controller service. Meanwhile `mcp/server.py` now builds a PostgreSQL provider; **do not claim the unmodified root Compose stack is a verified end-to-end PostgreSQL deployment**. Actual live configuration, credentials, startup and DB cutover need independent evidence.
+- **SQLite is retirement debt, not an R2 target:** legacy SQLite files remain today, but the Owner's R2 decision is **PostgreSQL-only forward development**. Do not add new SQLite tests/coverage, adapters, data models, facades, migration compatibility layers or feature parity. Inventory the remaining consumers to remove them safely in a separately approved cleanup/cutover. Keep only the minimum existing safety checks needed to avoid breaking an active path **until it is explicitly retired**; no broad SQLite refactor or remediation work.
+- **Runtime:** trusted host Controller/CI watcher CLI coordination, and Docker Prepare → Code → Test → Publish phases. Code/Test is credential-free; trusted Prepare/Publish alone owns GitHub App credentials. Runtime adapter selection currently covers approved Dev/Code; general role/phase plugins and a pluggable Docker/Podman backend are future work. Deployed systemd units or full running product E2E are **not verified**.
+- **CI currently enforced:** `.github/workflows/v1-ci.yml` runs push/PR Python tests, exact architecture policy tests, **changed-file-only Ruff**, ephemeral PostgreSQL migration/adapter/leadership tests and development-Compose smoke. The merged [main CI run](https://github.com/builacviet/agent-workflow/actions/runs/44432307839) succeeded. R2's **five new quality gates are not fully enabled yet**: whole-source Ruff+C901, Import Linter, Mypy Strict, separate ≥90% core line/branch coverage and Alembic model drift `check`.
+- **Verification limit:** Existing isolated tests and historical OAuth/webhook smoke evidence do not prove the full real Worker → GitHub publish → trusted CI → Controller/review process or production activation. Do not infer external side-effect atomicity from a successful database test.
 
-## TARGET — subject to ADR and stage-specific acceptance
+## CURRENT — correctness constraints
 
-- PostgreSQL-backed modular monolith with Domain, Application/Ports, Infrastructure Adapters, Interfaces and composition roots.
-- Linux/systemd trusted Controller and CI watcher; Docker Compose MCP/webhook/router/PostgreSQL; ephemeral Docker Worker stages.
-- PostgreSQL row locks, uniqueness, leases, fencing, idempotency, explicit publication intent/reconciliation; one V1 dispatch slot.
-- Plug-and-play Worker Runtime adapters with approved versioned manifests and a **separate** execution backend abstraction; future Podman/other roles are optional, not implemented.
-- Mandatory import-boundary CI, scoped task contracts and separate Owner gate for contracts, schemas and credential boundaries.
+- **CI repair fixed versus old documentation:** The previous statement that `READY_IN_REVIEW` always rejected a replacement SHA after failed CI is obsolete. `WorkflowService.register_task_handoff` implements a bounded `CI_REPAIR_HANDOFF` path with a **new SHA**, existing handoff provenance and trusted CI repair tracking; see `tests/test_r2_00_characterization.py`. Exact-HEAD / sticky failure policy remains, and this fix does not certify all recovery scenarios.
+- **Review:** claim/submit validate current HEAD, verified CI, lease, findings/prior resolutions, effort (when required) and two-round limit. `AppConfig.from_env()` validates PostgreSQL DSN and CI gate. A local-test bypass is not authorization to publish unverified work.
+- **PostgreSQL/external operations:** preserve atomic DB transitions, idempotency, row locking, timeouts, leadership fencing and explicit reconciliation of uncertain GitHub/Docker effects. Advisory locks alone cannot fence external effects.
+- **Security:** preserve Auth0/bearer authorization rules, distinct controller/reviewer/worker identities, webhook signature handling, credential-free Code/Test and independent trusted Worker secrets. Import linting alone cannot prove runtime isolation.
+
+## TARGET — R2 Clean Architecture, not yet implemented
+
+**Pinned reference:** [Owner's `clean_arch_demo` @ `b274fe4`](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145). Borrow its readable source structure, Use Cases/`Protocol`, dependency composition, PostgreSQL SessionFactory, AppConfig and CI quality discipline; **do not copy unrelated RabbitMQ/Celery or trade away workflow security**.
+
+- **One namespace:** refactor in the existing `src/agent_workflow/` tree. No `agent_workflow_v2`; removing only the outer `src/` is an optional, separate later packaging change.
+- **`domain/`:** pure entities, values, policies and transitions grouped by task, review, dispatch, CI and runtime features; no SQLAlchemy/Pydantic/network/IO.
+- **`application/`:** feature-sliced named Use Cases, typed DTOs, `Protocol` repositories/runtime ports and explicit UnitOfWork/transaction intent, not concrete infrastructure.
+- **`infrastructure/`:** **PostgreSQL** SQLAlchemy repositories/models, Sync + optional Async SessionFactory, UoW, validated `AppConfig` and secret-safe GitHub/Docker/observability adapters. No new SQLite implementation.
+- **`interfaces/` (not `presentation/`):** thin inbound MCP, webhook and CLI handlers.
+- **`composition/`:** easy-to-read `database.py`, `task_deps.py`, `review_deps.py`, `dispatch_deps.py`, `runtime_deps.py` and similar pure dependency wiring, modeled on the demo's `dependencies/database.py` and `*_deps.py`. Do not create DB sessions at import time or let handlers construct repositories.
+- **`workers/trusted_git/`:** focused Prepare/Publish, Git/GitHub, auth and snapshot modules without a second nested Clean Architecture stack; retain the independent GitHub App authority and **no workflow DB**.
+- **Observability:** safe JSON structured logs, validated request/correlation IDs across process boundaries, per-service liveness/readiness, failures/secret-redaction tests.
+- **Five quality gates:** full Ruff+C901, Import Linter+AST/negative fixtures (including canonical `StrEnum` vs magic string/duplicate enums), Mypy Strict, meaningful unit tests for every new Use Case plus ≥90% **Domain/Application** line and branch coverage, and Alembic PostgreSQL schema drift detection. **Legacy SQLite code is explicitly excluded from new R2 coverage investment**; retire it, do not improve it.
+- **Incremental source PRs:** PostgreSQL/domain/application first, then bounded integration, interfaces and enforcement. Remove unused legacy SQLite when eligible; do not preserve it forever for backwards compatibility.
+
+Details: [full R2 folder/use-case skeleton](architecture/r2-clean-architecture-blueprint.md) and [quality/architecture unit-test matrix](architecture/r2-quality-gates-and-tests.md). These documents alone authorize **no** source, CI, schema, policy, privilege or deployment edit.
 
 ## Documentation precedence
 
-- CURRENT: source/merged commit and independently verified runtime evidence, then this overview and [Phase 3.1 runbook](phase-3.1.md) for applicable historical operations.
-- Approved V1 scope: [V1 scope and gates](v1-scope-and-gates.md) and the task's Owner approval.
-- ADR-AW-001 is merged documentation ([PR #40](https://github.com/builacviet/agent-workflow/pull/40)); actual merged source/tests and verified deployment evidence govern what is implemented. The ADR does not authorize production cutover.
-- HISTORICAL: CL-12 target design for SQLite/Compose Controller/Podman Executor, including [CL-12 architecture](adr/CL-12-architecture.md), [deployment](adr/CL-12-deployment.md) and [persistence](adr/CL-12-persistence.md), now superseded in the proposed target by Owner's PostgreSQL decision. Historical ADRs are not erased.
-- Historical POC references: [my-wfc guide](my-wfc.md) and [migration notes](migration-my-wfc.md). They preserve historical context and are not current package or entrypoint instructions.
+1. **Current truth:** merged source at a verified HEAD, tests/CI with known scope, and independently observed running configuration. Historical README/runbooks and synthetic tests are not deployment attestations.
+2. **Task authority:** [V1 scope and gates](v1-scope-and-gates.md), approved Notion task/scope and [manual development task contract](templates/agent-task-contract.md). Protected changes need focused TL + applicable Owner approval; **Owner alone merges**.
+3. **R2 proposed:** [architecture blueprint](architecture/r2-clean-architecture-blueprint.md) and [quality contract](architecture/r2-quality-gates-and-tests.md) from Draft PR #90. Treat implementation as future work.
+4. **History only:** CL-12 SQLite/Compose/Podman concepts ([architecture](adr/CL-12-architecture.md), [deployment](adr/CL-12-deployment.md), [persistence](adr/CL-12-persistence.md)) and [old my-wfc guide](my-wfc.md)/[migration notes](migration-my-wfc.md) preserve provenance, **not** current implementation guidance.
