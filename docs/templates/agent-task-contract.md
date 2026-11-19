@@ -19,9 +19,20 @@ Use these fields in the **approved Notion task** or explicit Owner/TL assignment
 | Required verification | Relevant unit/negative/regression tests, DB integration, Ruff/CI as applicable |
 | Dependencies and blockers | Approved prerequisite task/PR, if any |
 | **Manual publish authorization** | Explicitly allow or disallow ordinary commit/push + Draft PR on assigned branch; no force-push or merge |
+| **Execution environment / permission reuse** | Specify manual development context, task-authorized local commands, optional Docker/build effects, Coder App publication rights, and what to do if a sandbox/tool actually denies execution. Prior approval never overrides system restrictions |
 | Review / rollback considerations | Important failure modes and recovery |
 | GitHub PR / Notion communication | Task links to PR; Notion Comments carry short status and PR/review links only, never duplicate technical evidence |
 | Handoff format | Checked evidence in [Draft PR template](handoff.md), not a new task evidence file |
+
+## Execution environment and sandbox authorization — manual DEVELOPMENT
+
+Include an explicit **Execution environment** clause in each approved Notion task. The following text is a reusable default; the task must identify any narrower permissions, conditions or exclusions:
+
+> **Execution environment (manual development):** Use the assigned isolated task worktree and the tools/permissions already available to this Codex session. When Owner Gate is Approved, proceed with task-scoped repository inspection, edits within the approved Scope Envelope, and local Ruff/pytest/build checks without asking the Owner to approve the same ordinary actions again. Use Docker/disposable service tests **only if** that specific external effect is approved in the task and supported by the environment. If the task grants publication, use the configured, verified Coder App for ordinary push to the assigned task branch and one Draft PR. **Do not pause solely to re-ask whether an already-authorized command may run outside a sandbox when the active tool/session permits it.** Do not force-push, merge, deploy or change unrelated resources.
+
+- **Task approval vs. runtime enforcement:** An approved task records which actions are *authorized*; it does not grant host access, disable sandboxing, elevate privilege, authorize credential access, or override a tool, OS or platform confirmation. Use the supported execution/approval mechanism and the permissions it actually provides. Never bypass a refusal by changing tools, disabling protections or moving execution to a less restricted context.
+- **Only re-escalate an actual blocker:** If a command is denied by the tool/sandbox, needs an additional permission not previously granted, or would cross a protected/HIGH boundary, stop *that action*. State the exact blocked operation, the observed error/restriction and the smallest approval or environment change needed. Continue other safe, independently permitted work. Do not repeatedly request the same Owner approval when the problem is a technical enforcement restriction.
+- **Distinct execution boundaries:** This clause applies to a **manual repository-development Codex session**, not to the product's untrusted automated Coder Worker. It grants no automated Worker host execution, Docker socket, privileged container, GitHub credential mount, production/shared database access, public deployment or Owner-only merge right. Keep write-scope, execution, publication and merge permissions separate.
 
 ## Execution rules
 
