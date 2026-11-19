@@ -5,6 +5,10 @@ from pathlib import Path
 import pytest
 
 from agent_workflow.infrastructure.database import models, session_factory
+from agent_workflow.infrastructure.database.repositories import (
+    review_context_reader,
+    sqlalchemy_review_context_reader,
+)
 from agent_workflow.storage import postgres_connection, postgres_models
 
 
@@ -46,6 +50,10 @@ def test_legacy_factory_shares_the_canonical_types_and_patch_points() -> None:
         postgres_connection.PostgresUnavailableError
         is session_factory.PostgresUnavailableError
     )
+    assert (
+        sqlalchemy_review_context_reader.SqlAlchemyReviewContextReader
+        is review_context_reader.SqlAlchemyReviewContextReader
+    )
 
 
 @pytest.mark.parametrize("first_path", ["storage", "infrastructure.database"])
@@ -73,6 +81,7 @@ with (
     for path in (first, second):
         for module in paths[path]:
             import_module(f"agent_workflow.{path}.{module}")
+    import_module("agent_workflow.composition.review_deps")
 
     legacy = import_module("agent_workflow.storage")
     canonical = import_module("agent_workflow.infrastructure.database")

@@ -14,6 +14,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.review.dtos import PreviousReview, ReviewEvent
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
     GetReviewContextUseCase,
@@ -23,6 +24,9 @@ from agent_workflow.composition.review_deps import create_get_review_context_use
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.infrastructure.database.repositories.review_repository import (
+    SqlAlchemyReviewRepository,
+)
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     Review,
@@ -31,10 +35,7 @@ from agent_workflow.storage.postgres_models import (
     Task,
     TaskEvent,
 )
-from agent_workflow.storage.postgres_workflow import (
-    PostgresWorkflowRepository,
-    PostgresWorkflowUnit,
-)
+from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -216,11 +217,13 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
     factory, service, task_id = context_db
     service.provision_task(task_spec(task_id))
     request = GetReviewContextInput(task_id)
-    original_list = PostgresWorkflowUnit.list_events
+    original_list = SqlAlchemyReviewRepository.list_events
     read_connections: list[Connection] = []
 
-    def observe_read(unit: PostgresWorkflowUnit, values: tuple) -> list[dict]:
-        connection = unit.session.connection()
+    def observe_read(
+        repository: SqlAlchemyReviewRepository, requested_task_id: str
+    ) -> tuple[ReviewEvent, ...]:
+        connection = repository._session.connection()
         read_connections.append(connection)
         assert (
             connection.scalar(text("SHOW transaction_isolation")) == "repeatable read"
@@ -235,12 +238,12 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
         service.register_task_handoff(
             task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"
         )
-        return original_list(unit, values)
+        return original_list(repository, requested_task_id)
 
     connection_scope = Mock(wraps=factory.connect_session)
     with monkeypatch.context() as patch:
         patch.setattr(factory, "connect_session", connection_scope)
-        patch.setattr(PostgresWorkflowUnit, "list_events", observe_read)
+        patch.setattr(SqlAlchemyReviewRepository, "list_events", observe_read)
         use_case = create_get_review_context_use_case(factory)
         connection_scope.assert_not_called()
         with dispatch_budget(time.time() + 15):
@@ -264,8 +267,10 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
     failed_connections: list[Connection] = []
     rollbacks: list[Connection] = []
 
-    def reject_write(unit: PostgresWorkflowUnit, values: tuple) -> list[dict]:
-        connection = unit.session.connection()
+    def reject_write(
+        repository: SqlAlchemyReviewRepository, _requested_task_id: str
+    ) -> tuple[PreviousReview, ...]:
+        connection = repository._session.connection()
         failed_connections.append(connection)
         event.listen(connection, "rollback", rollbacks.append)
         connection.execute(
@@ -275,7 +280,7 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
         pytest.fail("the read transaction accepted an update")
 
     with monkeypatch.context() as patch:
-        patch.setattr(PostgresWorkflowUnit, "list_reviews", reject_write)
+        patch.setattr(SqlAlchemyReviewRepository, "list_reviews", reject_write)
         with pytest.raises(DBAPIError) as error:
             use_case.execute(request)
 
@@ -301,3 +306,24 @@ def test_context_rejects_unknown_persisted_event_status(
     use_case = create_get_review_context_use_case(factory)
     with pytest.raises(ValueError, match="is not a valid WorkflowStatus"):
         use_case.execute(GetReviewContextInput(task_id))
+
+
+def test_context_rejects_invalid_metadata_without_exposing_values(
+    context_db: ContextDatabase,
+) -> None:
+    factory, service, task_id = context_db
+    service.provision_task(task_spec(task_id))
+    with factory.transaction() as connection:
+        connection.execute(
+            update(Task)
+            .where(Task.task_id == task_id)
+            .values(metadata_text='{"context_paths":{"private":"value"}}')
+        )
+
+    use_case = create_get_review_context_use_case(factory)
+    with pytest.raises(
+        ValueError, match="^Invalid persisted task context paths$"
+    ) as exc:
+        use_case.execute(GetReviewContextInput(task_id))
+    assert type(exc.value) is ValueError
+    assert exc.value.__suppress_context__

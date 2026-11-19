@@ -7,7 +7,10 @@ from sqlalchemy import exists, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.budget import check_deadline
+from agent_workflow.infrastructure.database.unit_of_work import (
+    set_workflow_query_timeout,
+)
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     CIObservation,
@@ -101,15 +104,7 @@ class PostgresWorkflowUnit:
         self.writable = writable
 
     def _timeout(self) -> None:
-        # PostgreSQL interprets zero as unlimited; never round a budget down to zero.
-        milliseconds = max(1, int(operation_timeout(30) * 1000))
-        self.session.connection().execute(
-            text(
-                "SELECT set_config('lock_timeout', :timeout, true), "
-                "set_config('statement_timeout', :timeout, true)"
-            ),
-            {"timeout": f"{milliseconds}ms"},
-        )
+        set_workflow_query_timeout(self.session)
 
     def _execute(self, statement):
         self._timeout()
