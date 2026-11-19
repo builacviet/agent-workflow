@@ -7,6 +7,7 @@
 | Coding quality, Python, security basics | [Engineering standards](conventions/engineering-standards.md#current-repository-specific-coding-baseline) |
 | PostgreSQL ORM/DTO or transaction lifecycle | [ORM/DTO](conventions/engineering-standards.md#postgresql-orm-and-dto-conventions) and [Session/transaction ownership](conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) |
 | Architecture, package ownership or cross-module interfaces | [As-built architecture](architecture.md), [import policy](../architecture/policy.toml) and related tests; the trusted Prepare/Publish worker is under `agent_workflow.workers.trusted_git` |
+| R2 planned folder skeleton, use cases, DI and code quality | [R2 Clean Architecture blueprint](architecture/r2-clean-architecture-blueprint.md) and [R2 quality / tests / observability contract](architecture/r2-quality-gates-and-tests.md) — **proposed**, not yet implemented |
 | Worktrees and manual Git commands | [Local worktree guide](guides/local-worktrees.md) |
 | Trusted HTTPS provider transport | [Provider HTTPS transport](guides/provider-https-transport.md) |
 | Controller/Docker recovery | [Phase 3.1 runbook](phase-3.1.md) and [dispatch/recovery guide](guides/dispatch-recovery.md) |
