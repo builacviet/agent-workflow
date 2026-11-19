@@ -27,6 +27,7 @@ Each checked item means *inspected*, not automatically passed. Mark each relevan
 - [ ] **AC / regression / compatibility:** `<verdict; evidence>`
 - [ ] **Scope Envelope (PRIMARY/RELATED) / per-path LOW/MEDIUM rationale / protected HIGH approvals / remote publish grant:** `<verdict; approved Notion task revision and actual diff check>`
 - [ ] **Clean Code / architecture / PostgreSQL if touched:** `<verdict; findings/fixes or N/A>`
+- [ ] **Validation and helper ownership (affected R2 code; otherwise N/A):** `<direct Use Case input / Domain invariant / inbound transport checks as applicable; negative tests prove no repository/commit/external effect for rejected input; helper ownership or N/A>`
 - [ ] **Security / external effects:** `<verdict; issues or NONE>`
 - [ ] **Tests / CI coverage and skipped checks:** `<verdict; links or NOT VERIFIED>`
 
