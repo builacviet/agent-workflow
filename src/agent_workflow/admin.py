@@ -1,11 +1,20 @@
 """Explicit local-only provision/import/reset commands; no automatic remote dispatch."""
+
 import argparse
 import json
-from pathlib import Path
 from importlib.resources import files
+from pathlib import Path
 
-from agent_workflow.integrations.github import REPOSITORY as REPO, WorkflowError
+from pydantic import ValidationError
+
+from agent_workflow.application.task.use_cases.authorize_task import (
+    AuthorizeTaskCommand,
+)
+from agent_workflow.domain.contracts import TaskSpec
 from agent_workflow.domain.service import default_service, encode
+from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
+from agent_workflow.integrations.github import REPOSITORY as REPO
+from agent_workflow.integrations.github import WorkflowError
 
 BASE = "015ccc535b85ce1d0ad00da787b827970b9bf39a"
 ROUND1 = "6352c8ff5ea83450a93cd1077d6447170c9dedaa"
@@ -76,10 +85,20 @@ def reset_synthetic(engine):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["seed-history", "seed-synthetic", "reset-synthetic", "provision"])
+    parser.add_argument(
+        "action",
+        choices=["seed-history", "seed-synthetic", "reset-synthetic", "provision"],
+    )
     parser.add_argument("--file", type=Path)
+    parser.add_argument(
+        "--postgres",
+        action="store_true",
+        help="provision only: use local PostgreSQL configured by PG_RUNTIME_DSN",
+    )
     args = parser.parse_args()
-    engine = default_service()
+    if args.postgres and args.action != "provision":
+        parser.error("--postgres is only available for provision")
+    engine = None if args.postgres else default_service()
     if args.action == "seed-history":
         import_history(engine)
     elif args.action == "seed-synthetic":
@@ -89,8 +108,32 @@ def main():
         seed_synthetic(engine)
     else:
         if not args.file:
-            parser.error("provision requires --file containing authorized TaskSpec JSON")
-        engine.provision_task(json.loads(args.file.read_text()))
+            parser.error(
+                "provision requires --file containing authorized TaskSpec JSON"
+            )
+        if args.postgres:
+            from agent_workflow.composition.task_deps import (
+                PostgresUnavailableError,
+                postgres_task_authorization,
+            )
+
+            try:
+                raw_spec = args.file.read_bytes()
+            except OSError:
+                parser.error("unable to read TaskSpec JSON file")
+            try:
+                values = TaskSpec.model_validate_json(raw_spec).model_dump()
+                values["acceptance_criteria"] = tuple(values["acceptance_criteria"])
+                values["context_paths"] = tuple(values["context_paths"])
+                command = AuthorizeTaskCommand(TaskAuthorizationSpec(**values))
+                with postgres_task_authorization() as use_case:
+                    use_case.execute(command)
+            except ValidationError:
+                parser.error("invalid TaskSpec JSON")
+            except (ValueError, TimeoutError, PostgresUnavailableError) as exc:
+                parser.error(str(exc))
+        else:
+            engine.provision_task(json.loads(args.file.read_text()))
     print("Local operation completed; no review approval or AI effort claimed.")
 
 
