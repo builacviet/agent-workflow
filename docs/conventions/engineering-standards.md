@@ -45,6 +45,23 @@
 
 A **MUST** is a review requirement with concrete evidence, not a claim that Ruff currently enforces every convention. Never expand the task to clean legacy code merely because a convention describes the preferred direction.
 
+## R2 validation and helper ownership
+
+Applies to **new or materially changed R2 features within an approved task**. Reference patterns: [Owner's validation commit](https://github.com/builacviet/clean_arch_demo/commit/9828b2c6cf69d22ecd3b4ac81be2683f981f3fa1) and [helper/cross-domain commit](https://github.com/builacviet/clean_arch_demo/commit/c0e8674fa0c2a61aadd6236ff893c8975f7d5728). Adapt to Agent Workflow's `interfaces/`, PostgreSQL and existing security contracts; **do not copy demo features or force a new layer**.
+
+| Boundary | MUST for affected R2 code |
+| --- | --- |
+| **Domain** | Entities/value objects and feature-specific pure Python validators enforce business invariants on creation and operations; raise defined Domain errors. Keep `domain/` free of Pydantic, SQLAlchemy, HTTP and I/O. Reuse canonical `StrEnum` for closed workflow states. |
+| **Application** | Validate command prerequisites when invoked **directly**, before calling a repository, opening a UoW or triggering a side effect. Call Domain policies for business eligibility; never assume an MCP/API adapter already validated input. Use typed DTOs/ports rather than framework validation in core. |
+| **Interfaces** (demo's Presentation) | At MCP/webhook/CLI entrypoints, validate input type, size, shape and format with Pydantic `Field`/`field_validator` or the existing framework's equivalent; normalize only when contract-safe. Map transport/domain failures to established errors. Do **not** reimplement Domain business rules here. |
+| **Infrastructure** | Validate persisted values when converting to typed core DTOs; reject unknown enum values rather than coercing to a default. Translate persistence errors safely and preserve transaction/rollback/identity guarantees. |
+
+**Verification:** For relevant changed behavior, test valid and invalid/blank/whitespace inputs, boundary lengths or malformed payloads, and invalid persisted states as applicable. Assert rejected commands **do not call repositories, commit, or trigger external effects**. For multi-domain writes, a Use Case coordinates Domain guards through its authorized UoW with **one transaction**; do not duplicate cross-domain rules or open independent commits. Keep existing MCP contract/security tests when interfaces change. Use `PASS / FAIL / N/A / NOT VERIFIED` evidence; a docs-only task does not require new Python tests.
+
+**Helpers belong to their responsibility, not a generic root folder:** Keep feature-specific pure validators in `domain/<feature>/validators.py` or a value object; put truly reusable **pure** functions under `domain/shared/` only when justified; transport parsing/pagination helpers under `interfaces/<transport>/`; third-party integration helpers in `infrastructure/` behind an Application `Protocol` only if a dependency boundary needs one. **Do not create root-level `utils/`, `helpers/` or `common/`, empty packages or speculative `shared/utils.py`.** For complex read-only projections, flat typed DTOs with a narrow query/read port can avoid loading full Domain Entities; use this only when it simplifies the actual query.
+
+No mandatory global CQRS rewrite, duplicate Domain/Interface checks, new SQLite coverage, or modification of protected/public contracts without separately approved task scope.
+
 ## PostgreSQL ORM and DTO conventions
 
 For new PostgreSQL adapters, use SQLAlchemy 2.x typed declarative mappings (`DeclarativeBase`, `Mapped`, `mapped_column`) with repository-scoped `Session` and transactions. Alembic revisions are the schema authority: map the existing columns, nullability, keys and constraints; never call `create_all()` or perform implicit migrations at startup. Define relationships only where useful and keep business rules in services. Use explicit ORM/Core projections and named insert fields; never use wildcard selects or positional whole-row inserts.
