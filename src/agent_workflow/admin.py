@@ -90,6 +90,11 @@ def main():
         choices=["seed-history", "seed-synthetic", "reset-synthetic", "provision"],
     )
     parser.add_argument("--file", type=Path)
+    parser.add_argument(
+        "--postgres",
+        action="store_true",
+        help="deprecated no-op: local admin commands always use PostgreSQL",
+    )
     args = parser.parse_args()
     if task_authorization_scope is None or admin_seed_scope is None:
         parser.error("PostgreSQL operations require the postgres extra")
