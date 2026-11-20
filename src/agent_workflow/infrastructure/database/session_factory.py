@@ -24,7 +24,9 @@ from agent_workflow.observability.correlation import (
 )
 
 EXPECTED_REVISION = "pg02d_webhook_digest"
-_CORRELATION_COMMENT = re.compile(r"/\* correlation_id=[A-Za-z0-9_-]{1,128} \*/ ")
+_CORRELATION_COMMENT = re.compile(
+    r"\A(?:/\* correlation_id=[A-Za-z0-9_-]{1,128} \*/ )+"
+)
 _LISTENER_LOCK = Lock()
 
 
@@ -36,10 +38,10 @@ def _correlate_statement(
     _context: object,
     _executemany: bool,
 ) -> tuple[str, object]:
+    # A cached or caller-supplied correlation prefix cannot outlive its context.
+    statement = _CORRELATION_COMMENT.sub("", statement, count=1)
     correlation_id = get_correlation_id()
-    if is_valid_correlation_id(correlation_id) and not _CORRELATION_COMMENT.match(
-        statement
-    ):
+    if is_valid_correlation_id(correlation_id):
         statement = f"/* correlation_id={correlation_id} */ {statement}"
     return statement, parameters
 

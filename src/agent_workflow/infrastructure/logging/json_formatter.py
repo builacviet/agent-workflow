@@ -3,8 +3,9 @@
 import json
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
+from threading import Lock
 
 from agent_workflow.observability.correlation import (
     get_correlation_id,
@@ -36,6 +37,11 @@ _EVENT_FIELDS = {
 }
 
 
+_admin_log_lock = Lock()
+_admin_log_stack = ExitStack()
+_active_admin_scopes = 0
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         correlation_id = get_correlation_id()
@@ -61,11 +67,24 @@ class JsonFormatter(logging.Formatter):
 
 @contextmanager
 def admin_log_scope() -> Iterator[None]:
-    """Attach one stderr handler for the duration of the local CLI call."""
-    loggers = tuple(logging.getLogger(name) for name in _CLI_LOGGERS)
-    if any(type(handler.formatter) is JsonFormatter for handler in loggers[0].handlers):
+    """Keep one stderr handler installed until the last CLI call exits."""
+    global _active_admin_scopes
+    with _admin_log_lock:
+        if _active_admin_scopes == 0:
+            _admin_log_stack.enter_context(_attach_admin_stderr())
+        _active_admin_scopes += 1
+    try:
         yield
-        return
+    finally:
+        with _admin_log_lock:
+            _active_admin_scopes -= 1
+            if _active_admin_scopes == 0:
+                _admin_log_stack.close()
+
+
+@contextmanager
+def _attach_admin_stderr() -> Iterator[None]:
+    loggers = tuple(logging.getLogger(name) for name in _CLI_LOGGERS)
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     previous = [(logger, logger.level, logger.propagate) for logger in loggers]

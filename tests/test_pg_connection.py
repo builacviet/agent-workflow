@@ -298,9 +298,14 @@ def test_correlation_listener_registers_before_readiness_and_only_once(monkeypat
             statement = text("SELECT :number")
             with second.connect_session() as connection:
                 assert connection.scalar(statement, {"number": 42}) == 42
-                connection.execute(text("/* correlation_id=prior */ SELECT 1"))
+                prefixed = text(
+                    "/* correlation_id=prior */ /* correlation_id=older */ SELECT :number"
+                )
+                with correlation_scope(correlation_id="nested"):
+                    assert connection.scalar(prefixed, {"number": 1}) == 1
+                assert connection.scalar(prefixed, {"number": 2}) == 2
         with first.connect_session() as connection:
-            connection.execute(text("SELECT 2"))
+            assert connection.scalar(prefixed, {"number": 3}) == 3
         install.assert_called_once()
         assert install.call_args.kwargs == {"retval": True}
         assert statements == [
@@ -313,8 +318,9 @@ def test_correlation_listener_registers_before_readiness_and_only_once(monkeypat
                 (),
             ),
             ("/* correlation_id=readiness-1 */ SELECT ?", (42,)),
-            ("/* correlation_id=prior */ SELECT 1", ()),
-            ("SELECT 2", ()),
+            ("/* correlation_id=nested */ SELECT ?", (1,)),
+            ("/* correlation_id=readiness-1 */ SELECT ?", (2,)),
+            ("SELECT ?", (3,)),
         ]
     finally:
         engine.dispose()
@@ -334,6 +340,31 @@ def test_correlation_listener_leaves_sql_and_parameters_untouched_for_invalid_id
             None, None, statement, parameters, None, False
         )
     assert sql == statement
+    assert bound is parameters
+
+
+@pytest.mark.parametrize("correlation_id", [None, "active"])
+def test_correlation_listener_preserves_parameter_object_when_replacing_prefix(
+    correlation_id,
+):
+    statement = "SELECT %(bound)s"
+    parameters = {"bound": "bound value"}
+    with correlation_scope():
+        set_correlation_id(correlation_id)
+        sql, bound = session_factory._correlate_statement(
+            None,
+            None,
+            "/* correlation_id=prior */ " + statement,
+            parameters,
+            None,
+            False,
+        )
+    expected = (
+        f"/* correlation_id={correlation_id} */ " + statement
+        if correlation_id
+        else statement
+    )
+    assert sql == expected
     assert bound is parameters
 
 

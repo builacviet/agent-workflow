@@ -3,7 +3,9 @@
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Event
 
 import pytest
 
@@ -109,3 +111,40 @@ def test_stderr_setup_is_reentrant_and_restores_logger_configuration(capsys):
         (line,) = capsys.readouterr().err.splitlines()
         assert json.loads(line)["event"] == "admin_temporary_failure"
         assert (logger.handlers, logger.level, logger.propagate) == original
+
+
+def test_overlapping_threads_keep_json_handler_until_both_have_exited(capsys):
+    admin = logging.getLogger(LOGGER_NAME)
+    authorization = logging.getLogger(
+        "agent_workflow.application.task.use_cases.authorize_task"
+    )
+    loggers = (admin, authorization)
+    original = [
+        (list(logger.handlers), logger.level, logger.propagate) for logger in loggers
+    ]
+    second_entered, first_exited = Event(), Event()
+
+    def second_request():
+        with correlation_scope(correlation_id="second"), admin_log_scope():
+            second_entered.set()
+            assert first_exited.wait(timeout=5), "first request did not exit"
+            authorization.info("task_authorization_committed")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            with correlation_scope(correlation_id="first"), admin_log_scope():
+                admin.warning("admin_temporary_failure")
+                second = executor.submit(second_request)
+                assert second_entered.wait(timeout=5), "second request did not enter"
+        finally:
+            first_exited.set()
+        second.result(timeout=5)
+
+    lines = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [(line["event"], line["correlation_id"]) for line in lines] == [
+        ("admin_temporary_failure", "first"),
+        ("task_authorization_committed", "second"),
+    ]
+    assert [
+        (logger.handlers, logger.level, logger.propagate) for logger in loggers
+    ] == original

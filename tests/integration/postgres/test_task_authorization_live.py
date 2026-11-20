@@ -316,11 +316,16 @@ def test_live_postgres_receives_safe_comment_and_unchanged_parameter(
     with correlation_scope(), factory.connect_session() as connection:
         set_correlation_id(correlation_id)
         sql, bound = connection.execute(
-            text("SELECT current_query(), CAST(:probe AS text)"),
+            text(
+                "/* correlation_id=prior */ "
+                "SELECT current_query(), CAST(:probe AS text)"
+            ),
             {"probe": probe},
         ).one()
     assert bound == probe
     assert probe not in sql
+    assert "correlation_id=prior" not in sql
+    assert sql.count("correlation_id=") == (1 if correlation_id == "valid-DB_1" else 0)
     if correlation_id == "valid-DB_1":
         assert sql.startswith("/* correlation_id=valid-DB_1 */ SELECT")
     else:
