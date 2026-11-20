@@ -10,7 +10,6 @@ import pytest
 from pydantic import ValidationError
 
 from agent_workflow import admin
-from agent_workflow.application.admin.ports import IAdminSeedUseCase
 from agent_workflow.application.shared.errors import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
@@ -108,7 +107,7 @@ def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
 
 def test_admin_seed_scope_has_typed_use_case_contract():
     annotation = get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"]
-    assert annotation == Iterator[IAdminSeedUseCase]
+    assert annotation == Iterator[task_deps.IAdminSeedUseCase]
 
 
 @pytest.mark.parametrize(
