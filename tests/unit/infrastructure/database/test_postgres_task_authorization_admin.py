@@ -5,10 +5,12 @@ import sys
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from pydantic import ValidationError
 
 from agent_workflow import admin
 from agent_workflow.composition import task_deps
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
+from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 
 LOCAL_DSN = "postgresql+psycopg://test:disposable@127.0.0.1/fixture"
 
@@ -124,7 +126,7 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
         ({"synthetic": "false"}, "invalid TaskSpec JSON"),
         ({"extra": True}, "invalid TaskSpec JSON"),
         ({"repository": "another/repo"}, "unauthorized repository"),
-        ({"task_id": "bad\0value"}, "must not contain NUL"),
+        ({"task_id": "bad\0value"}, "invalid TaskSpec JSON"),
     ],
 )
 def test_bad_transport_or_business_input_does_not_open_database(
@@ -142,6 +144,31 @@ def test_bad_transport_or_business_input_does_not_open_database(
     assert message in capsys.readouterr().err
     legacy.assert_not_called()
     open_factory.assert_not_called()
+
+
+
+@pytest.mark.parametrize(
+    ("updates", "error"),
+    [
+        ({"task_id": "bad\0value"}, "task_id must not contain NUL"),
+        ({"title": "bad\0title"}, "title must not contain NUL"),
+        ({"description": "\ud800"}, "description must be valid UTF-8"),
+        (
+            {"acceptance_criteria": ["good", "bad\0criteria"]},
+            "acceptance_criteria must not contain NUL",
+        ),
+        (
+            {"context_paths": ["good.md", "bad\0path"]},
+            "context_paths must not contain NUL",
+        ),
+    ],
+)
+def test_provision_task_spec_pydantic_validates_postgres_text(
+    spec_file, updates, error
+):
+    payload = json.loads(spec_file.read_text(encoding="utf-8"))
+    with pytest.raises(ValidationError, match=error):
+        ProvisionTaskSpec.model_validate(payload | updates)
 
 
 @pytest.mark.parametrize("fails", [False, True])
