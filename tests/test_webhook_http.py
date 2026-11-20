@@ -203,9 +203,7 @@ def test_pg_persistence_failure_returns_503_and_retry_succeeds(error_type):
             return InboxResult.INSERTED
 
     inbox = FailingInbox()
-    receiver = GitHubWebhookReceiver(
-        inbox, secret=b"z" * 32, installation_id=17
-    )
+    receiver = GitHubWebhookReceiver(inbox, secret=b"z" * 32, installation_id=17)
     server = WebhookHTTPServer(("127.0.0.1", 0), receiver)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

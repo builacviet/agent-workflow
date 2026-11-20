@@ -14,12 +14,11 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import Session
-
-from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
+from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.composition import webhook_entrypoint
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
@@ -62,7 +61,12 @@ def test_repository_requires_caller_session_and_never_commits():
     session.scalar.return_value = "00000000-0000-4000-8000-000000000001"
     notification = WebhookNotification(
         "00000000-0000-4000-8000-000000000001",
-        "workflow_run", "completed", "owner/repo", 3, 4, "a" * 40,
+        "workflow_run",
+        "completed",
+        "owner/repo",
+        3,
+        4,
+        "a" * 40,
     )
     repo = SqlAlchemyWebhookInboxRepository(session)
     assert repo.record(notification, "b" * 64) is InboxResult.INSERTED
@@ -204,7 +208,12 @@ def test_invalid_input_is_rejected_before_connecting():
     factory = MagicMock(spec=PostgresFactory)
     use_case = ReceiveWebhookUseCase(_SessionInbox(factory))
     notification = WebhookNotification(
-        str(uuid.uuid4()), "pull_request", "synchronize", "owner/repo", 1, 2,
+        str(uuid.uuid4()),
+        "pull_request",
+        "synchronize",
+        "owner/repo",
+        1,
+        2,
         "a" * 40,
     )
     for invalid, digest in [
