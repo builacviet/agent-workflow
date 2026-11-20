@@ -171,11 +171,18 @@ def test_write_or_deadline_failure_rolls_back(command, deadline):
     "fields",
     [{"task_id": "broken\0id"}, {"branch": "\ud800"}, {"context_paths": ("a\0b",)}],
 )
-def test_rejects_unencodable_text_before_scope(command, fields):
-    uow = MagicMock()
-    repository = Mock()
+def test_application_delegates_storage_text_checks_to_repository(command, fields):
+    scope = FakeScope()
+    scope.add_error = WorkflowError("unsupported persistence text")
     invalid = AuthorizeTaskCommand(replace(command.spec, **fields))
-    with pytest.raises(WorkflowError, match="NUL|UTF-8"):
-        AuthorizeTaskUseCase(uow, repository).execute(invalid)
-    uow.__enter__.assert_not_called()
-    repository.load_for_authorization.assert_not_called()
+
+    with pytest.raises(WorkflowError, match="unsupported persistence text"):
+        AuthorizeTaskUseCase(scope, scope).execute(invalid)
+
+    assert scope.calls == [
+        "open",
+        ("load", invalid.spec.task_id),
+        "add",
+        "rollback",
+    ]
+    assert scope.persisted is None
