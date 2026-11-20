@@ -419,6 +419,7 @@ def r2_violations(path, source):
                     "sqlite3",
                     "sqlalchemy",
                     "agent_workflow.domain.service",
+                    "agent_workflow.integrations.github",
                     "agent_workflow.storage",
                     "agent_workflow.infrastructure",
                 }
@@ -427,6 +428,7 @@ def r2_violations(path, source):
                         "sqlite3.",
                         "sqlalchemy.",
                         "agent_workflow.domain.service.",
+                        "agent_workflow.integrations.github.",
                         "agent_workflow.storage.",
                         "agent_workflow.infrastructure.",
                     )
@@ -455,7 +457,8 @@ def r2_violations(path, source):
             ):
                 record(node, "core-import", target)
             if opaque_core and (
-                target == "agent_workflow.infrastructure.database"
+                target.split(".")[0] in {"sqlalchemy", "psycopg", "psycopg2"}
+                or target == "agent_workflow.infrastructure.database"
                 or target.startswith("agent_workflow.infrastructure.database.")
                 or (
                     area == "interfaces"
@@ -497,14 +500,27 @@ def r2_violations(path, source):
                 "importlib.util.module_from_spec",
             }:
                 record(node, "core-call", target)
-        if path == "src/agent_workflow/admin.py" and isinstance(node, ast.Call):
+        if (
+            area == "interfaces" or path == "src/agent_workflow/admin.py"
+        ) and isinstance(node, ast.Call):
             target = _qualified_alias(node.func, aliases)
             if target in {
                 "__import__",
                 "builtins.__import__",
                 "importlib.import_module",
             }:
-                record(node, "admin-dynamic-import", target)
+                rule = (
+                    "interface-dynamic-import"
+                    if area == "interfaces"
+                    else "admin-dynamic-import"
+                )
+                record(node, rule, target)
+        if (
+            path == "src/agent_workflow/admin.py"
+            and isinstance(node, ast.Attribute)
+            and node.attr == "postgres"
+        ):
+            record(node, "admin-backend-selector", node.attr)
         if isinstance(node, ast.ClassDef):
             bases = [_qualified_alias(base, aliases) for base in node.bases]
             if area == "domain":
@@ -779,6 +795,30 @@ def test_task_authorization_wiring_is_explicit():
             "db-adapter-name",
         ),
         (
+            "domain",
+            "exceptions",
+            "from sqlalchemy.exc import OperationalError as BackendError",
+            "db-adapter-import",
+        ),
+        (
+            "application",
+            "exceptions",
+            "from agent_workflow.infrastructure.database.unit_of_work import PostgresUnavailableError as BackendError",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from psycopg import OperationalError as BackendError",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from importlib import import_module as load\nload('psycopg')",
+            "interface-dynamic-import",
+        ),
+        (
             "interfaces",
             "cli",
             "def use_session(factory):\n postgres_client = factory()",
@@ -843,12 +883,20 @@ class GetUseCase:
         "import sqlite3 as database",
         "from agent_workflow.storage.repository import SQLiteWorkflowRepository",
         "from agent_workflow.infrastructure.database import session_factory",
+        "from agent_workflow.integrations.github import WorkflowError",
+        "from agent_workflow.integrations import github as legacy_adapter",
     ],
 )
 def test_admin_rejects_legacy_and_database_imports(source):
     path = "src/agent_workflow/admin.py"
     with pytest.raises(AssertionError, match="admin-legacy-import"):
         _ratchet(r2_violations(path, source), set())
+
+
+def test_admin_rejects_backend_selection_from_deprecated_flag():
+    path = "src/agent_workflow/admin.py"
+    with pytest.raises(AssertionError, match="admin-backend-selector"):
+        _ratchet(r2_violations(path, "if args.postgres: select_backend()"), set())
 
 
 def test_r2_ast_allows_cli_flag_without_concrete_names():

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from threading import Lock
 
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -16,8 +18,40 @@ from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.infrastructure.database.unit_of_work import (
     PostgresUnavailableError as PostgresUnavailableError,
 )
+from agent_workflow.observability.correlation import (
+    get_correlation_id,
+    is_valid_correlation_id,
+)
 
 EXPECTED_REVISION = "pg02d_webhook_digest"
+_CORRELATION_COMMENT = re.compile(
+    r"\A(?:/\* correlation_id=[A-Za-z0-9_-]{1,128} \*/ )+"
+)
+_LISTENER_LOCK = Lock()
+
+
+def _correlate_statement(
+    _connection: Connection,
+    _cursor: object,
+    statement: str,
+    parameters: object,
+    _context: object,
+    _executemany: bool,
+) -> tuple[str, object]:
+    # A cached or caller-supplied correlation prefix cannot outlive its context.
+    statement = _CORRELATION_COMMENT.sub("", statement, count=1)
+    correlation_id = get_correlation_id()
+    if is_valid_correlation_id(correlation_id):
+        statement = f"/* correlation_id={correlation_id} */ {statement}"
+    return statement, parameters
+
+
+def _register_correlation_listener(engine: Engine) -> None:
+    with _LISTENER_LOCK:
+        if not event.contains(engine, "before_cursor_execute", _correlate_statement):
+            event.listen(
+                engine, "before_cursor_execute", _correlate_statement, retval=True
+            )
 
 
 def _set_repository_transaction_options(
@@ -45,6 +79,7 @@ class PostgresFactory:
         self._engine = engine
         self._closed = False
         try:
+            _register_correlation_listener(engine)
             self.assert_schema_ready()
         except Exception:
             engine.dispose()

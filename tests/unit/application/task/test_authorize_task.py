@@ -1,14 +1,17 @@
 """Exercise the write decision with a fake scoped repository and UoW."""
 
+import logging
 from dataclasses import replace
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
     AuthorizeTaskUseCase,
 )
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
@@ -88,10 +91,10 @@ class FakeScope:
 def test_rejects_malformed_direct_commands_before_scope(invalid):
     uow = MagicMock()
     repository = Mock()
-    with pytest.raises(WorkflowError, match="validated task authorization spec"):
+    with pytest.raises(TypeError, match="validated task authorization spec"):
         AuthorizeTaskUseCase(uow, repository).execute(invalid)
-    uow.__enter__.assert_not_called()
-    repository.load_for_authorization.assert_not_called()
+    assert not uow.mock_calls
+    assert not repository.mock_calls
 
 
 @pytest.mark.parametrize(
@@ -110,8 +113,14 @@ def test_rejects_unauthorized_direct_inputs_without_side_effects(command, invali
     repository.load_for_authorization.assert_not_called()
 
 
-def test_persists_then_requests_commit_once(command):
+def test_persists_then_requests_commit_once(command, monkeypatch):
     scope = FakeScope()
+    persisted_at_log = []
+
+    def observe(event):
+        persisted_at_log.append((event, scope.persisted))
+
+    monkeypatch.setattr(authorize_task._LOGGER, "info", observe)
     times = iter((10.0, 11.0))
     AuthorizeTaskUseCase(scope, scope, clock=lambda: next(times)).execute(command)
 
@@ -123,10 +132,15 @@ def test_persists_then_requests_commit_once(command):
         "commit",
     ]
     assert scope.persisted == TaskAuthorization(command.spec, 10.0, 11.0)
+    assert persisted_at_log == [
+        ("task_authorization_started", None),
+        ("task_authorization_committed", scope.persisted),
+    ]
 
 
 @pytest.mark.parametrize("conflict", [False, True])
-def test_existing_spec_does_not_write_or_commit(command, conflict):
+def test_existing_spec_does_not_write_or_commit(command, conflict, caplog):
+    caplog.set_level(logging.INFO, logger=authorize_task.__name__)
     scope = FakeScope()
     scope.existing = replace(
         command.spec,
@@ -138,7 +152,7 @@ def test_existing_spec_does_not_write_or_commit(command, conflict):
     clock = Mock()
     use_case = AuthorizeTaskUseCase(scope, scope, clock=clock)
     if conflict:
-        with pytest.raises(WorkflowError, match="conflicts with stored metadata"):
+        with pytest.raises(DomainError, match="conflicts with stored metadata"):
             use_case.execute(command)
     else:
         use_case.execute(command)
@@ -146,10 +160,16 @@ def test_existing_spec_does_not_write_or_commit(command, conflict):
     assert scope.calls == ["open", ("load", command.spec.task_id), "rollback"]
     clock.assert_not_called()
     assert scope.persisted is None
+    assert caplog.messages == (
+        ["task_authorization_started"]
+        if conflict
+        else ["task_authorization_started", "task_authorization_skipped"]
+    )
 
 
 @pytest.mark.parametrize("deadline", [False, True])
-def test_write_or_deadline_failure_rolls_back(command, deadline):
+def test_write_or_deadline_failure_rolls_back(command, deadline, caplog):
+    caplog.set_level(logging.INFO, logger=authorize_task.__name__)
     scope = FakeScope()
     error = (
         TimeoutError("deadline expired") if deadline else RuntimeError("write failed")
@@ -163,6 +183,7 @@ def test_write_or_deadline_failure_rolls_back(command, deadline):
 
     assert raised.value is error
     assert scope.requested_commit is deadline
+    assert caplog.messages == ["task_authorization_started"]
     assert scope.calls[-1] == "rollback"
     assert scope.persisted is None
 

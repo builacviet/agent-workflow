@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine
 
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
@@ -27,7 +27,7 @@ def wiring(monkeypatch, tmp_path):
     monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
     monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda self: None)
-    factory = PostgresFactory(Mock(spec=Engine))
+    factory = PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
     dependencies = compose_postgres_controller(factory).controller
     service = WorkflowService(repository=dependencies.workflow)
     return factory, dependencies, service
@@ -47,6 +47,10 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
     monkeypatch.setattr(factory, "connect_session", forbidden)
+    connect = Mock(side_effect=forbidden)
+    dispose = Mock(side_effect=forbidden)
+    monkeypatch.setattr(factory._engine, "connect", connect)
+    monkeypatch.setattr(factory._engine, "dispose", dispose)
     monkeypatch.setattr(dependencies.leadership, "is_held", forbidden)
 
     runtime = compose_postgres_worker(
@@ -57,7 +61,8 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
     assert runtime.agent_runtime.ci is dependencies.ci_state
     assert runtime.agent_runtime.require_ci_tracking is True
-    assert factory._engine.mock_calls == []
+    connect.assert_not_called()
+    dispose.assert_not_called()
 
 
 @pytest.mark.parametrize("missing", ["workflow", "dispatch", "ci_state", "leadership"])
@@ -79,7 +84,9 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
 @pytest.mark.parametrize("foreign", ["dispatch", "ci_state", "leadership"])
 def test_mixed_factories_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
-    other = compose_postgres_controller(PostgresFactory(Mock(spec=Engine))).controller
+    other = compose_postgres_controller(
+        PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
+    ).controller
     with pytest.raises(TypeError, match="share the open Controller factory"):
         compose_postgres_worker(
             {},

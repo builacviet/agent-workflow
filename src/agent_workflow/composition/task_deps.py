@@ -22,6 +22,9 @@ from agent_workflow.infrastructure.database.repositories.task_authorization_repo
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from agent_workflow.infrastructure.logging.json_formatter import (
+    admin_log_scope as admin_log_scope,
+)
 
 
 class IAdminSeedUseCase(Protocol):
