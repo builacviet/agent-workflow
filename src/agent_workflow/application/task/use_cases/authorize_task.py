@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.application.task.ports import ITaskAuthorizationRepository
@@ -17,25 +17,6 @@ from agent_workflow.domain.workflow_identity import WorkflowError
 class AuthorizeTaskCommand:
     spec: TaskAuthorizationSpec
 
-
-def validate_authorization_text(spec: TaskAuthorizationSpec) -> None:
-    """Reject text PostgreSQL clients cannot safely transmit or persist."""
-    for field in fields(spec):
-        value = getattr(spec, field.name)
-        strings = (
-            (value,)
-            if isinstance(value, str)
-            else value
-            if isinstance(value, tuple)
-            else ()
-        )
-        for item in strings:
-            if "\0" in item:
-                raise WorkflowError(f"{field.name} must not contain NUL")
-            try:
-                item.encode("utf-8")
-            except UnicodeEncodeError:
-                raise WorkflowError(f"{field.name} must be valid UTF-8") from None
 
 
 class AuthorizeTaskUseCase:
@@ -57,7 +38,6 @@ class AuthorizeTaskUseCase:
         ):
             raise WorkflowError("a validated task authorization spec is required")
         spec = command.spec
-        validate_authorization_text(spec)
         with self._uow:
             existing = self._repository.load_for_authorization(spec.task_id)
             if existing is not None:
