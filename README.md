@@ -39,7 +39,7 @@ Expected CLI validation/conflict failures exit `2`; temporary persistence/timeou
 exit `75`. CLI structured JSON logs and the SQL correlation comment use an
 optional validated `CORRELATION_ID` (PR #98).
 
-The server defaults to loopback port 8000 and /mcp. Do not start it on a port occupied by the original server. Migration verification uses temporary loopback ports; it does not switch the existing server, tunnel or plugin. Only ping/server_info are public; all seven workflow tools require protected transport authentication. No verified-effort attestation is configured, so verified High approval remains blocked.
+The server defaults to loopback port 8000 and `/mcp`; do not start it on a port occupied by another service. The MCP source exposes **seven core workflow tools** and **six additional Tech Lead integration tools** with a separate Auth0 scope. In legacy Bearer mode `ping` and `get_server_info` are public, but **Auth0 OAuth mode protects all `/mcp` calls** (including ping/info). The Tech Lead integration tools require the `wfc:techlead` scope in addition to the workflow scope; configured scope and credentials must be verified before access. No verified-effort attestation is configured, so a task requiring verified High review remains blocked unless separately resolved. See [Tech Lead MCP scopes](docs/guides/mcp-techlead-integrations.md).
 
 **Separate runtime paths:** The source `agent_workflow.mcp.server` now composes a
 PostgreSQL workflow provider; the tracked root `compose.yaml` still includes
