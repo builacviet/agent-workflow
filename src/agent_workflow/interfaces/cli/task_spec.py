@@ -14,7 +14,7 @@ class ProvisionTaskSpec(LegacyTaskSpec):
 
     @field_validator("*", mode="before")
     @classmethod
-    def validate_postgres_text(cls, value: object, info: ValidationInfo) -> object:
+    def validate_storage_text(cls, value: object, info: ValidationInfo) -> object:
         """Reject NUL and non-UTF-8 text at the inbound CLI boundary."""
         values = (
             (value,)
