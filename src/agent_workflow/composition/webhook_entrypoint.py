@@ -7,8 +7,9 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.integrations.github_webhook import GitHubWebhookReceiver
+from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
+from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -43,7 +44,7 @@ def main() -> None:
             PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn))
         )
         receiver = _PostgresReceiver(
-            PostgresWebhookInbox(factory),
+            ReceiveWebhookUseCase(PostgresWebhookInbox(factory)),
             secret=secret,
             installation_id=installation_id,
         )

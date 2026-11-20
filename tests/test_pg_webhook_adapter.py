@@ -246,6 +246,15 @@ def test_live_signed_http_pg_selection_and_replay(
     monkeypatch.setenv("WFC_WEBHOOK_PORT", "0")
     monkeypatch.delenv("WFC_WEBHOOK_DB_PATH", raising=False)
     ready = Event()
+    factories = []
+    open_factory = PostgresFactory.open
+
+    def capture_factory(app_config):
+        factory = open_factory(app_config)
+        factories.append(factory)
+        return factory
+
+    monkeypatch.setattr(webhook_entrypoint.PostgresFactory, "open", capture_factory)
     servers = []
     failures = []
     original_server = webhook_entrypoint.WebhookHTTPServer
@@ -309,6 +318,19 @@ def test_live_signed_http_pg_selection_and_replay(
         assert post(body(installation=4), delivery.delivery_id) == 403
         with PostgresFactory.open(config) as check:
             assert PostgresWebhookInbox(check).get(delivery.delivery_id) is None
+
+        def refuse_commit(connection):
+            connection.execute(text("SELECT missing_webhook_commit_test_column"))
+
+        engine = factories[0]._engine
+        event.listen(engine, "commit", refuse_commit)
+        try:
+            assert post(body(), delivery.delivery_id) == 503
+        finally:
+            event.remove(engine, "commit", refuse_commit)
+        with PostgresFactory.open(config) as check:
+            assert PostgresWebhookInbox(check).get(delivery.delivery_id) is None
+
         assert post(body(), delivery.delivery_id) == 202
         with PostgresFactory.open(config) as check:
             persisted = PostgresWebhookInbox(check).get(delivery.delivery_id)

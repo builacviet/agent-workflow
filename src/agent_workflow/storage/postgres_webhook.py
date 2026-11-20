@@ -4,12 +4,13 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
+from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
 )
 from agent_workflow.storage.postgres_models import WebhookInboxRow
-from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
 
 _OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 

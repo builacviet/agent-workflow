@@ -186,6 +186,36 @@ def test_import_policy_rejects_future_violations():
     assert not forbidden("infrastructure", "agent_workflow.application.ports.execution")
 
 
+def test_webhook_core_and_adapter_preserve_layer_boundaries():
+    core_paths = [
+        SOURCE / "agent_workflow" / "application" / "webhook" / "ports.py",
+        SOURCE / "agent_workflow" / "application" / "webhook" / "receive_webhook.py",
+        SOURCE / "agent_workflow" / "domain" / "webhook" / "inbox.py",
+    ]
+    for path in core_paths:
+        area = "application" if "application" in path.parts else "domain"
+        for module in imports(path):
+            assert not forbidden(area, module), (
+                f"{path.relative_to(ROOT)} imports {module}"
+            )
+            assert not module.startswith(("sqlalchemy", "psycopg"))
+
+    receiver = imports(
+        SOURCE / "agent_workflow" / "interfaces" / "webhook" / "github_receiver.py"
+    )
+    assert not any(
+        module.startswith(
+            (
+                "agent_workflow.storage",
+                "agent_workflow.integrations",
+                "sqlalchemy",
+                "psycopg",
+            )
+        )
+        for module in receiver
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

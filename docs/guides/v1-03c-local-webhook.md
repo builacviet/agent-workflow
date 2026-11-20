@@ -1,5 +1,12 @@
 # V1-03C — local live webhook/CI test (not production)
 
+The repository's Compose `webhook` service now starts the PostgreSQL-only
+composition from `docker/webhook.Dockerfile`. Set `PG_RUNTIME_DSN` in the
+ignored `.runtime/controller-webhook.env` file. This source change does not start
+services or activate external traffic. The former SQLite webhook inbox is not
+copied or migrated; reconcile any pending deliveries before a separately
+approved live cutover.
+
 ## Components and trust boundaries
 
 - nginx router: /webhooks/github to isolated webhook receiver, all other paths including /mcp and OAuth discovery to the existing MCP service.
@@ -22,7 +29,7 @@ Create a dedicated read-only App installed only on builacviet/agent-workflow. Pe
 See [.runtime configuration inventory](../../.runtime/README.md) for the active and legacy templates, ownership, and key meanings. All non-example files and PEM/secret material are local-only and Git-ignored. The full worker Controller uses a separate `controller.json`; do not substitute it for the `controller-ci.json` CI-only configuration.
 
 
-1. On the trusted host, copy .runtime/controller-webhook.env.example to .runtime/controller-webhook.env and set the Controller App Installation ID.
+1. On the trusted host, copy .runtime/controller-webhook.env.example to .runtime/controller-webhook.env and set the PostgreSQL runtime DSN and Controller App Installation ID.
 2. Keep the local webhook secret file at .secret/controller-webhook-secret (exact configured secret, no extra spaces).
 3. Copy .runtime/controller-ci.json.example to .runtime/controller-ci.json and set DB path, Controller App ID / Installation ID and absolute PEM path. This CI-only config does NOT require worker credentials.
 4. Configure .runtime/controller-mcp.env and .runtime/ngrok.env. New controller-stack MCP templates select Auth0 OAuth, but copying the template alone is insufficient: restore the verified Auth0 issuer, allowed subject, and ChatGPT CIMD client identity from the existing trusted setup. Do not use a short-lived Bearer workaround for an OAuth deployment.

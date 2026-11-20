@@ -2,10 +2,10 @@
 
 import sqlite3
 from contextlib import closing
-from enum import Enum, auto
 from pathlib import Path
 
 from agent_workflow.domain.ci_evidence import WebhookNotification as WebhookNotification
+from agent_workflow.domain.webhook.inbox import InboxResult as InboxResult
 from agent_workflow.storage.migrations import (
     Migration,
     migrate,
@@ -20,12 +20,6 @@ _LEGACY_ALIAS_SQL = """
         body_digest TEXT NOT NULL
     )
 """
-
-
-class InboxResult(Enum):
-    INSERTED = auto()
-    DUPLICATE = auto()
-    CONFLICT = auto()
 
 
 def _create_webhook(db: sqlite3.Connection) -> None:
