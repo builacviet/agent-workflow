@@ -10,6 +10,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from agent_workflow.integrations.github_webhook import (
+    GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
+)
 from agent_workflow.interfaces.webhook.github_receiver import (
     DEFAULT_MAX_BODY_BYTES,
     WEBHOOK_PATH,
@@ -120,10 +123,6 @@ def main() -> None:
     if len(secret) < 32:
         raise ValueError("use at least 32 random bytes for webhook secret")
     # Preserve SQLite error translation only for explicit legacy local launches.
-    from agent_workflow.integrations.github_webhook import (
-        GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
-    )
-
     receiver = LegacyGitHubWebhookReceiver(
         WebhookInbox(db),
         secret=secret,
