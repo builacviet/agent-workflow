@@ -166,9 +166,7 @@ def test_bad_transport_or_business_input_does_not_open_database(
         ),
     ],
 )
-def test_provision_task_spec_pydantic_validates_storage_text(
-    spec_file, updates, error
-):
+def test_provision_task_spec_pydantic_validates_storage_text(spec_file, updates, error):
     payload = json.loads(spec_file.read_text(encoding="utf-8"))
     with pytest.raises(ValidationError, match=error):
         ProvisionTaskSpec.model_validate(payload | updates)
