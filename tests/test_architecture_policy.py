@@ -384,6 +384,7 @@ def r2_violations(path, source):
     parts = Path(path).parts
     area = parts[2] if len(parts) > 3 else ""
     core = area in {"domain", "application"}
+    opaque_core = area in {"domain", "application", "interfaces"}
     package = ".".join(parts[1:-1])
     aliases = {
         bound: qualified
@@ -433,6 +434,28 @@ def r2_violations(path, source):
                 or forbidden(area, target)
             ):
                 record(node, "core-import", target)
+            if opaque_core and (
+                target == "agent_workflow.infrastructure.database"
+                or target.startswith("agent_workflow.infrastructure.database.")
+            ):
+                record(node, "db-adapter-import", target)
+        if opaque_core:
+            identifier = ""
+            if isinstance(node, ast.Name):
+                identifier = node.id
+            elif isinstance(node, ast.Attribute):
+                identifier = node.attr
+            elif isinstance(node, ast.arg):
+                identifier = node.arg
+            elif isinstance(
+                node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                identifier = node.name
+            if identifier and any(
+                fragment in identifier.casefold()
+                for fragment in ("postgres", "sqlalchemy")
+            ):
+                record(node, "db-adapter-name", identifier)
         if core and isinstance(node, ast.Call):
             target = _qualified_alias(node.func, aliases)
             if target.removeprefix("builtins.") in UNSAFE_CALLS or target in {
@@ -697,6 +720,36 @@ def test_task_authorization_wiring_is_explicit():
         ),
         ("application", "use_case", "class BadUseCase: pass", "use-case-init"),
         ("application", "use_case", "def load():\n import json", "inline-import"),
+        (
+            "interfaces",
+            "cli",
+            "from agent_workflow.infrastructure.database import session_factory",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "import agent_workflow.infrastructure.database.unit_of_work as storage",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "def use_session(factory):\n postgres_client = factory()",
+            "db-adapter-name",
+        ),
+        (
+            "application",
+            "use_case",
+            "class SqlAlchemyStore: pass",
+            "db-adapter-name",
+        ),
+        (
+            "domain",
+            "entity",
+            "def from_Postgres(row): pass",
+            "db-adapter-name",
+        ),
     ],
 )
 def test_r2_ast_rejects_bad_source(area, module, source, rule):
@@ -734,6 +787,12 @@ class GetUseCase:
     _ratchet(r2_violations(path, source), set())
     assert _has_tests(ast.parse("class Suite:\n def test_work(self): pass"))
     assert not _has_tests(ast.parse("def fixture(): pass"))
+
+
+def test_r2_ast_allows_cli_flag_without_concrete_names():
+    path = "src/agent_workflow/interfaces/cli/example.py"
+    source = 'BACKEND_FLAG = "--postgres"\ndef execute(command):\n return command'
+    _ratchet(r2_violations(path, source), set())
 
 
 def test_r2_ast_rejects_callback_task_di():
