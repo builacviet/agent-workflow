@@ -6,6 +6,7 @@ from dataclasses import asdict, fields
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.shared.errors import CorruptedPersistenceDataError
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
@@ -39,10 +40,6 @@ def _assert_persistable_spec(spec: TaskAuthorizationSpec) -> None:
         for item in values:
             if isinstance(item, str):
                 _assert_postgres_text(item, field.name)
-
-
-class CorruptedPersistenceDataError(RuntimeError):
-    """A stored task authorization cannot be safely rehydrated."""
 
 
 class SqlAlchemyTaskAuthorizationRepository:
