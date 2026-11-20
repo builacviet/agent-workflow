@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+from legacy_admin_fixtures import import_history, reset_synthetic, seed_synthetic
 from starlette.requests import Request
 
 from agent_workflow.admin import BASE, REPO, ROUND1, ROUND2
@@ -11,7 +12,6 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.security import authorize_request
 from agent_workflow.workers.trusted_git.github import GitHubVerifier
-from legacy_admin_fixtures import import_history, reset_synthetic, seed_synthetic
 
 HEAD = "a" * 40
 NEXT = "b" * 40
