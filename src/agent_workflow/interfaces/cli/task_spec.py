@@ -24,7 +24,7 @@ class ProvisionTaskSpec(LegacyTaskSpec):
             for item in values:
                 if not isinstance(item, str):
                     continue
-                if "\\0" in item:
+                if "\0" in item:
                     raise ValueError(f"{name} must not contain NUL")
                 try:
                     item.encode("utf-8")
