@@ -1,6 +1,6 @@
-# PG02-B — Workflow/Review PostgreSQL adapter: implementation contract (preparation)
+# PG02-B — Workflow/Review PostgreSQL adapter: historical implementation contract
 
-**Status:** PG02-B is authorized for implementation on Draft PR #55; the adapter is opt-in and is not evidence of a merged implementation or runtime cutover. The original preparation baseline below is historical. Task: [PG02-B on Notion](https://app.notion.com/p/416f92014abd818cb9deeb1522729b1b).
+**Historical record — NOT a current implementation assignment (2026-11-20):** This contract describes the PG02-B preparation and Draft PR #55 at its original baseline. Subsequent PostgreSQL adapter work and the feature-local R2 Review reader/repositories were merged (see [as-built architecture](../architecture.md)); PostgreSQL-only local admin arrived in [PR #97](https://github.com/builacviet/agent-workflow/pull/97). **Do not re-run old PR #55 branch instructions or assume this historical spec proves production activation.** Retain the original task-specific requirements below for audit. Task: [PG02-B on Notion](https://app.notion.com/p/416f92014abd818cb9deeb1522729b1b).
 
 **Historical preparation baseline:** `main@bbb17d22b5d1dff0b4378c1627551c3c8b09b3b3`, before PG02-A merged. The authorized PG02-B base is `fb676390ad75862791f21f8a9c50e09d3f175a1b`, which includes the PG02-A connection factory.
 

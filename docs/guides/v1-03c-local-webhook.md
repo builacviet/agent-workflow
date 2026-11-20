@@ -1,4 +1,6 @@
-# V1-03C — local live webhook/CI test (not production)
+# V1-03C — historical local webhook/CI test (not production)
+
+> **Dated Phase 3.1 runbook — inspect before running (2026-11-20).** The steps below configure a legacy local **SQLite-backed** Controller CI watcher and a tracked root Compose stack that still mounts SQLite. They are not the new PostgreSQL-first admin/Task/Review path and do **not** demonstrate a complete PostgreSQL MCP/Controller deployment. Verify the active host, credentials, schema, tasks and current source before any live operator action. For PostgreSQL-first R2 guidance use the [as-built architecture](../architecture.md), [runtime factory](postgres-connection.md) and [migration runbook](postgres-alembic.md). Keep this historical runbook for dated webhook and auth evidence; do not infer that it is the recommended current cutover procedure.
 
 ## Components and trust boundaries
 
