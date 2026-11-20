@@ -146,7 +146,6 @@ def test_bad_transport_or_business_input_does_not_open_database(
     open_factory.assert_not_called()
 
 
-
 @pytest.mark.parametrize(
     ("updates", "error"),
     [
