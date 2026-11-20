@@ -254,6 +254,54 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
     assert "sqlalchemy.orm" in imports(repo_path)
 
 
+def test_webhook_dependency_assembly_is_separate_from_http_bootstrap():
+    composition = SOURCE / "agent_workflow" / "composition"
+    entrypoint = ast.parse(
+        (composition / "webhook_entrypoint.py").read_text(encoding="utf-8")
+    )
+    entrypoint_names = {
+        node.name for node in entrypoint.body if isinstance(node, ast.ClassDef)
+    }
+    assert "_ScopedWebhookInbox" not in entrypoint_names
+    assert "create_webhook_use_case" in {
+        alias.name
+        for node in entrypoint.body
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert not {
+        node.module for node in entrypoint.body if isinstance(node, ast.ImportFrom)
+    } & {
+        "agent_workflow.infrastructure.database.repositories.webhook_inbox_repository",
+        "agent_workflow.domain.ci_evidence",
+        "agent_workflow.domain.webhook.inbox",
+    }
+
+    dependencies = ast.parse(
+        (composition / "webhook_deps.py").read_text(encoding="utf-8")
+    )
+    dependency_names = {
+        node.name for node in dependencies.body if isinstance(node, ast.ClassDef)
+    }
+    assert "_ScopedWebhookInbox" in dependency_names
+    assert any(
+        isinstance(node, ast.FunctionDef) and node.name == "create_webhook_use_case"
+        for node in dependencies.body
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "repository_session"
+        for node in ast.walk(dependencies)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SqlAlchemyWebhookInboxRepository"
+        for node in ast.walk(dependencies)
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

@@ -7,37 +7,10 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
-from agent_workflow.domain.ci_evidence import WebhookNotification
-from agent_workflow.domain.webhook.inbox import InboxResult
-from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
-    SqlAlchemyWebhookInboxRepository,
-)
+from agent_workflow.composition.webhook_deps import create_webhook_use_case
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
-
-_OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
-
-
-class _ScopedWebhookInbox:
-    """A new Session and durable database transaction for every HTTP request."""
-
-    def __init__(self, factory: PostgresFactory) -> None:
-        self._factory = factory
-
-    def record(
-        self, notification: WebhookNotification, body_digest: str
-    ) -> InboxResult:
-        # repository_session owns the OUTER connection transaction and commits
-        # after the body exits; scoped_session + session.commit alone does not.
-        with self._factory.repository_session(
-            error_message=_OPERATION_ERROR
-        ) as session:
-            result = SqlAlchemyWebhookInboxRepository(session).record(
-                notification, body_digest
-            )
-        return result
 
 
 def main() -> None:
@@ -57,7 +30,7 @@ def main() -> None:
             PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn))
         )
         receiver = GitHubWebhookReceiver(
-            ReceiveWebhookUseCase(_ScopedWebhookInbox(factory)),
+            create_webhook_use_case(factory),
             secret=secret,
             installation_id=installation_id,
         )
