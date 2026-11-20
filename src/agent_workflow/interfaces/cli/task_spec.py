@@ -12,7 +12,7 @@ from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 class ProvisionTaskSpec(LegacyTaskSpec):
     """Preserve the legacy JSON contract at the new CLI boundary."""
 
-    @field_validator("*")
+    @field_validator("*", mode="before")
     @classmethod
     def validate_postgres_text(cls, value: object, info: ValidationInfo) -> object:
         """Reject NUL and non-UTF-8 text at the inbound CLI boundary."""
