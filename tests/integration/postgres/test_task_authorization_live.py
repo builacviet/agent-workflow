@@ -403,4 +403,3 @@ def test_persisted_unicode_corruption_is_distinct_from_db_unavailability(
         CorruptedPersistenceDataError, match="Invalid persisted task authorization"
     ):
         authorize(factory, spec)
-
