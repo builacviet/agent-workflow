@@ -190,7 +190,8 @@ def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
         webhook_entrypoint.main()
 
 
-def test_pg_persistence_failure_returns_503_and_retry_succeeds():
+@pytest.mark.parametrize("error_type", [PostgresUnavailableError, RuntimeError])
+def test_pg_persistence_failure_returns_503_and_retry_succeeds(error_type):
     class FailingInbox:
         def __init__(self):
             self.calls = 0
@@ -198,11 +199,11 @@ def test_pg_persistence_failure_returns_503_and_retry_succeeds():
         def record(self, notification, digest):
             self.calls += 1
             if self.calls == 1:
-                raise PostgresUnavailableError("private database detail")
+                raise error_type("private database detail")
             return InboxResult.INSERTED
 
     inbox = FailingInbox()
-    receiver = webhook_entrypoint._PostgresReceiver(
+    receiver = GitHubWebhookReceiver(
         inbox, secret=b"z" * 32, installation_id=17
     )
     server = WebhookHTTPServer(("127.0.0.1", 0), receiver)

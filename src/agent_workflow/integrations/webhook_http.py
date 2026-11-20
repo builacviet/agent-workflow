@@ -10,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from agent_workflow.integrations.github_webhook import (
+from agent_workflow.interfaces.webhook.github_receiver import (
     DEFAULT_MAX_BODY_BYTES,
     WEBHOOK_PATH,
     GitHubWebhookReceiver,
@@ -95,7 +95,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 self.headers.raw_items(),
                 body,
             )
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             status = HTTPStatus.SERVICE_UNAVAILABLE
         return self._reply(status)
 
@@ -119,7 +119,12 @@ def main() -> None:
     secret = secret_path.read_bytes().strip(b"\r\n")
     if len(secret) < 32:
         raise ValueError("use at least 32 random bytes for webhook secret")
-    receiver = GitHubWebhookReceiver(
+    # Preserve SQLite error translation only for explicit legacy local launches.
+    from agent_workflow.integrations.github_webhook import (
+        GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
+    )
+
+    receiver = LegacyGitHubWebhookReceiver(
         WebhookInbox(db),
         secret=secret,
         installation_id=int(os.environ["WFC_CONTROLLER_INSTALLATION_ID"]),

@@ -216,6 +216,39 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
     )
 
 
+    # Webhook infrastructure adapter must use the caller-owned Session,
+    # never construct a factory or own a commit.
+    repo_path = (
+        SOURCE / "agent_workflow" / "infrastructure" / "database"
+        / "repositories" / "webhook_inbox_repository.py"
+    )
+    repo_tree = ast.parse(repo_path.read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "PostgresFactory"
+        for node in ast.walk(repo_tree)
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"commit", "rollback"}
+        for node in ast.walk(repo_tree)
+    )
+    repository = next(
+        node for node in repo_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "SqlAlchemyWebhookInboxRepository"
+    )
+    init = next(
+        node for node in repository.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assert len(init.args.args) == 2
+    assert init.args.args[1].arg == "session"
+    assert isinstance(init.args.args[1].annotation, ast.Name)
+    assert init.args.args[1].annotation.id == "Session"
+    assert "sqlalchemy.orm" in imports(repo_path)
+
+
 @pytest.mark.parametrize(
     "source",
     [

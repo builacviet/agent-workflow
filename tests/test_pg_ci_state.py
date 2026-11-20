@@ -27,7 +27,7 @@ from agent_workflow.composition.postgres_controller import PostgresCiWatcherDepe
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
-    PostgresWebhookInbox,
+    SqlAlchemyWebhookInboxRepository,
 )
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -144,9 +144,16 @@ def observations(factory, task_id):
 
 def add_delivery(factory, notification):
     digest = sha256(notification.delivery_id.encode()).hexdigest()
-    inbox = PostgresWebhookInbox(factory)
-    assert inbox.record(notification, digest) is InboxResult.INSERTED
-    assert inbox.record(notification, digest) is InboxResult.DUPLICATE
+    with factory.repository_session(
+        error_message="PostgreSQL webhook inbox operation failed"
+    ) as session:
+        inbox = SqlAlchemyWebhookInboxRepository(session)
+        assert inbox.record(notification, digest) is InboxResult.INSERTED
+    with factory.repository_session(
+        error_message="PostgreSQL webhook inbox operation failed"
+    ) as session:
+        inbox = SqlAlchemyWebhookInboxRepository(session)
+        assert inbox.record(notification, digest) is InboxResult.DUPLICATE
 
 
 def run_race(*operations):

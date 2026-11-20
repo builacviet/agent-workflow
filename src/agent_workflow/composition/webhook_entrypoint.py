@@ -8,25 +8,36 @@ from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
+from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
-    PostgresWebhookInbox,
+    SqlAlchemyWebhookInboxRepository,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
-)
+
+_OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 
 
-class _PostgresReceiver(GitHubWebhookReceiver):
-    """Translate a failed persistence attempt into a retryable HTTP response."""
+class _ScopedWebhookInbox:
+    """A new Session and durable database transaction for every HTTP request."""
 
-    def handle(self, method, path, headers, body):
-        try:
-            return super().handle(method, path, headers, body)
-        except PostgresUnavailableError:
-            raise OSError("webhook persistence unavailable") from None
+    def __init__(self, factory: PostgresFactory) -> None:
+        self._factory = factory
+
+    def record(
+        self, notification: WebhookNotification, body_digest: str
+    ) -> InboxResult:
+        # repository_session owns the OUTER connection transaction and commits
+        # after the body exits; scoped_session + session.commit alone does not.
+        with self._factory.repository_session(
+            error_message=_OPERATION_ERROR
+        ) as session:
+            result = SqlAlchemyWebhookInboxRepository(session).record(
+                notification, body_digest
+            )
+        return result
 
 
 def main() -> None:
@@ -45,8 +56,8 @@ def main() -> None:
         factory = resources.enter_context(
             PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn))
         )
-        receiver = _PostgresReceiver(
-            ReceiveWebhookUseCase(PostgresWebhookInbox(factory)),
+        receiver = GitHubWebhookReceiver(
+            ReceiveWebhookUseCase(_ScopedWebhookInbox(factory)),
             secret=secret,
             installation_id=installation_id,
         )
