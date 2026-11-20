@@ -437,6 +437,13 @@ def r2_violations(path, source):
             if opaque_core and (
                 target == "agent_workflow.infrastructure.database"
                 or target.startswith("agent_workflow.infrastructure.database.")
+                or (
+                    area == "interfaces"
+                    and (
+                        target == "agent_workflow.infrastructure"
+                        or target.startswith("agent_workflow.infrastructure.")
+                    )
+                )
             ):
                 record(node, "db-adapter-import", target)
         if opaque_core:
@@ -447,6 +454,13 @@ def r2_violations(path, source):
                 identifier = node.attr
             elif isinstance(node, ast.arg):
                 identifier = node.arg
+            elif isinstance(node, ast.alias):
+                identifier = node.name
+                if node.asname and any(
+                    fragment in node.asname.casefold()
+                    for fragment in ("postgres", "sqlalchemy")
+                ):
+                    identifier = node.asname
             elif isinstance(
                 node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
             ):
@@ -731,6 +745,18 @@ def test_task_authorization_wiring_is_explicit():
             "cli",
             "import agent_workflow.infrastructure.database.unit_of_work as storage",
             "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from agent_workflow import infrastructure",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from .ports import PostgresGateway as Gateway",
+            "db-adapter-name",
         ),
         (
             "interfaces",
