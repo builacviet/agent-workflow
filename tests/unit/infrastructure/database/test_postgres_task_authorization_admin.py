@@ -13,6 +13,7 @@ from agent_workflow.application.shared.errors import (
     PersistenceUnavailableError,
 )
 from agent_workflow.composition import task_deps
+from agent_workflow.domain import service as legacy_service
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 
@@ -45,10 +46,10 @@ def entrypoint(monkeypatch, spec_file):
     monkeypatch.delenv("PGSERVICE", raising=False)
     legacy = Mock()
     open_factory = Mock()
-    monkeypatch.setattr(admin, "default_service", legacy)
+    monkeypatch.setattr(legacy_service, "default_service", legacy)
     monkeypatch.setattr(task_deps.PostgresFactory, "open", open_factory)
 
-    def run(action="provision", *, postgres=True):
+    def run(action="provision", *, postgres=False):
         argv = ["agent_workflow.admin", action, "--file", str(spec_file)]
         if postgres:
             argv.append("--postgres")
@@ -58,30 +59,12 @@ def entrypoint(monkeypatch, spec_file):
     return run, legacy, open_factory
 
 
-def test_default_provision_passes_original_json_to_legacy(
-    entrypoint, spec_file, monkeypatch
-):
-    run, legacy, open_factory = entrypoint
-    monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
-    run(postgres=False)
-
-    legacy.assert_called_once_with()
-    legacy.return_value.provision_task.assert_called_once_with(
-        json.loads(spec_file.read_text(encoding="utf-8"))
-    )
-    open_factory.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    "action", ["seed-history", "seed-synthetic", "reset-synthetic"]
-)
-def test_postgres_flag_is_rejected_for_other_actions(entrypoint, action, capsys):
+def test_old_postgres_flag_is_rejected(entrypoint, capsys):
     run, legacy, open_factory = entrypoint
     with pytest.raises(SystemExit) as error:
-        run(action)
-
+        run(postgres=True)
     assert error.value.code == 2
-    assert "--postgres is only available for provision" in capsys.readouterr().err
+    assert "unrecognized arguments: --postgres" in capsys.readouterr().err
     legacy.assert_not_called()
     open_factory.assert_not_called()
 
@@ -175,7 +158,7 @@ def test_provision_task_spec_pydantic_validates_storage_text(spec_file, updates,
 @pytest.mark.parametrize(
     "failure", [None, PersistenceUnavailableError, CorruptedPersistenceDataError]
 )
-def test_opt_in_passes_validated_command_and_closes_factory(
+def test_provision_passes_validated_command_and_closes_factory(
     entrypoint, monkeypatch, failure, capsys
 ):
     run, legacy, open_factory = entrypoint
