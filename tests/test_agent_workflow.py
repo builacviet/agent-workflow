@@ -6,19 +6,12 @@ from types import SimpleNamespace
 import pytest
 from starlette.requests import Request
 
-from agent_workflow.admin import (
-    BASE,
-    REPO,
-    ROUND1,
-    ROUND2,
-    import_history,
-    reset_synthetic,
-    seed_synthetic,
-)
+from agent_workflow.admin import BASE, REPO, ROUND1, ROUND2
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.security import authorize_request
 from agent_workflow.workers.trusted_git.github import GitHubVerifier
+from legacy_admin_fixtures import import_history, reset_synthetic, seed_synthetic
 
 HEAD = "a" * 40
 NEXT = "b" * 40
@@ -599,13 +592,7 @@ def test_concurrent_submissions_increment_exactly_once(env):
 
 
 def test_old_synthetic_metadata_is_not_silently_retargeted(env):
-    from agent_workflow.admin import (
-        BASE,
-        REPO,
-        import_history,
-        reset_synthetic,
-        seed_synthetic,
-    )
+    from agent_workflow.admin import BASE, REPO
     from agent_workflow.domain.contracts import TaskSpec
 
     service, remote, _ = env
