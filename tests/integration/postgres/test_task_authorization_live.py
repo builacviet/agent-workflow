@@ -16,6 +16,7 @@ from sqlalchemy import delete, event, select, text, update
 
 from agent_workflow import admin, budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.shared.errors import CorruptedPersistenceDataError
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
 )
@@ -29,7 +30,6 @@ from agent_workflow.domain.workflow_identity import (
 )
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
-    CorruptedPersistenceDataError,
     SqlAlchemyTaskAuthorizationRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import (
