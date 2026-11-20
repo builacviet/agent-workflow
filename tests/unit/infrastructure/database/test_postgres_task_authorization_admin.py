@@ -8,6 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from agent_workflow import admin
+from agent_workflow.application.shared.errors import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.composition import task_deps
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
@@ -162,7 +166,7 @@ def test_bad_transport_or_business_input_does_not_open_database(
         ),
     ],
 )
-def test_provision_task_spec_pydantic_validates_postgres_text(
+def test_provision_task_spec_pydantic_validates_storage_text(
     spec_file, updates, error
 ):
     payload = json.loads(spec_file.read_text(encoding="utf-8"))
@@ -170,9 +174,11 @@ def test_provision_task_spec_pydantic_validates_postgres_text(
         ProvisionTaskSpec.model_validate(payload | updates)
 
 
-@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize(
+    "failure", [None, PersistenceUnavailableError, CorruptedPersistenceDataError]
+)
 def test_opt_in_passes_validated_command_and_closes_factory(
-    entrypoint, monkeypatch, fails, capsys
+    entrypoint, monkeypatch, failure, capsys
 ):
     run, legacy, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
@@ -182,8 +188,8 @@ def test_opt_in_passes_validated_command_and_closes_factory(
     build = MagicMock()
     monkeypatch.setattr(task_deps, "create_authorize_task_use_case", build)
     use_case = build.return_value.__enter__.return_value
-    if fails:
-        use_case.execute.side_effect = admin.PostgresUnavailableError("database failed")
+    if failure is not None:
+        use_case.execute.side_effect = failure("database failed")
         with pytest.raises(SystemExit) as error:
             run()
         assert error.value.code == 2
