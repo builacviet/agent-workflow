@@ -18,11 +18,13 @@ from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
+    PostgresWebhookInbox,
+)
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
 )
-from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
 from agent_workflow.storage.webhook_inbox import (
     InboxResult,
     WebhookInbox,

@@ -6,11 +6,11 @@ from sqlalchemy.dialects.postgresql import insert
 
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
-from agent_workflow.storage.postgres_connection import (
+from agent_workflow.infrastructure.database.models import WebhookInboxRow
+from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
 )
-from agent_workflow.storage.postgres_models import WebhookInboxRow
 
 _OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 

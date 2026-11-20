@@ -8,13 +8,15 @@ from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
+from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
+    PostgresWebhookInbox,
+)
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
 )
-from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
 
 
 class _PostgresReceiver(GitHubWebhookReceiver):
