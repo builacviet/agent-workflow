@@ -23,7 +23,6 @@ def test_database_unavailable_error_is_backend_neutral_for_callers():
     assert issubclass(PostgresUnavailableError, PersistenceUnavailableError)
 
 
-
 @pytest.fixture
 def scopes(monkeypatch):
     monkeypatch.setattr(unit_of_work, "event", Mock())
