@@ -1,8 +1,8 @@
 """Verify the explicit local admin entrypoint and PostgreSQL factory lifetime."""
 
-from collections.abc import Iterator
 import json
 import sys
+from collections.abc import Iterator
 from typing import get_type_hints
 from unittest.mock import MagicMock, Mock
 
@@ -67,10 +67,8 @@ def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
     with pytest.raises(SystemExit) as result:
         admin.main()
     assert result.value.code == 0
-    assert (
-        "deprecated no-op: local admin commands always use PostgreSQL"
-        in capsys.readouterr().out
-    )
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "deprecated no-op: local admin commands always use PostgreSQL" in help_text
 
 
 @pytest.mark.parametrize("postgres", [False, True])
