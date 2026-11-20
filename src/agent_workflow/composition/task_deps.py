@@ -25,7 +25,7 @@ def create_authorize_task_use_case(
 
 
 @contextmanager
-def postgres_task_authorization() -> Iterator[AuthorizeTaskUseCase]:
+def task_authorization_scope() -> Iterator[AuthorizeTaskUseCase]:
     config = AppConfig.for_local_task_authorization()
     with (
         PostgresFactory.open(config) as factory,
