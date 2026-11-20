@@ -18,7 +18,6 @@ class AuthorizeTaskCommand:
     spec: TaskAuthorizationSpec
 
 
-
 class AuthorizeTaskUseCase:
     def __init__(
         self,
