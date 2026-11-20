@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.admin.ports import IAdminSeedUseCase
 from agent_workflow.application.admin.use_cases import (
     ImportHistoricalReviewsUseCase,
     ResetSyntheticReviewUseCase,
@@ -43,7 +44,7 @@ def task_authorization_scope() -> Iterator[AuthorizeTaskUseCase]:
 
 
 @contextmanager
-def admin_seed_scope(action: str):
+def admin_seed_scope(action: str) -> Iterator[IAdminSeedUseCase]:
     """Assemble a fixture use case on one scoped PostgreSQL session."""
 
     cases = {
