@@ -355,6 +355,7 @@ def test_corrupt_persisted_spec_fails_separately(pg_authorization, metadata):
         authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before
 
+
 @pytest.mark.parametrize(
     "updates",
     [
