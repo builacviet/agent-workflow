@@ -3,17 +3,17 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from agent_workflow.app_config import AppConfig
 from agent_workflow.application.admin.use_cases import (
     ImportHistoricalReviewsUseCase,
     ResetSyntheticReviewUseCase,
     SeedSyntheticReviewUseCase,
 )
-from agent_workflow.infrastructure.database.repositories.admin_seed_repository import (
-    SqlAlchemyAdminSeedRepository,
-)
-from agent_workflow.app_config import AppConfig
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskUseCase,
+)
+from agent_workflow.infrastructure.database.repositories.admin_seed_repository import (
+    SqlAlchemyAdminSeedRepository,
 )
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
