@@ -91,8 +91,54 @@ class SqlAlchemyAdminSeedRepository:
         task = self._load(spec)
         if task is None:
             task = self._create(spec)
-        if task.status != "AWAITING_HANDOFF":
+        if task.status == "READY_IN_REVIEW":
+            events = list(
+                self._session.scalars(
+                    select(TaskEvent)
+                    .where(TaskEvent.task_id == spec.task_id)
+                    .order_by(TaskEvent.event_id)
+                )
+            )
+            if (
+                task.current_head_sha != spec.base_sha
+                or task.completed_review_rounds != 0
+                or len(events) != 2
+                or (
+                    events[0].previous_status,
+                    events[0].next_status,
+                    events[0].action,
+                    events[0].sha,
+                )
+                != (None, "AWAITING_HANDOFF", "LOCAL_AUTHORIZATION", None)
+                or (
+                    events[1].previous_status,
+                    events[1].next_status,
+                    events[1].action,
+                    events[1].sha,
+                )
+                != (
+                    "AWAITING_HANDOFF",
+                    "READY_IN_REVIEW",
+                    "HANDOFF",
+                    spec.base_sha,
+                )
+                or self._session.scalar(
+                    select(Review.review_id)
+                    .where(Review.task_id == spec.task_id)
+                    .limit(1)
+                )
+                is not None
+                or self._session.scalar(
+                    select(ReviewAttempt.token)
+                    .where(ReviewAttempt.task_id == spec.task_id)
+                    .limit(1)
+                )
+                is not None
+            ):
+                raise WorkflowError("synthetic handoff conflicts with task state")
             return
+        if task.status != "AWAITING_HANDOFF":
+            raise WorkflowError("synthetic handoff conflicts with task state")
         if task.current_head_sha is not None or task.completed_review_rounds != 0:
             raise WorkflowError("synthetic handoff conflicts with task state")
         if "docs/handoff.md" not in spec.context_paths:
