@@ -7,12 +7,21 @@ from sqlalchemy.engine import Connection
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
+from agent_workflow.application.shared.errors import PersistenceUnavailableError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.composition import review_deps
 from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database import unit_of_work
-from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+
+
+def test_database_unavailable_error_is_backend_neutral_for_callers():
+    assert issubclass(PostgresUnavailableError, PersistenceUnavailableError)
+
 
 
 @pytest.fixture
