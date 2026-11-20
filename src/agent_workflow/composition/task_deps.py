@@ -2,16 +2,32 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Protocol
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.admin.use_cases import (
+    AdminSeedCommand,
+    ImportHistoricalReviewsUseCase,
+    ResetSyntheticReviewUseCase,
+    SeedSyntheticReviewUseCase,
+)
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskUseCase,
+)
+from agent_workflow.infrastructure.database.repositories.admin_seed_repository import (
+    SqlAlchemyAdminSeedRepository,
 )
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+
+
+class IAdminSeedUseCase(Protocol):
+    """Common executable contract for the three admin fixtures."""
+
+    def execute(self, command: AdminSeedCommand) -> None: ...
 
 
 @contextmanager
@@ -32,3 +48,20 @@ def task_authorization_scope() -> Iterator[AuthorizeTaskUseCase]:
         create_authorize_task_use_case(factory) as use_case,
     ):
         yield use_case
+
+
+@contextmanager
+def admin_seed_scope(action: str) -> Iterator[IAdminSeedUseCase]:
+    """Assemble a fixture use case on one scoped PostgreSQL session."""
+
+    cases = {
+        "seed-history": ImportHistoricalReviewsUseCase,
+        "seed-synthetic": SeedSyntheticReviewUseCase,
+        "reset-synthetic": ResetSyntheticReviewUseCase,
+    }
+    case = cases[action]
+    config = AppConfig.for_local_task_authorization()
+    with PostgresFactory.open(config) as factory, factory.scoped_session() as session:
+        yield case(
+            SqlAlchemyUnitOfWork(session), SqlAlchemyAdminSeedRepository(session)
+        )

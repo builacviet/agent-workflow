@@ -21,6 +21,7 @@ from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
 )
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
+from agent_workflow.domain import service as legacy_service
 from agent_workflow.domain.service import WorkflowService, encode
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 from agent_workflow.domain.workflow_identity import (
@@ -174,10 +175,10 @@ def test_operator_cli_readback_matches_legacy_and_preserves_history(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["agent_workflow.admin", "provision", "--file", str(path), "--postgres"],
+        ["agent_workflow.admin", "provision", "--file", str(path)],
     )
     monkeypatch.setattr(
-        admin, "default_service", lambda: pytest.fail("legacy CLI fallback")
+        legacy_service, "default_service", lambda: pytest.fail("legacy CLI fallback")
     )
     admin.main()
 

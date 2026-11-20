@@ -2,6 +2,8 @@
 
 import json
 import sys
+from collections.abc import Iterator
+from typing import get_type_hints
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -13,6 +15,7 @@ from agent_workflow.application.shared.errors import (
     PersistenceUnavailableError,
 )
 from agent_workflow.composition import task_deps
+from agent_workflow.domain import service as legacy_service
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 
@@ -45,10 +48,10 @@ def entrypoint(monkeypatch, spec_file):
     monkeypatch.delenv("PGSERVICE", raising=False)
     legacy = Mock()
     open_factory = Mock()
-    monkeypatch.setattr(admin, "default_service", legacy)
+    monkeypatch.setattr(legacy_service, "default_service", legacy)
     monkeypatch.setattr(task_deps.PostgresFactory, "open", open_factory)
 
-    def run(action="provision", *, postgres=True):
+    def run(action="provision", *, postgres=False):
         argv = ["agent_workflow.admin", action, "--file", str(spec_file)]
         if postgres:
             argv.append("--postgres")
@@ -58,32 +61,53 @@ def entrypoint(monkeypatch, spec_file):
     return run, legacy, open_factory
 
 
-def test_default_provision_passes_original_json_to_legacy(
-    entrypoint, spec_file, monkeypatch
+def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", "--help"])
+    with pytest.raises(SystemExit) as result:
+        admin.main()
+    assert result.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "deprecated no-op: local admin commands always use PostgreSQL" in help_text
+
+
+@pytest.mark.parametrize("postgres", [False, True])
+def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
+    entrypoint, monkeypatch, postgres
 ):
     run, legacy, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
-    run(postgres=False)
+    open_factory.return_value = MagicMock()
+    build = MagicMock()
+    monkeypatch.setattr(task_deps, "create_authorize_task_use_case", build)
 
-    legacy.assert_called_once_with()
-    legacy.return_value.provision_task.assert_called_once_with(
-        json.loads(spec_file.read_text(encoding="utf-8"))
-    )
-    open_factory.assert_not_called()
+    run(postgres=postgres)
+
+    open_factory.assert_called_once()
+    build.return_value.__enter__.return_value.execute.assert_called_once()
+    legacy.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "action", ["seed-history", "seed-synthetic", "reset-synthetic"]
 )
-def test_postgres_flag_is_rejected_for_other_actions(entrypoint, action, capsys):
-    run, legacy, open_factory = entrypoint
-    with pytest.raises(SystemExit) as error:
-        run(action)
+@pytest.mark.parametrize("postgres", [False, True])
+def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
+    entrypoint, monkeypatch, action, postgres
+):
+    run, legacy, _ = entrypoint
+    scope = MagicMock()
+    monkeypatch.setattr(admin, "admin_seed_scope", scope)
 
-    assert error.value.code == 2
-    assert "--postgres is only available for provision" in capsys.readouterr().err
+    run(action=action, postgres=postgres)
+
+    scope.assert_called_once_with(action)
+    scope.return_value.__enter__.return_value.execute.assert_called_once()
     legacy.assert_not_called()
-    open_factory.assert_not_called()
+
+
+def test_admin_seed_scope_has_typed_use_case_contract():
+    annotation = get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"]
+    assert annotation == Iterator[task_deps.IAdminSeedUseCase]
 
 
 @pytest.mark.parametrize(
@@ -175,7 +199,7 @@ def test_provision_task_spec_pydantic_validates_storage_text(spec_file, updates,
 @pytest.mark.parametrize(
     "failure", [None, PersistenceUnavailableError, CorruptedPersistenceDataError]
 )
-def test_opt_in_passes_validated_command_and_closes_factory(
+def test_provision_passes_validated_command_and_closes_factory(
     entrypoint, monkeypatch, failure, capsys
 ):
     run, legacy, open_factory = entrypoint

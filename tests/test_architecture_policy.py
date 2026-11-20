@@ -413,6 +413,26 @@ def r2_violations(path, source):
         key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0)),
     ):
         for target, _, _ in _imports_in(node, package):
+            if path == "src/agent_workflow/admin.py" and (
+                target
+                in {
+                    "sqlite3",
+                    "sqlalchemy",
+                    "agent_workflow.domain.service",
+                    "agent_workflow.storage",
+                    "agent_workflow.infrastructure",
+                }
+                or target.startswith(
+                    (
+                        "sqlite3.",
+                        "sqlalchemy.",
+                        "agent_workflow.domain.service.",
+                        "agent_workflow.storage.",
+                        "agent_workflow.infrastructure.",
+                    )
+                )
+            ):
+                record(node, "admin-legacy-import", target)
             parent = parents[node]
             typing_only = (
                 isinstance(parent, ast.If)
@@ -813,6 +833,22 @@ class GetUseCase:
     _ratchet(r2_violations(path, source), set())
     assert _has_tests(ast.parse("class Suite:\n def test_work(self): pass"))
     assert not _has_tests(ast.parse("def fixture(): pass"))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from agent_workflow.domain.service import default_service",
+        "from agent_workflow.domain.service import WorkflowService as Engine",
+        "import sqlite3 as database",
+        "from agent_workflow.storage.repository import SQLiteWorkflowRepository",
+        "from agent_workflow.infrastructure.database import session_factory",
+    ],
+)
+def test_admin_rejects_legacy_and_database_imports(source):
+    path = "src/agent_workflow/admin.py"
+    with pytest.raises(AssertionError, match="admin-legacy-import"):
+        _ratchet(r2_violations(path, source), set())
 
 
 def test_r2_ast_allows_cli_flag_without_concrete_names():
