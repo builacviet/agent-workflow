@@ -10,16 +10,28 @@ import pytest
 from pydantic import ValidationError
 
 from agent_workflow import admin
-from agent_workflow.application.shared.errors import (
+from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
 )
 from agent_workflow.composition import task_deps
 from agent_workflow.domain import service as legacy_service
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
-from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
+from agent_workflow.interfaces.cli.task_spec import (
+    ProvisionTaskSpec,
+    format_task_spec_error,
+)
+from agent_workflow.observability.correlation import (
+    correlation_scope,
+    get_correlation_id,
+)
 
 LOCAL_DSN = "postgresql+psycopg://test:disposable@127.0.0.1/fixture"
+SECRET = "PRIVATE_SENTINEL"
+UNSAFE_ERROR = (
+    f"postgresql://user:{SECRET}@localhost/db password={SECRET} sql_params={SECRET}"
+)
 
 
 @pytest.fixture
@@ -68,6 +80,21 @@ def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
     assert result.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "deprecated no-op: local admin commands always use PostgreSQL" in help_text
+
+
+@pytest.mark.parametrize("arguments", [[UNSAFE_ERROR], ["provision", f"--{SECRET}"]])
+def test_bad_command_line_arguments_do_not_echo_submitted_values(
+    entrypoint, monkeypatch, capsys, arguments
+):
+    _, _, open_factory = entrypoint
+    monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", *arguments])
+    with pytest.raises(SystemExit) as error:
+        admin.main()
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "local admin arguments" in stderr
+    assert SECRET not in stderr
+    open_factory.assert_not_called()
 
 
 @pytest.mark.parametrize("postgres", [False, True])
@@ -151,10 +178,14 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
 @pytest.mark.parametrize(
     ("updates", "message"),
     [
-        ({"synthetic": "false"}, "invalid TaskSpec JSON"),
-        ({"extra": True}, "invalid TaskSpec JSON"),
-        ({"repository": "another/repo"}, "unauthorized repository"),
-        ({"task_id": "bad\0value"}, "invalid TaskSpec JSON"),
+        ({"synthetic": SECRET}, "synthetic: expected a boolean"),
+        ({SECRET: SECRET}, "TaskSpec: unexpected field"),
+        ({"repository": SECRET}, "unauthorized repository"),
+        ({"task_id": SECRET + "\0"}, "task_id: contains unsupported text"),
+        (
+            {"context_paths": ["good.md", {"password": SECRET}]},
+            "context_paths[1]: expected a string",
+        ),
     ],
 )
 def test_bad_transport_or_business_input_does_not_open_database(
@@ -169,7 +200,11 @@ def test_bad_transport_or_business_input_does_not_open_database(
         run()
 
     assert error.value.code == 2
-    assert message in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert message in stderr
+    assert SECRET not in stderr
+    assert "input_value" not in stderr
+    assert "Traceback" not in stderr
     legacy.assert_not_called()
     open_factory.assert_not_called()
 
@@ -196,29 +231,92 @@ def test_provision_task_spec_pydantic_validates_storage_text(spec_file, updates,
         ProvisionTaskSpec.model_validate(payload | updates)
 
 
+def test_safe_validation_formatter_discards_validator_context_and_input():
+    error = ValidationError.from_exception_data(
+        "TaskSpec",
+        [
+            {
+                "type": "value_error",
+                "loc": ("context_paths", 1),
+                "input": UNSAFE_ERROR,
+                "ctx": {"error": ValueError(UNSAFE_ERROR)},
+            }
+        ],
+    )
+    assert (
+        format_task_spec_error(error) == "context_paths[1]: contains unsupported text"
+    )
+
+
+def test_cli_reports_malformed_json_without_echoing_contents(
+    entrypoint, spec_file, capsys
+):
+    run, _, open_factory = entrypoint
+    spec_file.write_text(f'{{"{SECRET}":', encoding="utf-8")
+    with pytest.raises(SystemExit) as error:
+        run()
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "TaskSpec: malformed JSON" in stderr
+    assert SECRET not in stderr
+    open_factory.assert_not_called()
+
+
 @pytest.mark.parametrize(
-    "failure", [None, PersistenceUnavailableError, CorruptedPersistenceDataError]
+    ("failure", "exit_code", "message"),
+    [
+        (None, 0, ""),
+        (PersistenceUnavailableError, 75, "Persistence is temporarily unavailable"),
+        (TimeoutError, 75, "The local operation timed out"),
+        (CorruptedPersistenceDataError, 2, "stored workflow data failed validation"),
+        (DomainError, 2, "workflow rule rejected the operation"),
+        (ValueError, 2, "invalid local operation configuration"),
+        (TypeError, None, ""),
+        (RuntimeError, None, ""),
+    ],
 )
 def test_provision_passes_validated_command_and_closes_factory(
-    entrypoint, monkeypatch, failure, capsys
+    entrypoint, monkeypatch, failure, exit_code, message, capsys
 ):
     run, legacy, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
+    monkeypatch.setenv("CORRELATION_ID", "cli-failure-test")
     factory_context = MagicMock()
     factory = factory_context.__enter__.return_value
     open_factory.return_value = factory_context
     build = MagicMock()
     monkeypatch.setattr(task_deps, "create_authorize_task_use_case", build)
     use_case = build.return_value.__enter__.return_value
-    if failure is not None:
-        use_case.execute.side_effect = failure("database failed")
-        with pytest.raises(SystemExit) as error:
-            run()
-        assert error.value.code == 2
-        assert "database failed" in capsys.readouterr().err
-    else:
+    if failure is None:
         run()
+    else:
+        injected = failure(UNSAFE_ERROR)
+        use_case.execute.side_effect = injected
+        if exit_code is None:
+            with pytest.raises(failure) as error:
+                run()
+            assert error.value is injected
+        else:
+            with pytest.raises(SystemExit) as error:
+                run()
+            assert error.value.code == exit_code
+            stderr = capsys.readouterr().err
+            assert message in stderr
+            assert SECRET not in stderr
+            assert "Traceback" not in stderr
+            if exit_code == 75:
+                record, diagnostic = stderr.splitlines()
+                payload = json.loads(record)
+                assert payload["event"] == "admin_temporary_failure"
+                assert payload["level"] == "WARNING"
+                assert payload["correlation_id"] == "cli-failure-test"
+                assert payload["action"] == "provision"
+                assert payload["reason"] == (
+                    "timeout" if failure is TimeoutError else "persistence_unavailable"
+                )
+                assert message in diagnostic
 
+    assert get_correlation_id() is None
     open_factory.assert_called_once()
     build.assert_called_once_with(factory)
     use_case.execute.assert_called_once()
@@ -227,6 +325,38 @@ def test_provision_passes_validated_command_and_closes_factory(
     assert command.spec.context_paths == ("AGENTS.md",)
     factory_context.__exit__.assert_called_once()
     legacy.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "invalid_id", ["*/" + SECRET, " " + SECRET, SECRET + "\n", SECRET * 15]
+)
+def test_cli_regenerates_correlation_and_logs_once_per_call(
+    entrypoint, monkeypatch, capsys, invalid_id
+):
+    run, _, open_factory = entrypoint
+    monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
+    monkeypatch.setenv("CORRELATION_ID", invalid_id)
+    seen = []
+
+    def refuse(_config):
+        seen.append(get_correlation_id())
+        raise PersistenceUnavailableError(UNSAFE_ERROR)
+
+    open_factory.side_effect = refuse
+    with correlation_scope(correlation_id="outer-scope"):
+        for _ in range(2):
+            with pytest.raises(SystemExit) as error:
+                run()
+            assert error.value.code == 75
+            assert get_correlation_id() == "outer-scope"
+            stderr = capsys.readouterr().err
+            line, _ = stderr.splitlines()
+            assert json.loads(line)["correlation_id"] == seen[-1]
+            assert seen[-1].startswith("cli-")
+            assert SECRET not in stderr
+
+    assert seen[0] != seen[1]
+    assert get_correlation_id() is None
 
 
 def test_composition_injects_same_scoped_session(monkeypatch):

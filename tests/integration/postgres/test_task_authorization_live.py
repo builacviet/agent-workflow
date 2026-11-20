@@ -1,6 +1,7 @@
 """Verify the local operator write slice on a disposable PostgreSQL database."""
 
 import json
+import logging
 import os
 import sys
 import time
@@ -17,6 +18,7 @@ from sqlalchemy import delete, event, select, text, update
 from agent_workflow import admin, budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.shared.errors import CorruptedPersistenceDataError
+from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
 )
@@ -36,6 +38,11 @@ from agent_workflow.infrastructure.database.repositories.task_authorization_repo
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
+)
+from agent_workflow.observability.correlation import (
+    correlation_scope,
+    get_correlation_id,
+    set_correlation_id,
 )
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
@@ -235,6 +242,120 @@ def test_operator_cli_readback_matches_legacy_and_preserves_history(
     assert read_rows(factory, spec.task_id) == before
     assert [row["action"] for row in before[1]][0] == "LOCAL_AUTHORIZATION"
     assert len(before[1]) == 2
+
+
+def test_live_cli_correlates_readiness_sql_and_logs_after_commit(
+    pg_authorization, monkeypatch, tmp_path, capsys
+):
+    observer, spec = pg_authorization
+    path = tmp_path / "task.json"
+    path.write_text(json.dumps(asdict(spec)), encoding="utf-8")
+    correlation_id = "live-cli-observation"
+    monkeypatch.setenv("CORRELATION_ID", correlation_id)
+    monkeypatch.setenv("PG_RUNTIME_DSN", os.environ["PG_TEST_DSN"])
+    monkeypatch.setattr(
+        sys, "argv", ["agent_workflow.admin", "provision", "--file", str(path)]
+    )
+
+    readiness = PostgresFactory.assert_schema_ready
+    statements = []
+
+    def observe_sql(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    def instrument_readiness(factory):
+        event.listen(factory._engine, "before_cursor_execute", observe_sql)
+        readiness(factory)
+
+    monkeypatch.setattr(PostgresFactory, "assert_schema_ready", instrument_readiness)
+    logger = logging.getLogger(authorize_task.__name__)
+    info = logger.info
+    visible_at_success = []
+
+    def observe_log(event_name):
+        if event_name == "task_authorization_committed":
+            task, events = read_rows(observer, spec.task_id)
+            visible_at_success.append(
+                (task["task_id"], [row["action"] for row in events])
+            )
+        info(event_name)
+
+    monkeypatch.setattr(logger, "info", observe_log)
+
+    for result in ("committed", "skipped"):
+        statements.clear()
+        admin.main()
+        assert get_correlation_id() is None
+        prefix = f"/* correlation_id={correlation_id} */ "
+        assert statements[0] == prefix + "SELECT version_num FROM alembic_version"
+        assert any("pg_advisory_xact_lock" in sql for sql in statements)
+        assert all(
+            sql.startswith(prefix) and sql.count(prefix) == 1 for sql in statements
+        )
+        assert any("INSERT INTO tasks" in sql for sql in statements) == (
+            result == "committed"
+        )
+        stderr = capsys.readouterr().err
+        assert spec.task_id not in stderr
+        assert spec.description.strip() not in stderr
+        logs = [json.loads(line) for line in stderr.splitlines()]
+        assert [record["event"] for record in logs] == [
+            "task_authorization_started",
+            f"task_authorization_{result}",
+        ]
+        assert {record["correlation_id"] for record in logs} == {correlation_id}
+    assert visible_at_success == [(spec.task_id, ["LOCAL_AUTHORIZATION"])]
+
+
+@pytest.mark.parametrize("correlation_id", ["valid-DB_1", "bad*/id", "bad\nid", None])
+def test_live_postgres_receives_safe_comment_and_unchanged_parameter(
+    pg_authorization, correlation_id
+):
+    factory, _ = pg_authorization
+    probe = "literal input */ not part of SQL"
+    with correlation_scope(), factory.connect_session() as connection:
+        set_correlation_id(correlation_id)
+        sql, bound = connection.execute(
+            text("SELECT current_query(), CAST(:probe AS text)"),
+            {"probe": probe},
+        ).one()
+    assert bound == probe
+    assert probe not in sql
+    if correlation_id == "valid-DB_1":
+        assert sql.startswith("/* correlation_id=valid-DB_1 */ SELECT")
+    else:
+        assert sql.startswith("SELECT")
+
+
+def test_live_postgres_commit_rejection_rolls_back_without_success(
+    pg_authorization, monkeypatch, caplog
+):
+    factory, spec = pg_authorization
+    caplog.set_level(logging.INFO, logger=authorize_task.__name__)
+    scopes = observe_scopes(factory, monkeypatch)
+    add = SqlAlchemyTaskAuthorizationRepository.add
+
+    def defer_violation_until_commit(repository, authorization):
+        add(repository, authorization)
+        connection, _, outcomes = scopes[0]
+        connection.exec_driver_sql(
+            "CREATE TEMP TABLE deferred_violation "
+            "(value int UNIQUE DEFERRABLE INITIALLY DEFERRED) ON COMMIT DROP"
+        )
+        connection.exec_driver_sql("INSERT INTO deferred_violation VALUES (1), (1)")
+        assert outcomes == []
+
+    monkeypatch.setattr(
+        SqlAlchemyTaskAuthorizationRepository, "add", defer_violation_until_commit
+    )
+    with pytest.raises(
+        PostgresUnavailableError, match="^PostgreSQL unit of work failed$"
+    ):
+        authorize(factory, spec)
+    assert scopes[0][2] == ["commit"]
+    assert_closed(scopes)
+    assert read_rows(factory, spec.task_id) == (None, [])
+    assert caplog.messages == ["task_authorization_started"]
 
 
 @pytest.mark.parametrize("failure", ["exception", "database", "deadline"])

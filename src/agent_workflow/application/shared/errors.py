@@ -1,13 +1,15 @@
-"""Backend-independent persistence failures exposed to application boundaries."""
+"""Compatibility imports for application exceptions."""
 
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    CorruptedPersistenceDataError,
+    PersistenceError,
+    PersistenceUnavailableError,
+)
 
-class PersistenceError(RuntimeError):
-    """Failure to access or interpret persisted workflow state."""
-
-
-class PersistenceUnavailableError(PersistenceError):
-    """A persistence backend is temporarily unavailable or failed."""
-
-
-class CorruptedPersistenceDataError(PersistenceError):
-    """Persisted workflow data does not satisfy its expected contract."""
+__all__ = [
+    "ApplicationError",
+    "CorruptedPersistenceDataError",
+    "PersistenceError",
+    "PersistenceUnavailableError",
+]

@@ -12,7 +12,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.shared.errors import PersistenceUnavailableError
+from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.budget import check_deadline, operation_timeout
 
 

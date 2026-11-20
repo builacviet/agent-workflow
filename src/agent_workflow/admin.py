@@ -1,21 +1,29 @@
 """Explicit local-only provision/import/reset commands; no automatic remote dispatch."""
 
 import argparse
+import logging
+import os
 from importlib.resources import files
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from agent_workflow.application.admin.use_cases import AdminSeedCommand
-from agent_workflow.application.shared.errors import (
+from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
 )
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import REPOSITORY as REPO
-from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
+from agent_workflow.interfaces.cli.task_spec import (
+    ProvisionTaskSpec,
+    format_task_spec_error,
+)
+from agent_workflow.observability.correlation import correlation_scope
 
 try:
     from agent_workflow.composition.task_deps import (
+        admin_log_scope,
         admin_seed_scope,
         task_authorization_scope,
     )
@@ -23,7 +31,38 @@ except ModuleNotFoundError as exc:
     if exc.name != "sqlalchemy":
         raise
     task_authorization_scope = None
+    admin_log_scope = None
     admin_seed_scope = None
+
+_LOGGER = logging.getLogger("agent_workflow.admin")
+
+_SAFE_CONFIG_MESSAGES = frozenset(
+    {
+        "PG_RUNTIME_DSN is required",
+        "PG_RUNTIME_DSN must be an explicit PostgreSQL psycopg TCP URL with user, password and database",
+        "PG_RUNTIME_DSN must target 127.0.0.1 or ::1",
+        "PGHOSTADDR and PGSERVICE are unsupported for local provisioning",
+    }
+)
+_SAFE_DOMAIN_MESSAGES = frozenset(
+    {
+        "a full lowercase 40-character commit SHA is required",
+        "context paths must be repository-relative",
+        "refusing to overwrite divergent task history",
+        "refusing to reset real history",
+        "synthetic task does not exist",
+        "synthetic task has linked external history",
+        "task authorization conflicts with stored metadata",
+        "unauthorized repository or unsupported effort",
+    }
+)
+
+
+def _operator_message(error: ValueError, allowed: frozenset[str], fallback: str) -> str:
+    if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in allowed:
+        return error.args[0]
+    return fallback
+
 
 BASE = "015ccc535b85ce1d0ad00da787b827970b9bf39a"
 ROUND1 = "6352c8ff5ea83450a93cd1077d6447170c9dedaa"
@@ -84,7 +123,7 @@ def synthetic_spec():
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(exit_on_error=False)
     parser.add_argument(
         "action",
         choices=["seed-history", "seed-synthetic", "reset-synthetic", "provision"],
@@ -95,7 +134,22 @@ def main():
         action="store_true",
         help="deprecated no-op: local admin commands always use PostgreSQL",
     )
-    args = parser.parse_args()
+    try:
+        args, unknown = parser.parse_known_args()
+    except argparse.ArgumentError:
+        parser.error("invalid local admin arguments")
+    if unknown:
+        parser.error("unrecognized local admin arguments")
+    if admin_log_scope is None:
+        parser.error("PostgreSQL operations require the postgres extra")
+    with (
+        correlation_scope(correlation_id=os.environ.get("CORRELATION_ID")),
+        admin_log_scope(),
+    ):
+        _run_action(parser, args)
+
+
+def _run_action(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if task_authorization_scope is None or admin_seed_scope is None:
         parser.error("PostgreSQL operations require the postgres extra")
     try:
@@ -118,15 +172,34 @@ def main():
             command = ProvisionTaskSpec.model_validate(raw_spec).to_command()
             with admin_seed_scope(args.action) as use_case:
                 use_case.execute(AdminSeedCommand(command.spec))
-    except ValidationError:
-        parser.error("invalid TaskSpec JSON")
-    except (
-        ValueError,
-        TimeoutError,
-        PersistenceUnavailableError,
-        CorruptedPersistenceDataError,
-    ) as exc:
-        parser.error(str(exc))
+    except ValidationError as exc:
+        parser.error(format_task_spec_error(exc))
+    except CorruptedPersistenceDataError:
+        parser.error("stored workflow data failed validation")
+    except DomainError as exc:
+        parser.error(
+            _operator_message(
+                exc, _SAFE_DOMAIN_MESSAGES, "workflow rule rejected the operation"
+            )
+        )
+    except ValueError as exc:
+        parser.error(
+            _operator_message(
+                exc, _SAFE_CONFIG_MESSAGES, "invalid local operation configuration"
+            )
+        )
+    except PersistenceUnavailableError:
+        _LOGGER.warning(
+            "admin_temporary_failure",
+            extra={"action": args.action, "reason": "persistence_unavailable"},
+        )
+        parser.exit(75, "Persistence is temporarily unavailable.\n")
+    except TimeoutError:
+        _LOGGER.warning(
+            "admin_temporary_failure",
+            extra={"action": args.action, "reason": "timeout"},
+        )
+        parser.exit(75, "The local operation timed out.\n")
     print("Local operation completed; no review approval or AI effort claimed.")
 
 

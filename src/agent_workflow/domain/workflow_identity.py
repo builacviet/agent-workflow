@@ -2,6 +2,8 @@
 
 import re
 
+from agent_workflow.domain.exceptions import DomainError
+
 REPOSITORY = "builacviet/agent-workflow"
 LEGACY_REPOSITORY = "builacviet/techlead-review-poc"
 
@@ -13,7 +15,7 @@ def canonical_repository(repository: str) -> str:
     return repository
 
 
-class WorkflowError(ValueError):
+class WorkflowError(DomainError):
     """Invalid workflow input/state."""
 
 

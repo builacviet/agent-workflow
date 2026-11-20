@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.composition import postgres_dispatch_entrypoint as entry
@@ -28,6 +28,14 @@ HEAD = "c" * 40
 
 def forbidden(*args, **kwargs):
     pytest.fail("unexpected external effect or SQLite fallback")
+
+
+@pytest.fixture
+def offline_factory(monkeypatch):
+    monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda _: None)
+    engine = create_engine("postgresql+psycopg://", creator=forbidden)
+    monkeypatch.setattr(engine, "dispose", Mock(wraps=engine.dispose))
+    return PostgresFactory(engine)
 
 
 @pytest.fixture
@@ -155,9 +163,10 @@ def test_pg_validation_never_inspects_sqlite_database(config):
         "cleanup_error",
     ],
 )
-def test_single_factory_lazy_worker_and_terminal_order(config, monkeypatch, outcome):
-    monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda _: None)
-    factory = PostgresFactory(Mock(spec=Engine))
+def test_single_factory_lazy_worker_and_terminal_order(
+    config, monkeypatch, outcome, offline_factory
+):
+    factory = offline_factory
     composition = compose_postgres_controller(factory)
     deps = composition.controller
     events = []
@@ -277,7 +286,7 @@ def test_single_factory_lazy_worker_and_terminal_order(config, monkeypatch, outc
     ],
 )
 def test_pg_once_runs_native_dev_stages(
-    config, tmp_path, monkeypatch, fault, error, expected_stages
+    config, tmp_path, monkeypatch, fault, error, expected_stages, offline_factory
 ):
     # Only local Git runs. PostgreSQL I/O, Docker transport, Codex and GitHub
     # are synthetic while the Controller, Worker and phase coordinator run intact.
@@ -331,8 +340,7 @@ def test_pg_once_runs_native_dev_stages(
         "context_paths": [handoff_path, "src/value.txt"],
     }
 
-    monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda _: None)
-    factory = PostgresFactory(Mock(spec=Engine))
+    factory = offline_factory
     composition = compose_postgres_controller(factory)
     deps = composition.controller
     monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
