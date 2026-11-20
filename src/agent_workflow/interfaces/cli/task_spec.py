@@ -2,7 +2,9 @@
 
 from pydantic import ValidationInfo, field_validator
 
-from agent_workflow.application.task.use_cases.authorize_task import AuthorizeTaskCommand
+from agent_workflow.application.task.use_cases.authorize_task import (
+    AuthorizeTaskCommand,
+)
 from agent_workflow.domain.contracts import TaskSpec as LegacyTaskSpec
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 
