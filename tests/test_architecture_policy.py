@@ -215,7 +215,6 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
         for module in receiver
     )
 
-
     # Webhook infrastructure adapter must use the caller-owned Session,
     # never construct a factory or own a commit.
     repo_path = (
