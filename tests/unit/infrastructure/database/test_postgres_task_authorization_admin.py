@@ -88,7 +88,9 @@ def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
     legacy.assert_not_called()
 
 
-@pytest.mark.parametrize("action", ["seed-history", "seed-synthetic", "reset-synthetic"])
+@pytest.mark.parametrize(
+    "action", ["seed-history", "seed-synthetic", "reset-synthetic"]
+)
 @pytest.mark.parametrize("postgres", [False, True])
 def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
     entrypoint, monkeypatch, action, postgres
@@ -105,9 +107,8 @@ def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
 
 
 def test_admin_seed_scope_has_typed_use_case_contract():
-    assert get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"] == (
-        Iterator[IAdminSeedUseCase]
-    )
+    annotation = get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"]
+    assert annotation == Iterator[IAdminSeedUseCase]
 
 
 @pytest.mark.parametrize(
