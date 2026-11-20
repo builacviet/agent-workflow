@@ -1,5 +1,7 @@
 # Local runtime configuration — Agent Workflow V1
 
+> **Scope clarification (2026-11-20):** These templates primarily document the tracked **legacy local Controller/Compose stack**; root `compose.yaml` still contains SQLite state paths. They are not evidence that merged PostgreSQL-first Task/Review/admin code has been deployed or that the complete Controller/Worker stack has switched databases. The R2 local admin CLI uses a separate validated `PG_RUNTIME_DSN` and never reads `WFC_DB_PATH`; see [PostgreSQL runtime guide](../docs/guides/postgres-connection.md) and [as-built architecture](../docs/architecture.md). Treat actual ignored env/credential contents as operator-owned and never copy them into Git.
+
 This directory holds **operator-owned configuration**, not just environment variables.
 Only active templates (`*.example`) and this inventory are committed to Git.
 Actual `.env`, `.json`, PEM, keys and tokens are local-only.
