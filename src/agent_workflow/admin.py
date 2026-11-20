@@ -7,14 +7,23 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from agent_workflow.application.task.use_cases.authorize_task import (
-    AuthorizeTaskCommand,
-)
-from agent_workflow.domain.contracts import TaskSpec
 from agent_workflow.domain.service import default_service, encode
-from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 from agent_workflow.integrations.github import REPOSITORY as REPO
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
+
+try:
+    from agent_workflow.composition.task_deps import postgres_task_authorization
+    from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
+        CorruptedPersistenceDataError,
+    )
+    from agent_workflow.infrastructure.database.session_factory import (
+        PostgresUnavailableError,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "sqlalchemy":
+        raise
+    postgres_task_authorization = None
 
 BASE = "015ccc535b85ce1d0ad00da787b827970b9bf39a"
 ROUND1 = "6352c8ff5ea83450a93cd1077d6447170c9dedaa"
@@ -214,25 +223,24 @@ def main():
                 "provision requires --file containing authorized TaskSpec JSON"
             )
         if args.postgres:
-            from agent_workflow.composition.task_deps import (
-                PostgresUnavailableError,
-                postgres_task_authorization,
-            )
-
+            if postgres_task_authorization is None:
+                parser.error("PostgreSQL provisioning requires the postgres extra")
             try:
                 raw_spec = args.file.read_bytes()
             except OSError:
                 parser.error("unable to read TaskSpec JSON file")
             try:
-                values = TaskSpec.model_validate_json(raw_spec).model_dump()
-                values["acceptance_criteria"] = tuple(values["acceptance_criteria"])
-                values["context_paths"] = tuple(values["context_paths"])
-                command = AuthorizeTaskCommand(TaskAuthorizationSpec(**values))
+                command = ProvisionTaskSpec.model_validate_json(raw_spec).to_command()
                 with postgres_task_authorization() as use_case:
                     use_case.execute(command)
             except ValidationError:
                 parser.error("invalid TaskSpec JSON")
-            except (ValueError, TimeoutError, PostgresUnavailableError) as exc:
+            except (
+                ValueError,
+                TimeoutError,
+                PostgresUnavailableError,
+                CorruptedPersistenceDataError,
+            ) as exc:
                 parser.error(str(exc))
         else:
             engine.provision_task(json.loads(args.file.read_text()))

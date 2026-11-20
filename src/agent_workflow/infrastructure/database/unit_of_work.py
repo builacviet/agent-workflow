@@ -5,15 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, Self
+from typing import Literal, Self
 
-from sqlalchemy import text
+from sqlalchemy import event, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from agent_workflow.budget import check_deadline, operation_timeout
 
-if TYPE_CHECKING:
-    from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+
+class PostgresUnavailableError(RuntimeError):
+    """Runtime connection or transaction failed without exposing database values."""
 
 
 def set_workflow_query_timeout(session: Session) -> None:
@@ -31,29 +34,28 @@ def set_workflow_query_timeout(session: Session) -> None:
 class SqlAlchemyUnitOfWork:
     def __init__(
         self,
-        factory: PostgresFactory,
+        session: Session,
         *,
         read_only: bool = False,
         after_session_commit: Callable[[], None] | None = check_deadline,
     ) -> None:
-        self._factory = factory
+        self._session = session
         self._read_only = read_only
         self._after_session_commit = after_session_commit
-        self._scope: AbstractContextManager[Session] | None = None
-        self._session: Session | None = None
+        self._scope: AbstractContextManager[None] | None = None
         self._decision: Literal["commit", "rollback"] | None = None
 
     @property
     def session(self) -> Session:
-        if self._session is None:
+        if self._scope is None:
             raise RuntimeError("Unit of work is outside an active scope")
         return self._session
 
     def __enter__(self) -> Self:
         if self._scope is not None:
             raise RuntimeError("Unit of work is already active")
-        scope = self._open_scope()
-        self._session = scope.__enter__()
+        scope = self._transaction()
+        scope.__enter__()
         self._scope = scope
         return self
 
@@ -67,7 +69,6 @@ class SqlAlchemyUnitOfWork:
         try:
             self._scope.__exit__(exc_type, exc_value, traceback)
         finally:
-            self._session = None
             self._scope = None
             self._decision = None
 
@@ -87,37 +88,46 @@ class SqlAlchemyUnitOfWork:
         self._decision = decision
 
     @contextmanager
-    def _open_scope(self) -> Iterator[Session]:
-        with self._factory.connect_session() as connection, connection.begin() as tx:
-            if self._read_only:
-                connection.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                )
-            with self._factory.get_sync_session(connection) as session:
-                yield session
-                if self._decision == "commit" and not self._read_only:
-                    # rollback_only keeps the physical transaction open for the hook.
-                    session.commit()
-                    if self._after_session_commit is not None:
-                        self._after_session_commit()
-            if self._decision == "commit":
-                tx.commit()
-            else:
-                tx.rollback()
+    def _transaction(self) -> Iterator[None]:
+        session = self._session
+        connection = session.get_bind()
+        if (
+            not isinstance(connection, Connection)
+            or session.join_transaction_mode != "rollback_only"
+            or session.in_transaction()
+            or connection.in_transaction()
+        ):
+            raise ValueError(
+                "Unit of work requires an idle connection-bound Session in rollback_only mode"
+            )
 
-    @classmethod
-    @contextmanager
-    def legacy_session(
-        cls,
-        factory: PostgresFactory,
-        *,
-        read_only: bool,
-        after_session_commit: Callable[[], None] | None,
-    ) -> Iterator[Session]:
-        """Keep success-based completion for legacy Workflow and Dispatch."""
-        with cls(
-            factory, read_only=read_only, after_session_commit=after_session_commit
-        ) as unit:
-            yield unit.session
-            # Legacy reads end with an outer commit, without an ORM commit or flush.
-            unit._decide("commit")
+        def refresh_timeout(*_args: object) -> None:
+            set_workflow_query_timeout(session)
+
+        try:
+            with connection.begin() as transaction:
+                if self._read_only:
+                    connection.execute(
+                        text(
+                            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+                        )
+                    )
+                event.listen(session, "do_orm_execute", refresh_timeout)
+                event.listen(session, "before_flush", refresh_timeout)
+                try:
+                    refresh_timeout()
+                    yield
+                    if self._decision == "commit":
+                        session.commit()
+                        if self._after_session_commit is not None:
+                            self._after_session_commit()
+                finally:
+                    event.remove(session, "before_flush", refresh_timeout)
+                    event.remove(session, "do_orm_execute", refresh_timeout)
+                    session.close()
+                if self._decision == "commit":
+                    transaction.commit()
+                else:
+                    transaction.rollback()
+        except SQLAlchemyError:
+            raise PostgresUnavailableError("PostgreSQL unit of work failed") from None

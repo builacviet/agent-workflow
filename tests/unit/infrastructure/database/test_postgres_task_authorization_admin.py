@@ -124,6 +124,7 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
         ({"synthetic": "false"}, "invalid TaskSpec JSON"),
         ({"extra": True}, "invalid TaskSpec JSON"),
         ({"repository": "another/repo"}, "unauthorized repository"),
+        ({"task_id": "bad\0value"}, "must not contain NUL"),
     ],
 )
 def test_bad_transport_or_business_input_does_not_open_database(
@@ -152,13 +153,11 @@ def test_opt_in_passes_validated_command_and_closes_factory(
     factory_context = MagicMock()
     factory = factory_context.__enter__.return_value
     open_factory.return_value = factory_context
-    build = Mock()
+    build = MagicMock()
     monkeypatch.setattr(task_deps, "create_authorize_task_use_case", build)
-    use_case = build.return_value
+    use_case = build.return_value.__enter__.return_value
     if fails:
-        use_case.execute.side_effect = task_deps.PostgresUnavailableError(
-            "database failed"
-        )
+        use_case.execute.side_effect = admin.PostgresUnavailableError("database failed")
         with pytest.raises(SystemExit) as error:
             run()
         assert error.value.code == 2
@@ -174,3 +173,24 @@ def test_opt_in_passes_validated_command_and_closes_factory(
     assert command.spec.context_paths == ("AGENTS.md",)
     factory_context.__exit__.assert_called_once()
     legacy.assert_not_called()
+
+
+def test_composition_injects_same_scoped_session(monkeypatch):
+    factory = Mock()
+    session_scope = factory.scoped_session.return_value = MagicMock()
+    session = session_scope.__enter__.return_value
+    unit_type = Mock()
+    repo_type = Mock()
+    use_case_type = Mock()
+    monkeypatch.setattr(task_deps, "SqlAlchemyUnitOfWork", unit_type)
+    monkeypatch.setattr(task_deps, "SqlAlchemyTaskAuthorizationRepository", repo_type)
+    monkeypatch.setattr(task_deps, "AuthorizeTaskUseCase", use_case_type)
+
+    with task_deps.create_authorize_task_use_case(factory) as use_case:
+        unit_type.assert_called_once_with(session)
+        repo_type.assert_called_once_with(session)
+        use_case_type.assert_called_once_with(
+            unit_type.return_value, repo_type.return_value
+        )
+        assert use_case is use_case_type.return_value
+    session_scope.__exit__.assert_called_once()

@@ -50,8 +50,6 @@ def test_canonical_alias_defaults_and_exact_spec_semantics(spec, effort):
     [
         ("task_id", None, "task_id must be a string"),
         ("task_id", "", "task_id must be nonempty"),
-        ("task_id", "task\0id", "must not contain NUL"),
-        ("branch", "\ud800", "valid UTF-8"),
         ("title", 12, "title must be a string"),
         ("description", "", "description must be nonempty"),
         ("definition_of_done", "", "definition_of_done must be nonempty"),
@@ -72,7 +70,6 @@ def test_canonical_alias_defaults_and_exact_spec_semantics(spec, effort):
         ("context_paths", ("docs/../AGENTS.md",), "repository-relative"),
         ("context_paths", ("docs\\..\\AGENTS.md",), "repository-relative"),
         ("context_paths", ("C:AGENTS.md",), "repository-relative"),
-        ("context_paths", ("docs/a\0.md",), "repository-relative"),
         ("require_verified_effort", 1, "must be booleans"),
         ("synthetic", "false", "must be booleans"),
     ],

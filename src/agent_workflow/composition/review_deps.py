@@ -27,8 +27,10 @@ def create_get_review_context_use_case(
 
     @contextmanager
     def open_repositories() -> Iterator[ReviewRepositories]:
-        with SqlAlchemyUnitOfWork(factory, read_only=True) as unit:
-            session = unit.session
+        with (
+            factory.scoped_session() as session,
+            SqlAlchemyUnitOfWork(session, read_only=True),
+        ):
             yield SqlAlchemyTaskRepository(session), SqlAlchemyReviewRepository(session)
 
     return GetReviewContextUseCase(

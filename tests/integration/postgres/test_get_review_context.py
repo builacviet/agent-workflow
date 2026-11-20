@@ -27,6 +27,9 @@ from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.repositories.review_repository import (
     SqlAlchemyReviewRepository,
 )
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresUnavailableError,
+)
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     Review,
@@ -281,10 +284,15 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
 
     with monkeypatch.context() as patch:
         patch.setattr(SqlAlchemyReviewRepository, "list_reviews", reject_write)
-        with pytest.raises(DBAPIError) as error:
+        with pytest.raises(
+            PostgresUnavailableError, match="^PostgreSQL unit of work failed$"
+        ) as error:
             use_case.execute(request)
 
-    assert getattr(error.value.orig, "sqlstate", None) == "25006"
+    assert error.value.__suppress_context__
+    cause = error.value.__context__
+    assert isinstance(cause, DBAPIError)
+    assert getattr(cause.orig, "sqlstate", None) == "25006"
     assert len(failed_connections) == 1
     assert rollbacks == failed_connections
     assert failed_connections[0].closed

@@ -6,19 +6,20 @@ from dataclasses import asdict, fields
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.task.use_cases.authorize_task import (
+    validate_authorization_text,
+)
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
-from agent_workflow.infrastructure.database.session_factory import (
-    PostgresUnavailableError,
-)
-from agent_workflow.infrastructure.database.unit_of_work import (
-    set_workflow_query_timeout,
-)
 
 _SPEC_KEYS = frozenset(field.name for field in fields(TaskAuthorizationSpec))
+
+
+class CorruptedPersistenceDataError(RuntimeError):
+    """A stored task authorization cannot be safely rehydrated."""
 
 
 class SqlAlchemyTaskAuthorizationRepository:
@@ -27,13 +28,11 @@ class SqlAlchemyTaskAuthorizationRepository:
 
     def load_for_authorization(self, task_id: str) -> TaskAuthorizationSpec | None:
         session = self._session
-        set_workflow_query_timeout(session)
         # Use the existing Workflow authorization lock key to serialize both callers.
         session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:task_id, 5727811))"),
             {"task_id": task_id},
         )
-        set_workflow_query_timeout(session)
         metadata = session.scalar(
             select(Task.metadata_text).where(Task.task_id == task_id)
         )
@@ -47,9 +46,13 @@ class SqlAlchemyTaskAuthorizationRepository:
                 if not isinstance(values[name], list):
                     raise ValueError
                 values[name] = tuple(values[name])
-            return TaskAuthorizationSpec(**values)
+            spec = TaskAuthorizationSpec(**values)
+            validate_authorization_text(spec)
+            if spec.task_id != task_id:
+                raise ValueError
+            return spec
         except (TypeError, ValueError):
-            raise PostgresUnavailableError(
+            raise CorruptedPersistenceDataError(
                 "Invalid persisted task authorization"
             ) from None
 
@@ -78,6 +81,5 @@ class SqlAlchemyTaskAuthorizationRepository:
                 metadata_text="{}",
             )
         )
-        set_workflow_query_timeout(self._session)
         self._session.add(task)
         self._session.flush()

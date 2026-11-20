@@ -29,6 +29,7 @@ from agent_workflow.domain.workflow_identity import (
 )
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
+    CorruptedPersistenceDataError,
     SqlAlchemyTaskAuthorizationRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import (
@@ -108,6 +109,11 @@ def observe_scopes(factory, monkeypatch, *, before_execute=None):
     return scopes
 
 
+def authorize(factory, spec):
+    with create_authorize_task_use_case(factory) as use_case:
+        use_case.execute(AuthorizeTaskCommand(spec))
+
+
 def assert_closed(scopes):
     assert all(
         connection.closed and not session.in_transaction()
@@ -137,12 +143,11 @@ def test_task_and_event_share_one_physical_commit(pg_authorization, monkeypatch)
         assert outcomes == []
 
     monkeypatch.setattr(SqlAlchemyTaskAuthorizationRepository, "add", check_uncommitted)
-    use_case = create_authorize_task_use_case(factory)
-    use_case.execute(AuthorizeTaskCommand(spec))
+    authorize(factory, spec)
     before = read_rows(factory, spec.task_id)
-    use_case.execute(AuthorizeTaskCommand(spec))
+    authorize(factory, spec)
     with pytest.raises(WorkflowError, match="conflicts with stored metadata"):
-        use_case.execute(AuthorizeTaskCommand(replace(spec, risk_level="high")))
+        authorize(factory, replace(spec, risk_level="high"))
 
     assert read_rows(factory, spec.task_id) == before
     task, events = before
@@ -225,7 +230,7 @@ def test_operator_cli_readback_matches_legacy_and_preserves_history(
         "Disposable test",
     )
     before = read_rows(factory, spec.task_id)
-    create_authorize_task_use_case(factory).execute(AuthorizeTaskCommand(spec))
+    authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before
     assert [row["action"] for row in before[1]][0] == "LOCAL_AUTHORIZATION"
     assert len(before[1]) == 2
@@ -258,14 +263,14 @@ def test_failure_after_writes_rolls_back_task_and_event(
         "exception": (RuntimeError, "application exception"),
         "database": (
             PostgresUnavailableError,
-            "^PostgreSQL task authorization failed$",
+            "^PostgreSQL unit of work failed$",
         ),
         "deadline": (TimeoutError, "dispatch deadline exceeded"),
     }
     error, message = errors[failure]
     limit = budget.dispatch_budget(1001.0) if failure == "deadline" else nullcontext()
     with limit, pytest.raises(error, match=message):
-        create_authorize_task_use_case(factory).execute(AuthorizeTaskCommand(spec))
+        authorize(factory, spec)
     assert [outcomes for _, _, outcomes in scopes] == [["rollback"]]
     assert_closed(scopes)
     assert read_rows(factory, spec.task_id) == (None, [])
@@ -294,7 +299,6 @@ def test_concurrent_create_collision(
 
     monkeypatch.setattr(SqlAlchemyTaskAuthorizationRepository, "add", hold_first)
     scopes = observe_scopes(factory, monkeypatch, before_execute=identify_follower)
-    use_case = create_authorize_task_use_case(factory)
     other_spec = replace(spec, title="Different spec") if conflict else spec
 
     def follow():
@@ -302,10 +306,10 @@ def test_concurrent_create_collision(
             legacy = WorkflowService(repository=PostgresWorkflowRepository(factory))
             legacy.provision_task(json.loads(encode(asdict(other_spec))))
         else:
-            use_case.execute(AuthorizeTaskCommand(other_spec))
+            authorize(factory, other_spec)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(use_case.execute, AuthorizeTaskCommand(spec))
+        first = pool.submit(authorize, factory, spec)
         try:
             assert first_written.wait(5), "first request did not write"
             second = pool.submit(follow)
@@ -332,3 +336,21 @@ def test_concurrent_create_collision(
     assert task["metadata"] == encode(asdict(spec))
     assert [row["action"] for row in events] == ["LOCAL_AUTHORIZATION"]
     assert_closed(scopes)
+
+
+@pytest.mark.parametrize("metadata", ["{", '{"task_id":"wrong"}'])
+def test_corrupt_persisted_spec_fails_separately(pg_authorization, metadata):
+    factory, spec = pg_authorization
+    authorize(factory, spec)
+    with factory.transaction() as connection:
+        connection.execute(
+            update(Task)
+            .where(Task.task_id == spec.task_id)
+            .values(metadata_text=metadata)
+        )
+    before = read_rows(factory, spec.task_id)
+    with pytest.raises(
+        CorruptedPersistenceDataError, match="Invalid persisted task authorization"
+    ):
+        authorize(factory, spec)
+    assert read_rows(factory, spec.task_id) == before

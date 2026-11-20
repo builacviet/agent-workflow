@@ -62,14 +62,6 @@ class TaskAuthorizationSpec:
             raise WorkflowError(
                 "require_verified_effort and synthetic must be booleans"
             )
-        if any("\0" in value for value in (self.task_id, self.branch)):
-            raise WorkflowError("task_id and branch must not contain NUL")
-        try:
-            self.task_id.encode("utf-8")
-            self.branch.encode("utf-8")
-        except UnicodeEncodeError:
-            raise WorkflowError("task_id and branch must be valid UTF-8") from None
-
         repository = canonical_repository(self.repository)
         if repository != REPOSITORY or self.requested_effort not in _LOCAL_EFFORTS:
             raise WorkflowError("unauthorized repository or unsupported effort")
@@ -79,7 +71,6 @@ class TaskAuthorizationSpec:
             or path.startswith(("/", "\\"))
             or ".." in path.replace("\\", "/").split("/")
             or ":" in path
-            or "\0" in path
             for path in self.context_paths
         ):
             raise WorkflowError("context paths must be repository-relative")

@@ -1,8 +1,7 @@
 """Exercise the write decision with a fake scoped repository and UoW."""
 
-from contextlib import contextmanager
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -50,11 +49,14 @@ class FakeScope:
         self.add_error = None
         self.exit_error = None
 
-    @contextmanager
-    def open(self):
+    def __enter__(self):
         self.calls.append("open")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
         try:
-            yield self, self
+            if exc_type is not None:
+                return
             if self.exit_error is not None:
                 raise self.exit_error
             if self.requested_commit:
@@ -84,30 +86,34 @@ class FakeScope:
 
 @pytest.mark.parametrize("invalid", [None, {}, AuthorizeTaskCommand({})])
 def test_rejects_malformed_direct_commands_before_scope(invalid):
-    open_scope = Mock()
+    uow = MagicMock()
+    repository = Mock()
     with pytest.raises(WorkflowError, match="validated task authorization spec"):
-        AuthorizeTaskUseCase(open_scope).execute(invalid)
-    open_scope.assert_not_called()
+        AuthorizeTaskUseCase(uow, repository).execute(invalid)
+    uow.__enter__.assert_not_called()
+    repository.load_for_authorization.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "invalid", [{"repository": "another/repo"}, {"requested_effort": "maximum"}]
 )
 def test_rejects_unauthorized_direct_inputs_without_side_effects(command, invalid):
-    open_scope = Mock()
+    uow = MagicMock()
+    repository = Mock()
     with pytest.raises(
         WorkflowError, match="unauthorized repository or unsupported effort"
     ):
-        AuthorizeTaskUseCase(open_scope).execute(
+        AuthorizeTaskUseCase(uow, repository).execute(
             AuthorizeTaskCommand(replace(command.spec, **invalid))
         )
-    open_scope.assert_not_called()
+    uow.__enter__.assert_not_called()
+    repository.load_for_authorization.assert_not_called()
 
 
 def test_persists_then_requests_commit_once(command):
     scope = FakeScope()
     times = iter((10.0, 11.0))
-    AuthorizeTaskUseCase(scope.open, clock=lambda: next(times)).execute(command)
+    AuthorizeTaskUseCase(scope, scope, clock=lambda: next(times)).execute(command)
 
     assert scope.calls == [
         "open",
@@ -130,7 +136,7 @@ def test_existing_spec_does_not_write_or_commit(command, conflict):
         else command.spec.context_paths,
     )
     clock = Mock()
-    use_case = AuthorizeTaskUseCase(scope.open, clock=clock)
+    use_case = AuthorizeTaskUseCase(scope, scope, clock=clock)
     if conflict:
         with pytest.raises(WorkflowError, match="conflicts with stored metadata"):
             use_case.execute(command)
@@ -153,9 +159,23 @@ def test_write_or_deadline_failure_rolls_back(command, deadline):
     else:
         scope.add_error = error
     with pytest.raises(type(error)) as raised:
-        AuthorizeTaskUseCase(scope.open).execute(command)
+        AuthorizeTaskUseCase(scope, scope).execute(command)
 
     assert raised.value is error
     assert scope.requested_commit is deadline
     assert scope.calls[-1] == "rollback"
     assert scope.persisted is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"task_id": "broken\0id"}, {"branch": "\ud800"}, {"context_paths": ("a\0b",)}],
+)
+def test_rejects_unencodable_text_before_scope(command, fields):
+    uow = MagicMock()
+    repository = Mock()
+    invalid = AuthorizeTaskCommand(replace(command.spec, **fields))
+    with pytest.raises(WorkflowError, match="NUL|UTF-8"):
+        AuthorizeTaskUseCase(uow, repository).execute(invalid)
+    uow.__enter__.assert_not_called()
+    repository.load_for_authorization.assert_not_called()
