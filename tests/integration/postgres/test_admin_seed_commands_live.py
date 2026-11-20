@@ -141,11 +141,12 @@ def test_fixture_replay_concurrency_and_reset_rollback(disposable_factory):
     with pytest.raises(WorkflowError, match="linked external history"):
         execute(factory, ResetSyntheticReviewUseCase, synthetic)
     with factory.connect_session() as connection:
-        assert connection.scalar(
-            select(CITask.task_id).where(CITask.task_id == synthetic["task_id"])
-        ) == synthetic["task_id"]
+        assert (
+            connection.scalar(
+                select(CITask.task_id).where(CITask.task_id == synthetic["task_id"])
+            )
+            == synthetic["task_id"]
+        )
     assert snapshot(factory) == after
     with factory.transaction() as connection:
-        connection.execute(
-            delete(CITask).where(CITask.task_id == synthetic["task_id"])
-        )
+        connection.execute(delete(CITask).where(CITask.task_id == synthetic["task_id"]))
