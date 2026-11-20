@@ -354,3 +354,52 @@ def test_corrupt_persisted_spec_fails_separately(pg_authorization, metadata):
     ):
         authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"task_id": "bad\0task"},
+        {"title": "bad\0title"},
+        {"description": "\ud800"},
+        {"context_paths": ("AGENTS.md", "bad\0path")},
+    ],
+)
+def test_direct_use_case_rejects_unsafe_storage_text_and_rolls_back(
+    pg_authorization, monkeypatch, updates
+):
+    factory, spec = pg_authorization
+    scopes = observe_scopes(factory, monkeypatch)
+    unsafe = replace(spec, **updates)
+
+    with pytest.raises(WorkflowError, match="NUL|UTF-8"):
+        authorize(factory, unsafe)
+
+    assert [outcomes for _, _, outcomes in scopes] == [["rollback"]]
+    assert_closed(scopes)
+    assert read_rows(factory, spec.task_id) == (None, [])
+
+
+def test_persisted_unicode_corruption_is_distinct_from_db_unavailability(
+    pg_authorization,
+):
+    factory, spec = pg_authorization
+    authorize(factory, spec)
+
+    with factory.transaction() as connection:
+        original = json.loads(
+            connection.scalar(
+                select(Task.metadata_text).where(Task.task_id == spec.task_id)
+            )
+        )
+        original["description"] = "\ud800"
+        connection.execute(
+            update(Task)
+            .where(Task.task_id == spec.task_id)
+            .values(metadata_text=json.dumps(original))
+        )
+
+    with pytest.raises(
+        CorruptedPersistenceDataError, match="Invalid persisted task authorization"
+    ):
+        authorize(factory, spec)
+
