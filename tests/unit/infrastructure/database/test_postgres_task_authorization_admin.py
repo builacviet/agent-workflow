@@ -1,13 +1,16 @@
 """Verify the explicit local admin entrypoint and PostgreSQL factory lifetime."""
 
+from collections.abc import Iterator
 import json
 import sys
+from typing import get_type_hints
 from unittest.mock import MagicMock, Mock
 
 import pytest
 from pydantic import ValidationError
 
 from agent_workflow import admin
+from agent_workflow.application.admin.ports import IAdminSeedUseCase
 from agent_workflow.application.shared.errors import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
@@ -59,14 +62,54 @@ def entrypoint(monkeypatch, spec_file):
     return run, legacy, open_factory
 
 
-def test_old_postgres_flag_is_rejected(entrypoint, capsys):
+def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", "--help"])
+    with pytest.raises(SystemExit) as result:
+        admin.main()
+    assert result.value.code == 0
+    assert (
+        "deprecated no-op: local admin commands always use PostgreSQL"
+        in capsys.readouterr().out
+    )
+
+
+@pytest.mark.parametrize("postgres", [False, True])
+def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
+    entrypoint, monkeypatch, postgres
+):
     run, legacy, open_factory = entrypoint
-    with pytest.raises(SystemExit) as error:
-        run(postgres=True)
-    assert error.value.code == 2
-    assert "unrecognized arguments: --postgres" in capsys.readouterr().err
+    monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
+    open_factory.return_value = MagicMock()
+    build = MagicMock()
+    monkeypatch.setattr(task_deps, "create_authorize_task_use_case", build)
+
+    run(postgres=postgres)
+
+    open_factory.assert_called_once()
+    build.return_value.__enter__.return_value.execute.assert_called_once()
     legacy.assert_not_called()
-    open_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["seed-history", "seed-synthetic", "reset-synthetic"])
+@pytest.mark.parametrize("postgres", [False, True])
+def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
+    entrypoint, monkeypatch, action, postgres
+):
+    run, legacy, _ = entrypoint
+    scope = MagicMock()
+    monkeypatch.setattr(admin, "admin_seed_scope", scope)
+
+    run(action=action, postgres=postgres)
+
+    scope.assert_called_once_with(action)
+    scope.return_value.__enter__.return_value.execute.assert_called_once()
+    legacy.assert_not_called()
+
+
+def test_admin_seed_scope_has_typed_use_case_contract():
+    assert get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"] == (
+        Iterator[IAdminSeedUseCase]
+    )
 
 
 @pytest.mark.parametrize(
