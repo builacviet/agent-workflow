@@ -2,118 +2,121 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from sqlalchemy.engine import Connection
 
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
+from agent_workflow.application.shared.errors import PersistenceUnavailableError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.composition import review_deps
 from agent_workflow.domain.workflow_identity import WorkflowError
-from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database import unit_of_work
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 
 
+def test_database_unavailable_error_is_backend_neutral_for_callers():
+    assert issubclass(PostgresUnavailableError, PersistenceUnavailableError)
+
+
 @pytest.fixture
-def scopes():
-    factory = Mock(spec=PostgresFactory)
-    connection_scope = factory.connect_session.return_value = MagicMock()
-    connection = connection_scope.__enter__.return_value
-    transaction_scope = connection.begin.return_value
+def scopes(monkeypatch):
+    monkeypatch.setattr(unit_of_work, "event", Mock())
+    connection = Mock(spec=Connection)
+    connection.in_transaction.return_value = False
+    transaction_scope = connection.begin.return_value = MagicMock()
     transaction = transaction_scope.__enter__.return_value
-    session_scope = factory.get_sync_session.return_value = MagicMock()
-    session = session_scope.__enter__.return_value
+    session = Mock()
+    session.get_bind.return_value = connection
+    session.join_transaction_mode = "rollback_only"
+    session.in_transaction.return_value = False
+    session.connection.return_value = connection
     timeline = Mock()
     timeline.attach_mock(session, "session")
-    timeline.attach_mock(session_scope, "session_scope")
     timeline.attach_mock(transaction, "transaction")
     timeline.attach_mock(transaction_scope, "transaction_scope")
-    timeline.attach_mock(connection_scope, "connection_scope")
-    return factory, connection, session, transaction, timeline
+    return connection, session, transaction, timeline
 
 
-def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes) -> None:
-    factory, connection, session, transaction, timeline = scopes
-    check = Mock()
-    timeline.attach_mock(check, "deadline")
-    concrete = SqlAlchemyUnitOfWork(factory, after_session_commit=check)
+def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes):
+    connection, session, transaction, timeline = scopes
+    deadline = Mock()
+    timeline.attach_mock(deadline, "deadline")
+    concrete = SqlAlchemyUnitOfWork(session, after_session_commit=deadline)
     unit: IUnitOfWork = concrete
-    factory.connect_session.assert_not_called()
-
+    connection.begin.assert_not_called()
     with unit as active:
         assert active is concrete
         assert concrete.session is session
-        factory.get_sync_session.assert_called_once_with(connection)
         active.commit()
         session.commit.assert_not_called()
         transaction.commit.assert_not_called()
-
     session.commit.assert_called_once_with()
     transaction.commit.assert_called_once_with()
     transaction.rollback.assert_not_called()
     calls = [call[0] for call in timeline.mock_calls]
-    assert calls.index("session.commit") < calls.index("deadline")
-    assert calls.index("deadline") < calls.index("transaction.commit")
-    assert calls.index("session_scope.__exit__") < calls.index("transaction.commit")
-    assert calls.index("transaction_scope.__exit__") < calls.index(
-        "connection_scope.__exit__"
-    )
+    positions = [
+        calls.index(name)
+        for name in (
+            "session.commit",
+            "deadline",
+            "session.close",
+            "transaction.commit",
+            "transaction_scope.__exit__",
+        )
+    ]
+    assert positions == sorted(positions)
 
 
 @pytest.mark.parametrize("explicit", [False, True])
-def test_scope_without_commit_rolls_back(scopes, explicit: bool) -> None:
-    factory, _, session, transaction, _ = scopes
-    with SqlAlchemyUnitOfWork(factory) as unit:
+def test_scope_without_commit_rolls_back(scopes, explicit):
+    _, session, transaction, _ = scopes
+    with SqlAlchemyUnitOfWork(session) as unit:
         if explicit:
             unit.rollback()
             with pytest.raises(
                 RuntimeError, match="already has a transaction decision"
             ):
                 unit.commit()
-
     session.commit.assert_not_called()
     transaction.commit.assert_not_called()
     transaction.rollback.assert_called_once_with()
 
 
-def test_exception_after_commit_request_leaves_rollback_to_transaction_scope(
-    scopes,
-) -> None:
-    factory, _, session, transaction, timeline = scopes
+def test_exception_after_commit_request_leaves_rollback_to_transaction_scope(scopes):
+    connection, session, transaction, _ = scopes
     error = ValueError("command validation failed")
-    unit = SqlAlchemyUnitOfWork(factory)
-    with pytest.raises(ValueError) as exc:
-        with unit:
-            unit.commit()
-            raise error
-
+    unit = SqlAlchemyUnitOfWork(session)
+    with pytest.raises(ValueError) as exc, unit:
+        unit.commit()
+        raise error
     assert exc.value is error
+    session.close.assert_called_once_with()
     session.commit.assert_not_called()
     transaction.commit.assert_not_called()
-    exit_calls = [call for call in timeline.mock_calls if "__exit__" in call[0]]
-    assert [call[0] for call in exit_calls] == [
-        "session_scope.__exit__",
-        "transaction_scope.__exit__",
-        "connection_scope.__exit__",
-    ]
-    assert all(call.args[:2] == (ValueError, error) for call in exit_calls)
+    assert connection.begin.return_value.__exit__.call_args.args[:2] == (
+        ValueError,
+        error,
+    )
     with pytest.raises(RuntimeError, match="outside an active scope"):
         unit.commit()
 
 
-def test_prevents_nested_entry_duplicate_commit_and_read_only_commit(scopes) -> None:
-    factory, _, _, transaction, _ = scopes
-    unit = SqlAlchemyUnitOfWork(factory)
+def test_prevents_nested_entry_duplicate_commit_and_read_only_commit(scopes):
+    connection, session, transaction, _ = scopes
+    unit = SqlAlchemyUnitOfWork(session)
     with unit:
-        with pytest.raises(RuntimeError, match="already active"):
-            with unit:
-                pytest.fail("entered a second scope")
-        factory.connect_session.assert_called_once_with()
+        with pytest.raises(RuntimeError, match="already active"), unit:
+            pytest.fail("entered a second scope")
+        connection.begin.assert_called_once_with()
         unit.commit()
         with pytest.raises(RuntimeError, match="already has a transaction decision"):
             unit.commit()
-    transaction.commit.assert_called_once_with()
-
-    with SqlAlchemyUnitOfWork(factory, read_only=True) as read_only:
+    with SqlAlchemyUnitOfWork(session, read_only=True) as read_only:
         with pytest.raises(RuntimeError, match="read-only"):
             read_only.commit()
     transaction.commit.assert_called_once_with()
@@ -125,7 +128,8 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
 ) -> None:
     factory = Mock(spec=PostgresFactory)
     uow = MagicMock()
-    scoped_uow = uow.__enter__.return_value
+    session_scope = factory.scoped_session.return_value = MagicMock()
+    session = session_scope.__enter__.return_value
     uow_type = Mock(return_value=uow)
     tasks = Mock()
     tasks.return_value.get_task.return_value = SimpleNamespace(
@@ -146,14 +150,14 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
     uow_type.assert_not_called()
     tasks.assert_not_called()
     reviews.assert_not_called()
-    scoped_uow.commit.assert_not_called()
+    uow.commit.assert_not_called()
 
     result = use_case.execute(GetReviewContextInput("R2-TEST"))
     assert result.rounds_remaining == 2
-    uow_type.assert_called_once_with(factory, read_only=True)
-    tasks.assert_called_once_with(scoped_uow.session)
-    reviews.assert_called_once_with(scoped_uow.session)
+    uow_type.assert_called_once_with(session, read_only=True)
+    tasks.assert_called_once_with(session)
+    reviews.assert_called_once_with(session)
     tasks.return_value.get_task.assert_called_once_with("R2-TEST")
     reviews.return_value.list_reviews.assert_called_once_with("R2-TEST")
     reviews.return_value.list_events.assert_called_once_with("R2-TEST")
-    scoped_uow.commit.assert_not_called()
+    uow.commit.assert_not_called()

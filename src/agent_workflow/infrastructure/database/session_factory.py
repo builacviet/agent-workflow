@@ -13,13 +13,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from agent_workflow.infrastructure.database.unit_of_work import (
+    PostgresUnavailableError as PostgresUnavailableError,
+)
 
 EXPECTED_REVISION = "pg02d_webhook_digest"
-
-
-class PostgresUnavailableError(RuntimeError):
-    """Runtime connection or schema validation failed without exposing credentials."""
 
 
 def _set_repository_transaction_options(
@@ -101,6 +99,15 @@ class PostgresFactory:
             yield session
 
     @contextmanager
+    def scoped_session(self) -> Iterator[Session]:
+        """Lend an idle connection-bound Session to a caller-owned UoW."""
+        with (
+            self.connect_session() as connection,
+            self.get_sync_session(connection) as session,
+        ):
+            yield session
+
+    @contextmanager
     def unit_of_work_session(
         self,
         *,
@@ -108,10 +115,18 @@ class PostgresFactory:
         after_session_commit: Callable[[], None] | None = None,
     ) -> Iterator[Session]:
         """Compatibility scope for callers that commit on successful return."""
-        with SqlAlchemyUnitOfWork.legacy_session(
-            self, read_only=read_only, after_session_commit=after_session_commit
-        ) as session:
-            yield session
+        with self.connect_session() as connection, connection.begin() as transaction:
+            if read_only:
+                connection.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                )
+            with self.get_sync_session(connection) as session:
+                yield session
+                if not read_only:
+                    session.commit()
+                    if after_session_commit is not None:
+                        after_session_commit()
+            transaction.commit()
 
     @contextmanager
     def repository_session(

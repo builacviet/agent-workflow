@@ -16,7 +16,10 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.infrastructure.database.models import Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from agent_workflow.infrastructure.database.unit_of_work import (
+    PostgresUnavailableError,
+    SqlAlchemyUnitOfWork,
+)
 
 
 @pytest.fixture
@@ -82,7 +85,7 @@ def test_observer_sees_only_explicit_commit_and_connection_closes(
 ) -> None:
     factory, task = transaction_task
     task_id = task.task_id
-    with SqlAlchemyUnitOfWork(factory) as unit:
+    with factory.scoped_session() as session, SqlAlchemyUnitOfWork(session) as unit:
         session = unit.session
         connection, outcomes = observe_transaction(session)
         session.add(task)
@@ -115,7 +118,10 @@ def test_deadline_after_orm_flush_prevents_physical_commit(
     monkeypatch.setattr(budget, "time", fake_time)
     with budget.dispatch_budget(1001.0):
         with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
-            with SqlAlchemyUnitOfWork(factory) as unit:
+            with (
+                factory.scoped_session() as session,
+                SqlAlchemyUnitOfWork(session) as unit,
+            ):
                 session = unit.session
                 connection, outcomes = observe_transaction(session)
 
@@ -147,9 +153,9 @@ def test_failures_rollback_and_close(
 ) -> None:
     factory, task = transaction_task
     task_id = task.task_id
-    error = ValueError if failure == "validation" else DBAPIError
+    error = ValueError if failure == "validation" else PostgresUnavailableError
     with pytest.raises(error) as exc:
-        with SqlAlchemyUnitOfWork(factory) as unit:
+        with factory.scoped_session() as session, SqlAlchemyUnitOfWork(session) as unit:
             session = unit.session
             connection, outcomes = observe_transaction(session)
             session.add(task)
@@ -175,7 +181,10 @@ def test_failures_rollback_and_close(
                 session.execute(text("INSERT INTO child VALUES (1)"))
 
     if failure == "physical commit":
-        assert getattr(exc.value.orig, "sqlstate", None) == "23503"
+        assert exc.value.__suppress_context__
+        cause = exc.value.__context__
+        assert isinstance(cause, DBAPIError)
+        assert getattr(cause.orig, "sqlstate", None) == "23503"
         assert outcomes == ["commit"]
     else:
         assert outcomes == ["rollback"]

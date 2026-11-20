@@ -1,7 +1,10 @@
 """Executable architecture-policy gate: AST imports, exact legacy debt and runner cycles."""
 
 import ast
+import re
 import tomllib
+from collections import Counter
+from importlib.util import resolve_name
 from pathlib import Path
 
 import pytest
@@ -208,3 +211,619 @@ def test_import_policy_allows_composition_to_import_worker():
 def test_nested_trusted_git_package_is_classified():
     path = SOURCE / "agent_workflow" / "workers" / "trusted_git" / "main.py"
     assert area_for(path) == "trusted_git"
+
+
+# The inventory is audited against approved main@376aacf2. Lines are diagnostics,
+# never exemptions. Repeated identical violations are counted per symbol.
+# admin.py was clean at the approved base and still participates in the scan.
+_LEGACY_R2_AST_INVENTORY = """\
+src/agent_workflow/bootstrap/mcp_runtime.py|inline-import|postgres_workflow_provider|agent_workflow.composition.postgres_mcp.postgres_mcp_service|1
+src/agent_workflow/controller.py|inline-import|<module>|agent_workflow.orchestration.controller|1
+src/agent_workflow/controller.py|inline-import|<module>|agent_workflow.orchestration.controller.main|1
+src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.BaseModel|1
+src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.ConfigDict|1
+src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.Field|1
+src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.StrictStr|1
+src/agent_workflow/domain/contracts.py|domain-base|StrictModel|pydantic.BaseModel|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.REPOSITORY|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.WorkflowError|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.canonical_repository|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.validate_sha|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.paths.database_path|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.storage.repository.SQLiteWorkflowRepository|1
+src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.storage.repository.WorkflowRepository|1
+src/agent_workflow/integrations/github_app_checks.py|inline-import|ControllerAppToken.__call__|jwt|1
+src/agent_workflow/mcp/security.py|inline-import|authorize_context|mcp.server.auth.middleware.auth_context.get_access_token|1
+src/agent_workflow/mcp/security.py|inline-import|authorize_techlead|mcp.server.auth.middleware.auth_context.get_access_token|1
+src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.mcp.auth0_oauth.Auth0TokenVerifier|1
+src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.mcp.auth0_oauth.load_auth0_config|1
+src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
+src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
+src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.ci_controller.ControllerCiCoordinator|1
+src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerAppToken|1
+src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerChecksClient|1
+src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.storage.ci_state.ControllerCiState|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_once|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_watch|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_dispatch_entrypoint.run_postgres_dispatch_once|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.runners.coder_runtime.validate_config|1
+src/agent_workflow/orchestration/controller.py|inline-import|operate|agent_workflow.runners.coder_runtime.CoderRuntime|1
+src/agent_workflow/orchestration/controller.py|inline-import|process_lock|fcntl|1
+src/agent_workflow/orchestration/controller.py|inline-import|process_lock|msvcrt|1
+src/agent_workflow/runners/coder_runtime.py|inline-import|CoderRuntime._validated_result|agent_workflow.integrations.github.validate_sha|1
+src/agent_workflow/runners/coder_runtime.py|inline-import|_SqliteCiTracking.track|agent_workflow.storage.ci_state.ControllerCiState|1
+src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1
+src/agent_workflow/runners/sandbox.py|inline-import|_docker|agent_workflow.runners.coder_runtime.docker_command|1
+src/agent_workflow/runners/sandbox.py|inline-import|_workspace_bind|agent_workflow.runners.coder_runtime.is_linked|1
+src/agent_workflow/sandbox_state_paths.py|inline-import|_windows_fixed_drive|ctypes|1
+src/agent_workflow/server.py|inline-import|<module>|agent_workflow.mcp.server|1
+src/agent_workflow/server.py|inline-import|<module>|agent_workflow.mcp.server.main|1
+src/agent_workflow/workers/trusted_git/main.py|inline-import|git_auth|base64|1
+"""
+LEGACY_R2_AST = tuple(
+    (path, rule, symbol, detail, int(occurrence))
+    for entry in _LEGACY_R2_AST_INVENTORY.splitlines()
+    for path, rule, symbol, detail, occurrence in [entry.split("|")]
+)
+
+
+CORE_IMPORTS = {
+    "pydantic",
+    "sqlalchemy",
+    "fastapi",
+    "httpx",
+    "aio_pika",
+    "importlib",
+    "agent_workflow.app_config",
+}
+UNSAFE_CALLS = {"print", "open", "eval", "exec", "__import__"}
+USE_CASE_TYPES = {
+    "Any",
+    "AbstractContextManager",
+    "ContextManager",
+    "Session",
+    "Engine",
+    "PostgresFactory",
+}
+TASK_USE_CASE = "src/agent_workflow/application/task/use_cases/authorize_task.py"
+TASK_COMPOSITION = "src/agent_workflow/composition/task_deps.py"
+SESSION_UOW = "src/agent_workflow/infrastructure/database/unit_of_work.py"
+
+
+def _qualified(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_qualified(node.value)}.{node.attr}"
+    return ""
+
+
+def _imports_in(node, package):
+    if isinstance(node, ast.Import):
+        return [
+            (
+                alias.name,
+                alias.asname or alias.name.split(".")[0],
+                alias.name if alias.asname else alias.name.split(".")[0],
+            )
+            for alias in node.names
+        ]
+    if isinstance(node, ast.ImportFrom):
+        module = node.module or ""
+        if node.level:
+            module = resolve_name("." * node.level + module, package)
+        return [
+            (
+                f"{module}.{alias.name}",
+                alias.asname or alias.name,
+                f"{module}.{alias.name}",
+            )
+            for alias in node.names
+        ]
+    return []
+
+
+def _qualified_alias(node, aliases):
+    name = _qualified(node)
+    first, dot, rest = name.partition(".")
+    return aliases.get(first, first) + dot + rest
+
+
+def _module_try(parent, parents):
+    # Optional dependencies can be imported in a module-level import guard.
+    return (
+        isinstance(parent, ast.Try)
+        and isinstance(parents.get(parent), ast.Module)
+        and any(
+            _qualified(handler.type) in {"ImportError", "ModuleNotFoundError"}
+            for handler in parent.handlers
+        )
+    )
+
+
+def _annotations(args):
+    return [
+        arg
+        for arg in (
+            *args.posonlyargs,
+            *args.args,
+            args.vararg,
+            *args.kwonlyargs,
+            args.kwarg,
+        )
+        if arg and arg.arg != "self"
+    ]
+
+
+def _usecases(tree):
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name.endswith("UseCase")
+    ]
+
+
+def _method(cls, name):
+    return next(
+        (
+            node
+            for node in cls.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        ),
+        None,
+    )
+
+
+def r2_violations(path, source):
+    tree = ast.parse(source, filename=path)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    parts = Path(path).parts
+    area = parts[2] if len(parts) > 3 else ""
+    core = area in {"domain", "application"}
+    opaque_core = area in {"domain", "application", "interfaces"}
+    package = ".".join(parts[1:-1])
+    aliases = {
+        bound: qualified
+        for node in ast.walk(tree)
+        for _, bound, qualified in _imports_in(node, package)
+    }
+    found = []
+    occurrences = Counter()
+
+    def record(node, rule, detail):
+        enclosing = [node.name] if isinstance(node, ast.ClassDef) else []
+        parent = parents.get(node)
+        while parent is not None:
+            if isinstance(
+                parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                enclosing.append(parent.name)
+            parent = parents.get(parent)
+        symbol = ".".join(reversed(enclosing)) or "<module>"
+        key = (path, rule, symbol, detail)
+        occurrences[key] += 1
+        found.append(((*key, occurrences[key]), node.lineno))
+
+    for node in sorted(
+        ast.walk(tree),
+        key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0)),
+    ):
+        for target, _, _ in _imports_in(node, package):
+            parent = parents[node]
+            typing_only = (
+                isinstance(parent, ast.If)
+                and isinstance(parents.get(parent), ast.Module)
+                and node in parent.body
+                and _qualified_alias(parent.test, aliases) == "typing.TYPE_CHECKING"
+            )
+            if not (
+                isinstance(parent, ast.Module)
+                or typing_only
+                or (_module_try(parent, parents) and node in parent.body)
+            ):
+                record(node, "inline-import", target)
+            if core and (
+                any(
+                    target == name or target.startswith(name + ".")
+                    for name in CORE_IMPORTS
+                )
+                or forbidden(area, target)
+            ):
+                record(node, "core-import", target)
+            if opaque_core and (
+                target == "agent_workflow.infrastructure.database"
+                or target.startswith("agent_workflow.infrastructure.database.")
+                or (
+                    area == "interfaces"
+                    and (
+                        target == "agent_workflow.infrastructure"
+                        or target.startswith("agent_workflow.infrastructure.")
+                    )
+                )
+            ):
+                record(node, "db-adapter-import", target)
+        if opaque_core:
+            identifier = ""
+            if isinstance(node, ast.Name):
+                identifier = node.id
+            elif isinstance(node, ast.Attribute):
+                identifier = node.attr
+            elif isinstance(node, ast.arg):
+                identifier = node.arg
+            elif isinstance(node, ast.alias):
+                identifier = node.name
+                if node.asname and any(
+                    fragment in node.asname.casefold()
+                    for fragment in ("postgres", "sqlalchemy")
+                ):
+                    identifier = node.asname
+            elif isinstance(
+                node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                identifier = node.name
+            if identifier and any(
+                fragment in identifier.casefold()
+                for fragment in ("postgres", "sqlalchemy")
+            ):
+                record(node, "db-adapter-name", identifier)
+        if core and isinstance(node, ast.Call):
+            target = _qualified_alias(node.func, aliases)
+            if target.removeprefix("builtins.") in UNSAFE_CALLS or target in {
+                "importlib.import_module",
+                "importlib.util.module_from_spec",
+            }:
+                record(node, "core-call", target)
+        if path == "src/agent_workflow/admin.py" and isinstance(node, ast.Call):
+            target = _qualified_alias(node.func, aliases)
+            if target in {
+                "__import__",
+                "builtins.__import__",
+                "importlib.import_module",
+            }:
+                record(node, "admin-dynamic-import", target)
+        if isinstance(node, ast.ClassDef):
+            bases = [_qualified_alias(base, aliases) for base in node.bases]
+            if area == "domain":
+                for base in bases:
+                    if (
+                        base.startswith(("pydantic.", "sqlalchemy."))
+                        or base.split(".")[-1] in {"BaseModel", "DeclarativeBase"}
+                        or (
+                            base.startswith("agent_workflow.infrastructure.")
+                            and base.endswith(".Base")
+                        )
+                    ):
+                        record(node, "domain-base", base)
+            if (
+                area == "application"
+                and parts[-1] == "ports.py"
+                and "typing.Protocol" in bases
+                and not re.match(r"^I[A-Z]", node.name)
+            ):
+                record(node, "protocol-name", node.name)
+
+    def blocked_annotation(annotation):
+        for part in ast.walk(annotation):
+            if _qualified_alias(part, aliases).split(".")[-1] in USE_CASE_TYPES:
+                return True
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                try:
+                    forward = ast.parse(part.value, mode="eval").body
+                except SyntaxError:
+                    continue
+                if not isinstance(forward, ast.Constant) and blocked_annotation(
+                    forward
+                ):
+                    return True
+        return False
+
+    if area == "application":
+        for cls in _usecases(tree):
+            init = _method(cls, "__init__")
+            if init is None:
+                record(cls, "use-case-init", cls.name)
+                continue
+            for param in _annotations(init.args):
+                annotation = param.annotation
+                if (
+                    param.arg == "open_scope"
+                    or annotation is None
+                    or blocked_annotation(annotation)
+                ):
+                    record(param, "use-case-dependency", param.arg)
+    return dict(found)
+
+
+def _ratchet(actual, expected):
+    new = actual.keys() - expected
+    stale = expected - actual.keys()
+    if new or stale:
+        details = [
+            f"{path}:{actual[key]} {rule} in {symbol}: {detail} (occurrence {occurrence})"
+            for key in sorted(new)
+            for path, rule, symbol, detail, occurrence in [key]
+        ]
+        details += [f"Stale AST exemption; prune {item}" for item in sorted(stale)]
+        raise AssertionError("\n".join(details))
+
+
+def test_r2_ast_ratchet_has_no_new_violations_or_stale_exemptions():
+    actual = {}
+    for path in source_files():
+        actual.update(
+            r2_violations(
+                path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8")
+            )
+        )
+    assert len(LEGACY_R2_AST) == len(set(LEGACY_R2_AST))
+    _ratchet(actual, set(LEGACY_R2_AST))
+
+
+def _source_tree(path):
+    return ast.parse((ROOT / path).read_text(encoding="utf-8"), filename=path)
+
+
+def test_every_r2_use_case_has_unit_tests():
+    tests = ROOT / "tests" / "unit"
+    for path in (SOURCE / "agent_workflow" / "application").rglob("*.py"):
+        if not _usecases(_source_tree(path)):
+            continue
+        candidates = list(tests.rglob(f"test_{path.stem}.py"))
+        assert any(_has_tests(_source_tree(test)) for test in candidates), (
+            f"{path}: expected test_{path.stem}.py with a test under tests/unit"
+        )
+
+
+def _has_tests(tree):
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+        for node in ast.walk(tree)
+    )
+
+
+def _task_di(tree, path):
+    (cls,) = [node for node in _usecases(tree) if node.name == "AuthorizeTaskUseCase"]
+    init = _method(cls, "__init__")
+    assert init is not None, f"{path}:{cls.lineno}: explicit constructor required"
+    params = {arg.arg: _qualified(arg.annotation) for arg in _annotations(init.args)}
+    assert (
+        params.get("uow") == "IUnitOfWork"
+        and params.get("repository") == "ITaskAuthorizationRepository"
+        and "open_scope" not in params
+    ), (
+        f"{path}:{init.lineno}: inject IUnitOfWork and ITaskAuthorizationRepository directly"
+    )
+    execute = _method(cls, "execute")
+    assert execute and any(
+        isinstance(node, ast.With)
+        and any(
+            _qualified(item.context_expr) == "self._uow"
+            and not isinstance(item.optional_vars, (ast.Tuple, ast.List))
+            for item in node.items
+        )
+        for node in ast.walk(execute)
+    ), f"{path}:{cls.lineno}: execute must enter its injected UoW"
+
+
+def test_task_authorization_wiring_is_explicit():
+    _task_di(_source_tree(TASK_USE_CASE), TASK_USE_CASE)
+    cls = next(
+        node
+        for node in _source_tree(SESSION_UOW).body
+        if isinstance(node, ast.ClassDef) and node.name == "SqlAlchemyUnitOfWork"
+    )
+    ctor = _method(cls, "__init__")
+    params = {arg.arg: _qualified(arg.annotation) for arg in _annotations(ctor.args)}
+    assert (
+        params.get("session") == "Session" and "PostgresFactory" not in params.values()
+    ), f"{SESSION_UOW}:{ctor.lineno}: receive a Session"
+    tree = _source_tree(TASK_COMPOSITION)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            assert node.value not in ("PG_RUNTIME_DSN", "PGHOSTADDR", "PGSERVICE"), (
+                f"{TASK_COMPOSITION}:{node.lineno}: setting validation belongs in Config"
+            )
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            assert _qualified(node).split(".")[-1] not in {
+                "environ",
+                "getenv",
+                "urlsplit",
+                "validate_pg_runtime_dsn",
+            }, f"{TASK_COMPOSITION}:{node.lineno}: setting validation belongs in Config"
+    scope = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "create_authorize_task_use_case"
+    )
+    for block in (node for node in ast.walk(scope) if isinstance(node, ast.With)):
+        for item in block.items:
+            if not isinstance(item.context_expr, ast.Call) or not _qualified(
+                item.context_expr.func
+            ).endswith(".scoped_session"):
+                continue
+            session = _qualified(item.optional_vars)
+            assignments = {
+                _qualified(node.value.func): (
+                    _qualified(node.targets[0]),
+                    [_qualified(arg) for arg in node.value.args],
+                )
+                for node in block.body
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+            }
+            unit, unit_args = assignments.get("SqlAlchemyUnitOfWork", ("", []))
+            repo, repo_args = assignments.get(
+                "SqlAlchemyTaskAuthorizationRepository", ("", [])
+            )
+            yields = [
+                node.value
+                for node in block.body
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Yield)
+            ]
+            assert session and unit and repo and unit_args == repo_args == [session], (
+                f"{TASK_COMPOSITION}:{block.lineno}: share the injected Session"
+            )
+            assert any(
+                isinstance(node.value, ast.Call)
+                and _qualified(node.value.func) == "AuthorizeTaskUseCase"
+                and [_qualified(arg) for arg in node.value.args] == [unit, repo]
+                for node in yields
+            ), (
+                f"{TASK_COMPOSITION}:{block.lineno}: inject the scoped UoW and repository"
+            )
+            return
+    pytest.fail(f"{TASK_COMPOSITION}:{scope.lineno}: scoped Session assembly missing")
+
+
+@pytest.mark.parametrize(
+    ("area", "module", "source", "rule"),
+    [
+        (
+            "domain",
+            "entity",
+            "import pydantic as p\nclass Record(p.BaseModel): pass",
+            "domain-base",
+        ),
+        (
+            "domain",
+            "entity",
+            "from sqlalchemy.orm import DeclarativeBase as Parent\nclass Record(Parent): pass",
+            "domain-base",
+        ),
+        ("domain", "entity", "from builtins import eval as run\nrun('x')", "core-call"),
+        (
+            "domain",
+            "entity",
+            "from importlib import import_module as load\nload('x')",
+            "core-call",
+        ),
+        (
+            "application",
+            "use_case",
+            "from typing import Any as Unsafe\nclass BadUseCase:\n def __init__(self, dependency: list[Unsafe]): pass",
+            "use-case-dependency",
+        ),
+        (
+            "application",
+            "use_case",
+            "class BadUseCase:\n def __init__(self, dependency: 'ContextManager[Session]'): pass",
+            "use-case-dependency",
+        ),
+        (
+            "application",
+            "use_case",
+            "class BadUseCase:\n def __init__(self, open_scope): pass",
+            "use-case-dependency",
+        ),
+        (
+            "application",
+            "ports",
+            "from typing import Protocol as Contract\nclass Store(Contract): pass",
+            "protocol-name",
+        ),
+        (
+            "application",
+            "use_case",
+            "from agent_workflow import infrastructure",
+            "core-import",
+        ),
+        ("application", "use_case", "class BadUseCase: pass", "use-case-init"),
+        ("application", "use_case", "def load():\n import json", "inline-import"),
+        (
+            "interfaces",
+            "cli",
+            "from agent_workflow.infrastructure.database import session_factory",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "import agent_workflow.infrastructure.database.unit_of_work as storage",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from agent_workflow import infrastructure",
+            "db-adapter-import",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "from .ports import PostgresGateway as Gateway",
+            "db-adapter-name",
+        ),
+        (
+            "interfaces",
+            "cli",
+            "def use_session(factory):\n postgres_client = factory()",
+            "db-adapter-name",
+        ),
+        (
+            "application",
+            "use_case",
+            "class SqlAlchemyStore: pass",
+            "db-adapter-name",
+        ),
+        (
+            "domain",
+            "entity",
+            "def from_Postgres(row): pass",
+            "db-adapter-name",
+        ),
+    ],
+)
+def test_r2_ast_rejects_bad_source(area, module, source, rule):
+    path = f"src/agent_workflow/{area}/{module}.py"
+    with pytest.raises(AssertionError, match=rf"{path}:\d+ {rule}"):
+        _ratchet(r2_violations(path, source), set())
+
+
+def test_r2_ast_legacy_ratchet_rejects_added_and_stale_imports():
+    path = "src/agent_workflow/admin.py"
+    source = "def old():\n import json"
+    expected = {(path, "inline-import", "old", "json", 1)}
+    _ratchet(r2_violations(path, source), expected)
+    with pytest.raises(AssertionError, match="admin-dynamic-import in provision"):
+        dynamic = (
+            "\ndef provision():\n __import__('agent_workflow.composition.task_deps')"
+        )
+        _ratchet(r2_violations(path, source + dynamic), expected)
+    with pytest.raises(AssertionError, match="inline-import in new"):
+        _ratchet(r2_violations(path, source + "\ndef new():\n import json"), expected)
+    with pytest.raises(AssertionError, match="Stale AST exemption"):
+        _ratchet(r2_violations(path, "def old(): pass"), expected)
+
+
+def test_r2_ast_allows_typing_dependencies_and_plain_dtos():
+    path = "src/agent_workflow/application/example/ports.py"
+    source = """from typing import TYPE_CHECKING as CHECK, Protocol, Callable
+if CHECK:
+    from .dtos import Example
+class IReader(Protocol): pass
+class PlainDTO: pass
+class GetUseCase:
+    def __init__(self, reader: IReader, clock: Callable[[], float]): pass
+"""
+    _ratchet(r2_violations(path, source), set())
+    assert _has_tests(ast.parse("class Suite:\n def test_work(self): pass"))
+    assert not _has_tests(ast.parse("def fixture(): pass"))
+
+
+def test_r2_ast_allows_cli_flag_without_concrete_names():
+    path = "src/agent_workflow/interfaces/cli/example.py"
+    source = 'BACKEND_FLAG = "--postgres"\ndef execute(command):\n return command'
+    _ratchet(r2_violations(path, source), set())
+
+
+def test_r2_ast_rejects_callback_task_di():
+    source = "class AuthorizeTaskUseCase:\n def __init__(self, open_scope): pass"
+    with pytest.raises(
+        AssertionError, match="inject IUnitOfWork and ITaskAuthorizationRepository"
+    ):
+        _task_di(ast.parse(source), TASK_USE_CASE)

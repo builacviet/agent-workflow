@@ -103,6 +103,24 @@ class AppConfig(BaseModel):
             ) from None
         return config
 
+    @classmethod
+    def for_local_task_authorization(
+        cls, environ: Mapping[str, str] | None = None
+    ) -> AppConfig:
+        """Read PostgreSQL settings for explicit loopback-only provisioning."""
+        source = os.environ if environ is None else environ
+        dsn = source.get("PG_RUNTIME_DSN")
+        if dsn is None:
+            raise ValueError("PG_RUNTIME_DSN is required")
+        config = cls(pg_runtime_dsn=dsn)
+        if urlsplit(dsn).hostname not in {"127.0.0.1", "::1"}:
+            raise ValueError("PG_RUNTIME_DSN must target 127.0.0.1 or ::1")
+        if source.get("PGHOSTADDR") or source.get("PGSERVICE"):
+            raise ValueError(
+                "PGHOSTADDR and PGSERVICE are unsupported for local provisioning"
+            )
+        return config
+
     @staticmethod
     def techlead_github(
         environ: Mapping[str, str] | None = None,
