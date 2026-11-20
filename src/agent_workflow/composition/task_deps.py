@@ -2,10 +2,11 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Protocol
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.admin.ports import IAdminSeedUseCase
 from agent_workflow.application.admin.use_cases import (
+    AdminSeedCommand,
     ImportHistoricalReviewsUseCase,
     ResetSyntheticReviewUseCase,
     SeedSyntheticReviewUseCase,
@@ -21,6 +22,12 @@ from agent_workflow.infrastructure.database.repositories.task_authorization_repo
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+
+
+class IAdminSeedUseCase(Protocol):
+    """Common executable contract for the three admin fixtures."""
+
+    def execute(self, command: AdminSeedCommand) -> None: ...
 
 
 @contextmanager
