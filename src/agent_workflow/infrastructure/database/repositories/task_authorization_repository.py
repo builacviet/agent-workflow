@@ -6,16 +6,39 @@ from dataclasses import asdict, fields
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.task.use_cases.authorize_task import (
-    validate_authorization_text,
-)
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 
 _SPEC_KEYS = frozenset(field.name for field in fields(TaskAuthorizationSpec))
+
+
+def _assert_postgres_text(value: str, name: str) -> None:
+    """Guard direct repository calls, independently of the CLI schema."""
+    if "\0" in value:
+        raise WorkflowError(f"{name} must not contain NUL")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise WorkflowError(f"{name} must be valid UTF-8") from None
+
+
+def _assert_persistable_spec(spec: TaskAuthorizationSpec) -> None:
+    for field in fields(spec):
+        value = getattr(spec, field.name)
+        values = (
+            (value,)
+            if isinstance(value, str)
+            else value
+            if isinstance(value, tuple)
+            else ()
+        )
+        for item in values:
+            if isinstance(item, str):
+                _assert_postgres_text(item, field.name)
 
 
 class CorruptedPersistenceDataError(RuntimeError):
@@ -27,6 +50,7 @@ class SqlAlchemyTaskAuthorizationRepository:
         self._session = session
 
     def load_for_authorization(self, task_id: str) -> TaskAuthorizationSpec | None:
+        _assert_postgres_text(task_id, "task_id")
         session = self._session
         # Use the existing Workflow authorization lock key to serialize both callers.
         session.execute(
@@ -47,7 +71,7 @@ class SqlAlchemyTaskAuthorizationRepository:
                     raise ValueError
                 values[name] = tuple(values[name])
             spec = TaskAuthorizationSpec(**values)
-            validate_authorization_text(spec)
+            _assert_persistable_spec(spec)
             if spec.task_id != task_id:
                 raise ValueError
             return spec
@@ -58,6 +82,7 @@ class SqlAlchemyTaskAuthorizationRepository:
 
     def add(self, authorization: TaskAuthorization) -> None:
         spec = authorization.spec
+        _assert_persistable_spec(spec)
         metadata = json.dumps(
             asdict(spec), sort_keys=True, separators=(",", ":"), allow_nan=False
         )
