@@ -9,6 +9,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.ci_tracking import require_matching_ci_binding
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.domain.ci_evidence import (
     CiEvidence,
     validate_delivery_id,
@@ -23,7 +28,6 @@ from agent_workflow.domain.workflow_identity import (
 from agent_workflow.infrastructure.database.session_factory import (
     _set_repository_transaction_options,
 )
-from agent_workflow.infrastructure.database.unit_of_work import PostgresUnavailableError
 from agent_workflow.storage.postgres_models import (
     CIObservation,
     CIProcessedDelivery,
@@ -79,16 +83,13 @@ class SqlAlchemyCiStateRepository:
                             )
                         )
                         return
-                    if binding.pr_number != pr_number:
-                        raise WorkflowError(
-                            "CI tracking PR differs from persisted binding"
-                        )
-                    if binding.head_sha != head_sha:
-                        raise WorkflowError(
-                            "CI tracking HEAD differs from persisted binding"
-                        )
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+                    require_matching_ci_binding(
+                        binding.pr_number, binding.head_sha, pr_number, head_sha
+                    )
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     def record(self, evidence: CiEvidence) -> None:
         """Append and apply evidence in the same atomic transaction."""
@@ -136,8 +137,10 @@ class SqlAlchemyCiStateRepository:
                     binding.verdict = (
                         CiVerdict.FAILURE if had_failure else evidence.verdict
                     )
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     @staticmethod
     def _has_failure(session: Session, task_id: str, head_sha: str) -> bool:
@@ -175,5 +178,7 @@ class SqlAlchemyCiStateRepository:
                             index_elements=[processed.c.delivery_id]
                         )
                     )
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None

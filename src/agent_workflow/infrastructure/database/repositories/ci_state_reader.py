@@ -8,13 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.infrastructure.database.session_factory import (
     _set_repository_transaction_options,
 )
-from agent_workflow.infrastructure.database.unit_of_work import PostgresUnavailableError
 from agent_workflow.storage.postgres_models import (
     CIObservation,
     CIProcessedDelivery,
@@ -92,8 +95,10 @@ class SqlAlchemyCiStateReader:
                 if len(result) > limit:
                     raise WorkflowError("too many in-flight CI tasks")
                 return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         try:
@@ -109,8 +114,10 @@ class SqlAlchemyCiStateReader:
                 )
                 result = bool(session.scalar(select(failure)))
                 return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     def approved(self, task_id: str, head_sha: str) -> bool:
         try:
@@ -145,8 +152,10 @@ class SqlAlchemyCiStateReader:
                     is not None
                 )
                 return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
         if type(limit) is not int or not 1 <= limit <= 20:
@@ -170,5 +179,7 @@ class SqlAlchemyCiStateReader:
                     for row in rows
                 ]
                 return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None

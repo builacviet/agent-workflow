@@ -7,6 +7,7 @@ from dataclasses import replace
 from hashlib import sha256
 from queue import Queue
 from threading import Barrier, Event
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 from uuid import uuid4
 
@@ -19,6 +20,11 @@ from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.ci_tracking import require_matching_ci_binding
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.composition.ci_deps import create_ci_state
 from agent_workflow.composition.postgres_ci_entrypoint import (
@@ -45,10 +51,7 @@ from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
-)
+from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     CIObservation,
     CIProcessedDelivery,
@@ -124,6 +127,49 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
     transaction.rollback.assert_called_once_with()
     session.commit.assert_not_called()
     scope.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("persisted_pr", "persisted_head", "expected_error"),
+    [
+        (PR, HEAD, None),
+        (PR + 1, HEAD, "CI tracking PR differs"),
+        (PR, NEXT, "CI tracking HEAD differs"),
+    ],
+)
+def test_ci_binding_policy_in_application(
+    persisted_pr, persisted_head, expected_error
+):
+    if expected_error is None:
+        assert require_matching_ci_binding(
+            persisted_pr, persisted_head, PR, HEAD
+        ) is None
+    else:
+        with pytest.raises(WorkflowError, match=expected_error):
+            require_matching_ci_binding(persisted_pr, persisted_head, PR, HEAD)
+
+
+def test_ci_reader_invalid_persisted_dto_is_corrupted_data():
+    session = MagicMock()
+    session.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            task_id="sample",
+            pr_number="not-an-int",
+            head_sha=HEAD,
+            verdict="BLOCKED",
+            repair_heads=0,
+        )
+    ]
+    scope = MagicMock()
+    scope.__enter__.return_value = session
+    reader = SqlAlchemyCiStateReader(lambda: scope)
+
+    with pytest.raises(
+        CorruptedPersistenceDataError,
+        match="^PostgreSQL Controller CI operation failed$",
+    ):
+        reader.tracked()
+    session.commit.assert_not_called()
 
 
 @pytest.fixture
@@ -716,7 +762,7 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
 
     with PostgresFactory(engine) as failing:
         with pytest.raises(
-            PostgresUnavailableError,
+            PersistenceUnavailableError,
             match="^PostgreSQL Controller CI operation failed$",
         ) as error:
             PostgresControllerCiState(failing).record(evidence(task_id))
@@ -775,7 +821,7 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
             connection.execute(text("SELECT 1 / 0"))
 
     event.listen(engine, "commit", fail_commit)
-    with pytest.raises(PostgresUnavailableError, match="Controller CI operation"):
+    with pytest.raises(PersistenceUnavailableError, match="Controller CI operation"):
         state.record(evidence(task_id))
     event.remove(engine, "commit", fail_commit)
     assert observations(factory, task_id) == []
