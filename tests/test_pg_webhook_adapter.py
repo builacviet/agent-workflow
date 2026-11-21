@@ -76,6 +76,27 @@ def test_repository_owns_a_scoped_session_transaction():
     session.rollback.assert_not_called()
 
 
+def test_repository_get_uses_a_fresh_read_only_scope_without_commit():
+    session = MagicMock(spec=Session)
+    session.get.return_value = None
+    scope = MagicMock()
+    scope.__enter__.return_value = session
+    session_scope = MagicMock(return_value=scope)
+    repository = SqlAlchemyWebhookInboxRepository(session_scope=session_scope)
+
+    assert repository.get("00000000-0000-4000-8000-000000000001") is None
+
+    session_scope.assert_called_once_with()
+    scope.__enter__.assert_called_once_with()
+    scope.__exit__.assert_called_once_with(None, None, None)
+    assert str(session.connection.return_value.execute.call_args_list[0].args[0]) == (
+        "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY"
+    )
+    session.begin.assert_not_called()
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+
+
 def test_repository_commits_before_return_and_uses_fresh_sessions(config, delivery):
     engine = create_engine(config.pg_runtime_dsn, poolclass=NullPool)
     sessions = []

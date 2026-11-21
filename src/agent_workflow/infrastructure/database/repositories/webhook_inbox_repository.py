@@ -113,16 +113,16 @@ class SqlAlchemyWebhookInboxRepository:
         return InboxResult.DUPLICATE
 
     def get(self, delivery_id: str) -> WebhookNotification | None:
+        """Read in a fresh read-only scope without committing a transaction."""
         try:
             with self._session_scope() as session:
-                with session.begin():
-                    _set_transaction_options(session, read_only=True)
-                    row = session.get(WebhookInboxRow, delivery_id)
-                    if row is None:
-                        result = None
-                    else:
-                        dto = _NotificationDTO.model_validate(row)
-                        result = WebhookNotification(**dto.model_dump())
+                _set_transaction_options(session, read_only=True)
+                row = session.get(WebhookInboxRow, delivery_id)
+                if row is None:
+                    result = None
+                else:
+                    dto = _NotificationDTO.model_validate(row)
+                    result = WebhookNotification(**dto.model_dump())
             return result
         except (SQLAlchemyError, ValidationError):
             raise PostgresUnavailableError(_OPERATION_ERROR) from None
