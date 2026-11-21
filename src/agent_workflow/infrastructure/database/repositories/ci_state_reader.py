@@ -157,8 +157,7 @@ class SqlAlchemyCiStateReader:
                     select(WebhookInboxRow)
                     .outerjoin(
                         CIProcessedDelivery,
-                        CIProcessedDelivery.delivery_id
-                        == WebhookInboxRow.delivery_id,
+                        CIProcessedDelivery.delivery_id == WebhookInboxRow.delivery_id,
                     )
                     .where(CIProcessedDelivery.delivery_id.is_(None))
                     .order_by(WebhookInboxRow.delivery_id)

@@ -100,9 +100,7 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
     session = MagicMock()
     transaction = session.begin.return_value.__enter__.return_value
     transaction.is_active = True
-    transaction.rollback.side_effect = lambda: setattr(
-        transaction, "is_active", False
-    )
+    transaction.rollback.side_effect = lambda: setattr(transaction, "is_active", False)
     scope = MagicMock()
     scope.__enter__.return_value = session
     configure = Mock()
