@@ -25,7 +25,6 @@ from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
 )
-from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.composition.ci_deps import create_ci_state
 from agent_workflow.composition.postgres_ci_entrypoint import (
@@ -34,6 +33,7 @@ from agent_workflow.composition.postgres_ci_entrypoint import (
 )
 from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
+from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
