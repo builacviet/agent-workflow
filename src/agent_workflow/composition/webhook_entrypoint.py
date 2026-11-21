@@ -7,23 +7,10 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.integrations.github_webhook import GitHubWebhookReceiver
+from agent_workflow.composition.webhook_deps import create_webhook_use_case
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
-)
-from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
-
-
-class _PostgresReceiver(GitHubWebhookReceiver):
-    """Translate a failed persistence attempt into a retryable HTTP response."""
-
-    def handle(self, method, path, headers, body):
-        try:
-            return super().handle(method, path, headers, body)
-        except PostgresUnavailableError:
-            raise OSError("webhook persistence unavailable") from None
+from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 
 
 def main() -> None:
@@ -42,8 +29,8 @@ def main() -> None:
         factory = resources.enter_context(
             PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn))
         )
-        receiver = _PostgresReceiver(
-            PostgresWebhookInbox(factory),
+        receiver = GitHubWebhookReceiver(
+            create_webhook_use_case(factory),
             secret=secret,
             installation_id=installation_id,
         )

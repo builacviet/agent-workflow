@@ -44,20 +44,13 @@ services:
   webhook:
     build:
       context: .
-      dockerfile: docker/mcp.Dockerfile
-    command: ["python", "-m", "agent_workflow.integrations.webhook_http"]
+      dockerfile: docker/webhook.Dockerfile
     env_file:
       - .runtime/controller-webhook.env
     environment:
-      WFC_WEBHOOK_DB_PATH: /state/workflow.sqlite3
       WFC_WEBHOOK_SECRET_FILE: /run/secret/controller-webhook-secret
       WFC_WEBHOOK_PORT: "8081"
     volumes:
-      - type: bind
-        source: ./data/controller
-        target: /state
-        bind:
-          create_host_path: false
       - type: bind
         source: ./.secret/controller-webhook-secret
         target: /run/secret/controller-webhook-secret

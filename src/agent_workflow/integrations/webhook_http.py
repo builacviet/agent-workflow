@@ -1,17 +1,24 @@
 """Bounded webhook HTTP transport. No MCP/OAuth or App credentials in process."""
+
 from __future__ import annotations
+
+import os
+import threading
+import time
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
-import threading
-import time
 
 from agent_workflow.integrations.github_webhook import (
-    DEFAULT_MAX_BODY_BYTES, GitHubWebhookReceiver, WEBHOOK_PATH,
+    GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
 )
-from agent_workflow.storage.webhook_inbox import WebhookInbox
+from agent_workflow.interfaces.webhook.github_receiver import (
+    DEFAULT_MAX_BODY_BYTES,
+    WEBHOOK_PATH,
+    GitHubWebhookReceiver,
+)
+from agent_workflow.storage.webhook_inbox import WebhookInbox as WebhookInbox
 
 
 class _RateLimit:
@@ -34,8 +41,13 @@ class _RateLimit:
 class WebhookHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, receiver: GitHubWebhookReceiver, *,
-                 max_body_bytes: int = DEFAULT_MAX_BODY_BYTES):
+    def __init__(
+        self,
+        address,
+        receiver: GitHubWebhookReceiver,
+        *,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    ):
         if type(max_body_bytes) is not int or max_body_bytes <= 0:
             raise ValueError("invalid webhook body cap")
         self.receiver = receiver
@@ -81,16 +93,20 @@ class WebhookHandler(BaseHTTPRequestHandler):
             return self._reply(HTTPStatus.BAD_REQUEST)
         try:
             status = self.server.receiver.handle(
-                "POST", self.path, self.headers.raw_items(), body,
+                "POST",
+                self.path,
+                self.headers.raw_items(),
+                body,
             )
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             status = HTTPStatus.SERVICE_UNAVAILABLE
         return self._reply(status)
 
     def do_GET(self) -> None:
         return self._reply(
             HTTPStatus.METHOD_NOT_ALLOWED
-            if self.path == WEBHOOK_PATH else HTTPStatus.NOT_FOUND
+            if self.path == WEBHOOK_PATH
+            else HTTPStatus.NOT_FOUND
         )
 
     do_PUT = do_GET
@@ -98,6 +114,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    """Run the legacy SQLite transport for explicit local compatibility only."""
     db = os.environ["WFC_WEBHOOK_DB_PATH"]
     secret_path = Path(os.environ["WFC_WEBHOOK_SECRET_FILE"])
     if not secret_path.is_absolute():
@@ -105,8 +122,10 @@ def main() -> None:
     secret = secret_path.read_bytes().strip(b"\r\n")
     if len(secret) < 32:
         raise ValueError("use at least 32 random bytes for webhook secret")
-    receiver = GitHubWebhookReceiver(
-        WebhookInbox(db), secret=secret,
+    # Preserve SQLite error translation only for explicit legacy local launches.
+    receiver = LegacyGitHubWebhookReceiver(
+        WebhookInbox(db),
+        secret=secret,
         installation_id=int(os.environ["WFC_CONTROLLER_INSTALLATION_ID"]),
     )
     port = int(os.environ.get("WFC_WEBHOOK_PORT", "8081"))

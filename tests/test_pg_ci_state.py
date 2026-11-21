@@ -26,6 +26,9 @@ from agent_workflow.composition.postgres_ci_entrypoint import (
 from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
+    SqlAlchemyWebhookInboxRepository,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -47,7 +50,6 @@ from agent_workflow.storage.postgres_models import (
     TaskEvent,
     WebhookInboxRow,
 )
-from agent_workflow.storage.postgres_webhook import PostgresWebhookInbox
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
 
@@ -142,7 +144,7 @@ def observations(factory, task_id):
 
 def add_delivery(factory, notification):
     digest = sha256(notification.delivery_id.encode()).hexdigest()
-    inbox = PostgresWebhookInbox(factory)
+    inbox = SqlAlchemyWebhookInboxRepository(session_scope=factory.get_scoped_session)
     assert inbox.record(notification, digest) is InboxResult.INSERTED
     assert inbox.record(notification, digest) is InboxResult.DUPLICATE
 

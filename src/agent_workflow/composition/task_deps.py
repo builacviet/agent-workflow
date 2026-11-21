@@ -37,7 +37,7 @@ class IAdminSeedUseCase(Protocol):
 def create_authorize_task_use_case(
     factory: PostgresFactory,
 ) -> Iterator[AuthorizeTaskUseCase]:
-    with factory.scoped_session() as session:
+    with factory.get_scoped_session() as session:
         unit = SqlAlchemyUnitOfWork(session)
         repository = SqlAlchemyTaskAuthorizationRepository(session)
         yield AuthorizeTaskUseCase(unit, repository)
@@ -64,7 +64,10 @@ def admin_seed_scope(action: str) -> Iterator[IAdminSeedUseCase]:
     }
     case = cases[action]
     config = AppConfig.for_local_task_authorization()
-    with PostgresFactory.open(config) as factory, factory.scoped_session() as session:
+    with (
+        PostgresFactory.open(config) as factory,
+        factory.get_scoped_session() as session,
+    ):
         yield case(
             SqlAlchemyUnitOfWork(session), SqlAlchemyAdminSeedRepository(session)
         )

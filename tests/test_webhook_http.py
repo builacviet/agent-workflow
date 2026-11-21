@@ -7,15 +7,21 @@ import threading
 import uuid
 from contextlib import contextmanager
 from http import HTTPStatus
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
+    SqlAlchemyWebhookInboxRepository,
+)
 from agent_workflow.integrations.github_webhook import GitHubWebhookReceiver
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.storage.postgres_connection import PostgresUnavailableError
 from agent_workflow.storage.webhook_inbox import InboxResult, WebhookInbox
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @contextmanager
@@ -79,8 +85,8 @@ def test_rejects_bad_signature_wrong_path_and_big_body(tmp_path):
         headers = signed(body)
         headers["X-Hub-Signature-256"] = "sha256=" + "a" * 64
         assert send(port, body=body, headers=headers) == 403
-        assert send(port, path="/mcp", body=body, headers=signed(body)) == 404
-        assert send(port, body=b"x" * 2048, headers={}) == 413
+        assert send(port, path="/mcp", body=b"") == 404
+        assert send(port, body=None, headers={"Content-Length": "2048"}) == 413
 
 
 def test_http_method_never_forwards_to_mcp(tmp_path):
@@ -116,7 +122,9 @@ def test_main_selects_pg_only_and_closes_factory(monkeypatch, tmp_path):
     webhook_entrypoint.main()
 
     assert len(receivers) == 1
-    assert receivers[0]._inbox._factory is factory
+    inbox = receivers[0]._use_case._inbox
+    assert isinstance(inbox, SqlAlchemyWebhookInboxRepository)
+    assert inbox._session_scope is factory.get_scoped_session
     factory.__exit__.assert_called_once()
     server.server_close.assert_called_once()
 
@@ -187,7 +195,8 @@ def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
         webhook_entrypoint.main()
 
 
-def test_pg_persistence_failure_returns_503_and_retry_succeeds():
+@pytest.mark.parametrize("error_type", [PostgresUnavailableError, RuntimeError])
+def test_pg_persistence_failure_returns_503_and_retry_succeeds(error_type):
     class FailingInbox:
         def __init__(self):
             self.calls = 0
@@ -195,13 +204,11 @@ def test_pg_persistence_failure_returns_503_and_retry_succeeds():
         def record(self, notification, digest):
             self.calls += 1
             if self.calls == 1:
-                raise PostgresUnavailableError("private database detail")
+                raise error_type("private database detail")
             return InboxResult.INSERTED
 
     inbox = FailingInbox()
-    receiver = webhook_entrypoint._PostgresReceiver(
-        inbox, secret=b"z" * 32, installation_id=17
-    )
+    receiver = GitHubWebhookReceiver(inbox, secret=b"z" * 32, installation_id=17)
     server = WebhookHTTPServer(("127.0.0.1", 0), receiver)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -215,3 +222,26 @@ def test_pg_persistence_failure_returns_503_and_retry_succeeds():
         server.shutdown()
         thread.join(timeout=3)
         server.server_close()
+
+
+def test_repository_compose_webhook_selects_postgres_only_image():
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    service = compose.split("\n  webhook:\n", 1)[1].split("\n  router:\n", 1)[0]
+    dockerfile = (ROOT / "docker" / "webhook.Dockerfile").read_text(encoding="utf-8")
+
+    assert "dockerfile: docker/webhook.Dockerfile" in service
+    assert ".runtime/controller-webhook.env" in service
+    assert "WFC_WEBHOOK_DB_PATH" not in service
+    assert "/state" not in service
+    assert "docker/mcp.Dockerfile" not in service
+    assert ".secret/controller-webhook-secret" in service
+    for forbidden in (
+        "GITHUB_TOKEN",
+        "GITHUB_APP_PRIVATE_KEY",
+        "docker.sock",
+        "mcp:",
+    ):
+        assert forbidden not in service
+    assert '".[postgres]"' in dockerfile
+    assert '"agent_workflow.composition.webhook_entrypoint"' in dockerfile
+    assert "USER webhook" in dockerfile

@@ -46,7 +46,7 @@ def disposable_factory():
 
 
 def execute(factory, case, spec):
-    with factory.scoped_session() as session:
+    with factory.get_scoped_session() as session:
         case(
             SqlAlchemyUnitOfWork(session), SqlAlchemyAdminSeedRepository(session)
         ).execute(

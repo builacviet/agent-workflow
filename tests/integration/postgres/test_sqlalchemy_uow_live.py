@@ -85,7 +85,7 @@ def test_observer_sees_only_explicit_commit_and_connection_closes(
 ) -> None:
     factory, task = transaction_task
     task_id = task.task_id
-    with factory.scoped_session() as session, SqlAlchemyUnitOfWork(session) as unit:
+    with factory.get_scoped_session() as session, SqlAlchemyUnitOfWork(session) as unit:
         session = unit.session
         connection, outcomes = observe_transaction(session)
         session.add(task)
@@ -119,7 +119,7 @@ def test_deadline_after_orm_flush_prevents_physical_commit(
     with budget.dispatch_budget(1001.0):
         with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
             with (
-                factory.scoped_session() as session,
+                factory.get_scoped_session() as session,
                 SqlAlchemyUnitOfWork(session) as unit,
             ):
                 session = unit.session
@@ -155,7 +155,10 @@ def test_failures_rollback_and_close(
     task_id = task.task_id
     error = ValueError if failure == "validation" else PostgresUnavailableError
     with pytest.raises(error) as exc:
-        with factory.scoped_session() as session, SqlAlchemyUnitOfWork(session) as unit:
+        with (
+            factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             session = unit.session
             connection, outcomes = observe_transaction(session)
             session.add(task)
