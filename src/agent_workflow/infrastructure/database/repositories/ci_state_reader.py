@@ -13,6 +13,7 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.ci_tracking import CiApprovalSnapshot
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.infrastructure.database.session_factory import (
@@ -119,7 +120,10 @@ class SqlAlchemyCiStateReader:
         except SQLAlchemyError:
             raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
-    def approved(self, task_id: str, head_sha: str) -> bool:
+    def approved(
+        self, task_id: str, head_sha: str
+    ) -> CiApprovalSnapshot | None:
+        """Return a materialized approval projection; Application owns verdict."""
         try:
             with self._read_session() as session:
                 success = (
@@ -136,22 +140,26 @@ class SqlAlchemyCiStateReader:
                     )
                     .exists()
                 )
-                result = (
-                    session.scalar(
-                        select(CITask.task_id)
-                        .join(Task, Task.task_id == CITask.task_id)
-                        .where(
-                            CITask.task_id == task_id,
-                            CITask.head_sha == head_sha,
-                            CITask.verdict == CiVerdict.SUCCESS,
-                            Task.current_head_sha == CITask.head_sha,
-                            Task.repository == REPOSITORY,
-                            success,
-                        )
+                row = session.execute(
+                    select(
+                        CITask.head_sha,
+                        CITask.verdict,
+                        Task.current_head_sha,
+                        Task.repository,
+                        success,
                     )
-                    is not None
+                    .join(Task, Task.task_id == CITask.task_id)
+                    .where(CITask.task_id == task_id)
+                ).one_or_none()
+                if row is None:
+                    return None
+                return CiApprovalSnapshot(
+                    binding_head_sha=row[0],
+                    verdict=row[1],
+                    task_head_sha=row[2],
+                    repository=row[3],
+                    verified_success=bool(row[4]),
                 )
-                return result
         except ValidationError:
             raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
         except SQLAlchemyError:

@@ -4,6 +4,13 @@ from contextlib import AbstractContextManager
 
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.ci_tracking import (
+    AcknowledgeCiEventUseCase,
+    CheckCiApprovalUseCase,
+    RecordCiEvidenceUseCase,
+    TrackCiTaskUseCase,
+)
+
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SessionScope,
     SqlAlchemyCiStateReader,
@@ -26,8 +33,14 @@ def create_ci_state(factory: PostgresFactory) -> PostgresControllerCiState:
         return factory.get_scoped_session()
 
     provider: SessionScope = session_scope
+    reader = SqlAlchemyCiStateReader(provider)
+    repository = SqlAlchemyCiStateRepository(provider)
     return PostgresControllerCiState(
-        reader=SqlAlchemyCiStateReader(provider),
-        repository=SqlAlchemyCiStateRepository(provider),
+        reader=reader,
+        repository=repository,
         factory=factory,
+        tracker=TrackCiTaskUseCase(repository),
+        recorder=RecordCiEvidenceUseCase(repository),
+        approval=CheckCiApprovalUseCase(reader),
+        acknowledger=AcknowledgeCiEventUseCase(repository),
     )

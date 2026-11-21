@@ -20,7 +20,8 @@ from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.ci_tracking import require_matching_ci_binding
+from agent_workflow.application.ci_tracking import TrackCiTaskUseCase
+from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
@@ -137,14 +138,42 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
         (PR, NEXT, "CI tracking HEAD differs"),
     ],
 )
-def test_ci_binding_policy_in_application(persisted_pr, persisted_head, expected_error):
-    if expected_error is None:
-        assert (
-            require_matching_ci_binding(persisted_pr, persisted_head, PR, HEAD) is None
-        )
-    else:
+def test_ci_tracking_use_case_load_decide_write_atomically(
+    persisted_pr, persisted_head, expected_error
+):
+    """A fake scope proves the decision belongs in Application, not Infra."""
+    task = CiTrackingSnapshot(
+        "READY_IN_REVIEW", REPO, HEAD, persisted_pr, persisted_head
+    )
+    operation = Mock()
+    operation.load_for_tracking.return_value = task
+    scope = MagicMock()
+    scope.__enter__.return_value = operation
+    repository = Mock()
+    repository.transaction.return_value = scope
+
+    if expected_error:
         with pytest.raises(WorkflowError, match=expected_error):
-            require_matching_ci_binding(persisted_pr, persisted_head, PR, HEAD)
+            TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+        operation.track.assert_not_called()
+    else:
+        TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+        operation.track.assert_not_called()  # Replay: no new binding.
+    operation.load_for_tracking.assert_called_once_with("sample")
+    repository.transaction.assert_called_once_with()
+
+
+def test_ci_tracking_use_case_creates_missing_binding():
+    operation = Mock()
+    operation.load_for_tracking.return_value = CiTrackingSnapshot(
+        "READY_IN_REVIEW", REPO, HEAD, None, None
+    )
+    scope = MagicMock()
+    scope.__enter__.return_value = operation
+    repository = Mock(transaction=Mock(return_value=scope))
+    TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+    operation.track.assert_called_once_with("sample", PR, HEAD)
+
 
 
 def test_ci_reader_invalid_persisted_dto_is_corrupted_data():
@@ -789,7 +818,7 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
     reader = SqlAlchemyCiStateReader(session_scope)
     repository = SqlAlchemyCiStateRepository(session_scope)
     state = PostgresControllerCiState(reader, repository, factory=factory)
-    repository.track(task_id, PR, HEAD)
+    state.track(task_id, PR, HEAD)
     add_delivery(factory, notification)
 
     commits, rollbacks = [], []
