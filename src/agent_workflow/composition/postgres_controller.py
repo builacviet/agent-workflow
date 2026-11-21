@@ -2,14 +2,17 @@
 
 from dataclasses import dataclass
 
+from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
+    SqlAlchemyCiStateReader,
+)
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_ci_state import (
-    PostgresControllerCiState,
-    create_ci_state,
-)
+from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -51,7 +54,12 @@ def compose_postgres_controller(
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_state = create_ci_state(factory)
+    session_scope = factory.get_scoped_session
+    ci_state = PostgresControllerCiState(
+        reader=SqlAlchemyCiStateReader(session_scope),
+        repository=SqlAlchemyCiStateRepository(session_scope),
+        factory=factory,
+    )
     return PostgresControllerComposition(
         controller=PostgresControllerDependencies(
             workflow=PostgresWorkflowRepository(factory),

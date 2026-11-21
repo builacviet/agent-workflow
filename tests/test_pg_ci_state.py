@@ -66,6 +66,19 @@ COMPLETED = "2026-11-10T00:00:00Z"
 OBSERVED = "2026-11-10T00:01:00Z"
 
 
+def test_ci_state_accepts_keyword_factory_compatibility():
+    factory = Mock(spec=PostgresFactory)
+
+    state = PostgresControllerCiState(factory=factory)
+
+    assert state._factory is factory
+    assert isinstance(state._reader, SqlAlchemyCiStateReader)
+    assert isinstance(state._repository, SqlAlchemyCiStateRepository)
+    assert state._reader._session_scope is state._repository._session_scope
+    state._reader._session_scope()
+    factory.get_scoped_session.assert_called_once_with()
+
+
 @pytest.fixture
 def setup():
     dsn = os.environ.get("PG_TEST_DSN")

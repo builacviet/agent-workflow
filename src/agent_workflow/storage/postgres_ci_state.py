@@ -2,7 +2,6 @@
 
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
-    SessionScope,
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
@@ -16,7 +15,7 @@ class PostgresControllerCiState:
 
     def __init__(
         self,
-        reader: SqlAlchemyCiStateReader | PostgresFactory,
+        reader: SqlAlchemyCiStateReader | PostgresFactory | None = None,
         repository: SqlAlchemyCiStateRepository | None = None,
         *,
         factory: PostgresFactory | None = None,
@@ -25,10 +24,13 @@ class PostgresControllerCiState:
             if repository is not None or factory is not None:
                 raise TypeError("factory compatibility construction takes one value")
             factory = reader
+            reader = None
+        if reader is None and repository is None and factory is not None:
+            # Legacy construction: PostgresControllerCiState(factory=factory).
             session_scope = factory.get_scoped_session
             reader = SqlAlchemyCiStateReader(session_scope)
             repository = SqlAlchemyCiStateRepository(session_scope)
-        if repository is None:
+        if reader is None or repository is None:
             raise TypeError("CI state reader and repository are required")
         self._reader = reader
         self._repository = repository
@@ -55,16 +57,3 @@ class PostgresControllerCiState:
     def mark_processed(self, delivery_id: str) -> None:
         self._repository.mark_processed(delivery_id)
 
-
-def create_ci_state(factory: PostgresFactory) -> PostgresControllerCiState:
-    """Compose the compatibility facade from the typed Session-scope provider."""
-
-    def session_scope():
-        return factory.get_scoped_session()
-
-    provider: SessionScope = session_scope
-    return PostgresControllerCiState(
-        SqlAlchemyCiStateReader(provider),
-        SqlAlchemyCiStateRepository(provider),
-        factory=factory,
-    )
