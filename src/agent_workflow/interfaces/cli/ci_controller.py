@@ -44,7 +44,6 @@ class CiController:
         return present_ci_observations(observations)
 
 
-
 def present_ci_observations(
     observations: tuple[CiEvidence, ...],
 ) -> CiRunResponse:

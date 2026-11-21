@@ -43,4 +43,6 @@ class PostgresCiLeadershipScope:
     def require_owner(self) -> None:
         lock = self._active.get()
         if lock is None or lock.is_held() is not True:
-            raise PermissionError("PostgreSQL leadership lost; reconcile in-flight work")
+            raise PermissionError(
+                "PostgreSQL leadership lost; reconcile in-flight work"
+            )

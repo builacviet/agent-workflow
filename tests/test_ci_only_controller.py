@@ -108,9 +108,7 @@ def _watch_setup(monkeypatch):
     )
     use_case = Mock()
     compose = Mock(return_value=use_case)
-    monkeypatch.setattr(
-        postgres_ci_entrypoint, "create_ci_pass_use_case", compose
-    )
+    monkeypatch.setattr(postgres_ci_entrypoint, "create_ci_pass_use_case", compose)
     config = {
         "controller_github_app": {
             "app_id": 1,
@@ -250,6 +248,7 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
     assert second == CiRunResponse(observed_count=0, blocked_count=0)
     compose.assert_called_once_with(factory, checks, installation_id=17)
     assert [c.kwargs for c in use_case.execute.call_args_list] == [
-        {"startup": True}, {"startup": False}
+        {"startup": True},
+        {"startup": False},
     ]
     factory.__exit__.assert_called_once()
