@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from agent_workflow.domain.ci_evidence import CiEvidence
+
 
 @dataclass(frozen=True, slots=True)
 class CiRunRequest:
@@ -28,6 +30,16 @@ class CiRunResponse:
 
 CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
 sleep = time.sleep
+
+
+def present_ci_observations(
+    observations: tuple[CiEvidence, ...],
+) -> CiRunResponse:
+    """Map trusted Application evidence into the CLI response DTO."""
+    return CiRunResponse(
+        observed_count=len(observations),
+        blocked_count=sum(e.verdict == "BLOCKED" for e in observations),
+    )
 
 
 def add_ci_arguments(parser: argparse.ArgumentParser) -> None:

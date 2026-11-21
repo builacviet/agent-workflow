@@ -45,10 +45,7 @@ def compose_ci_execution(
             )
             if observations is None:
                 raise ApplicationError("PostgreSQL CI watcher leadership unavailable")
-            return ci_cli.CiRunResponse(
-                observed_count=len(observations),
-                blocked_count=sum(e.verdict == "BLOCKED" for e in observations),
-            )
+            return ci_cli.present_ci_observations(observations)
 
         yield reconcile
 

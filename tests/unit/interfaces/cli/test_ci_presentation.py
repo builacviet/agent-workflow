@@ -55,3 +55,17 @@ def test_watch_does_not_consume_runtime_errors(failure):
     with pytest.raises(type(failure)):
         ci_controller.run_ci_watch(reconcile, sleep=Mock())
     reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
+
+
+
+def test_presenter_maps_domain_verdicts_to_typed_response():
+    from types import SimpleNamespace
+
+    observations = (
+        SimpleNamespace(verdict="BLOCKED"),
+        SimpleNamespace(verdict="SUCCESS"),
+        SimpleNamespace(verdict="FAILURE"),
+    )
+    assert ci_controller.present_ci_observations(observations) == (
+        ci_controller.CiRunResponse(observed_count=3, blocked_count=1)
+    )
