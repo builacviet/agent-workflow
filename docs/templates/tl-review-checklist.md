@@ -1,4 +1,4 @@
-# Manual Development — ChatGPT Tech Lead PR review checklist v1.0
+# Manual Development — ChatGPT Tech Lead PR review checklist v1.1
 
 **Applies to:** ChatGPT Tech Lead reviewing manual Coder Draft PRs for this repository. Product runtime role specifications do not add review steps here.
 
@@ -15,6 +15,16 @@
 - [ ] For PostgreSQL changes, check the [Session/query/transaction ownership rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) **against the actual merged API at the authorized base**. Flag newly duplicated ownership, invalid nested commits, unsafe SQL, leaked ORM entities, regression in lock/timeout/rollback/UoW; do **not** require unmerged `DB-STD-01` APIs or unrelated cleanup. Verify justified exceptions and live PG evidence when the AC changes PG behavior.
 - [ ] **R2 validation boundary (when applicable):** Verify Domain business invariants are enforced in pure Python/typed Domain errors; input shape and bounds are validated by inbound MCP/webhook/CLI interfaces; directly invoked Use Cases reject invalid prerequisites **before** reader/repository/UoW/external effects. Check negative tests for blank/whitespace, malformed/unknown enum values and no commit/side effect, proportional to changed AC. A new unfulfilled Owner-approved validation AC is a blocking finding. Do not demand unrelated legacy/SQLite refactoring.
 - [ ] **R2 helper and read-model placement (when applicable):** No speculative root `utils/`/`helpers/`/`common/`; feature-local/pure shared/transport/infrastructure helpers have clear owners, and cross-domain Use Cases preserve one UoW. A typed query/read DTO is acceptable without materializing full entities. Treat style-only preferences as suggestions, not blockers.
+## Reuse and simplicity preflight (design and review)
+
+Before accepting a new helper, Reader/Repository, transaction wrapper or abstraction, inspect the **merged** implementation and bounded callers. Apply these checks proportionately; a preference alone is not a blocking finding.
+
+- [ ] **Reuse first:** Identify existing components, ports, Session/UoW scopes and helpers with the same responsibility; reuse them when semantics match. If new code duplicates existing behavior, name the concrete reason reuse fails.
+- [ ] **Keep it simple:** Prefer the smallest readable, AC-complete solution (KISS/YAGNI). Question per-SELECT transaction setup, duplicated timeout/error handling and defensive scaffolding that protect no demonstrated invariant.
+- [ ] **Respect boundaries:** Keep feature ownership and Domain → Application → Infrastructure dependency direction clear. Do not trade meaningful DRY for a God Repository, generic Reader or shared helper with incompatible lifecycles.
+- [ ] **Abstract only when justified:** For each new interface/factory/helper/layer, identify the present use case and benefit over a direct implementation. Similar-looking code is not by itself shared knowledge; avoid speculative indirection.
+- [ ] **Test behavior, not implementation details:** Verify AC, invariants, negative paths, concurrency and cleanup when relevant. Prefer observable outcomes to mocking private helpers or enforcing internal call counts without a contract reason.
+
 - [ ] Check the following groups, recording **PASS / FAIL / N/A / NOT VERIFIED** with brief supporting evidence. An N/A or NOT VERIFIED needs a reason.
 
 | Area | Questions to verify |
