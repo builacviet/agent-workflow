@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.exceptions import PersistenceUnavailableError
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.composition import webhook_entrypoint
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
@@ -309,7 +312,7 @@ def test_invalid_input_is_rejected_before_connecting():
         (notification, ""),
         (notification, b"digest"),
     ]:
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidApplicationRequestError):
             use_case.execute(invalid, digest)
     factory.get_scoped_session.assert_not_called()
 

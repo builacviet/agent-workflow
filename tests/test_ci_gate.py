@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.integrations.ci_gate import CiRequest, verify_ci
-from agent_workflow.integrations.github import WorkflowError
 
 REPO = "builacviet/agent-workflow"
 HEAD = "a" * 40
@@ -150,12 +150,12 @@ def test_check_source_is_pinned_and_cannot_be_spoofed_by_other_app():
 def test_mismatched_installation_is_rejected():
     client = FakeGitHub()
     client.installation_id = 99
-    with pytest.raises(WorkflowError, match="installation mismatch"):
+    with pytest.raises(InvalidApplicationRequestError, match="installation mismatch"):
         verdict(client)
 
 
 def test_unapproved_named_check_or_repo_is_rejected():
-    with pytest.raises(WorkflowError, match="unapproved"):
+    with pytest.raises(InvalidApplicationRequestError, match="unapproved"):
         verify_ci(request(check_name="Fake success"), FakeGitHub(),
                   allowed_repository=REPO,
                   allowed_check_names=frozenset({"Python tests"}),
@@ -190,5 +190,5 @@ def test_github_errors_fail_closed():
 
 
 def test_invalid_sha_rejected():
-    with pytest.raises(WorkflowError):
+    with pytest.raises(InvalidApplicationRequestError):
         request(expected_head_sha="main")

@@ -22,7 +22,9 @@ from test_ci_controller import FakeChecks
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.exceptions import (
+    ApplicationError,
     CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
@@ -307,13 +309,13 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
         state.track(task_id, PR, HEAD)
     handoff(service, task_id, HEAD)
-    for invalid_task, invalid_pr, invalid_head in [
-        ("unknown", PR, HEAD),
-        (task_id, True, HEAD),
-        (task_id, PR, NEXT),
-        (task_id, PR, HEAD.upper()),
+    for invalid_task, invalid_pr, invalid_head, error_type in [
+        ("unknown", PR, HEAD, WorkflowError),
+        (task_id, True, HEAD, InvalidApplicationRequestError),
+        (task_id, PR, NEXT, WorkflowError),
+        (task_id, PR, HEAD.upper(), InvalidApplicationRequestError),
     ]:
-        with pytest.raises(WorkflowError):
+        with pytest.raises(error_type):
             state.track(invalid_task, invalid_pr, invalid_head)
     with factory.transaction() as conn:
         conn.execute(
@@ -630,7 +632,7 @@ def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
     leader = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
     assert leader.try_acquire()
     try:
-        with pytest.raises(WorkflowError, match="leadership unavailable"):
+        with pytest.raises(ApplicationError, match="leadership unavailable"):
             run_postgres_ci_watch(
                 {
                     "controller_github_app": {
