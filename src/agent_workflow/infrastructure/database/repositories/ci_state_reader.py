@@ -1,7 +1,7 @@
 """Read-only PostgreSQL projections for the Controller CI watcher."""
 
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
@@ -55,97 +55,96 @@ class SqlAlchemyCiStateReader:
     def __init__(self, session_scope: SessionScope) -> None:
         self._session_scope = session_scope
 
+    @contextmanager
+    def _read_session(self) -> Iterator[Session]:
+        """Yield one READ ONLY Session and end its transaction without COMMIT."""
+        with self._session_scope() as session:
+            with session.begin() as transaction:
+                try:
+                    _set_repository_transaction_options(
+                        session.connection(), read_only=True
+                    )
+                    yield session
+                finally:
+                    if transaction.is_active:
+                        transaction.rollback()
+
     def tracked(self, limit: int = 32) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError("bounded CI task scan required")
         try:
-            with self._session_scope() as session:
-                with session.begin() as transaction:
-                    _set_repository_transaction_options(
-                        session.connection(), read_only=True
+            with self._read_session() as session:
+                bindings = session.scalars(
+                    select(CITask)
+                    .join(Task, Task.task_id == CITask.task_id)
+                    .where(
+                        Task.status == WorkflowStatus.READY_IN_REVIEW,
+                        Task.current_head_sha == CITask.head_sha,
+                        Task.repository == REPOSITORY,
                     )
-                    bindings = session.scalars(
-                        select(CITask)
-                        .join(Task, Task.task_id == CITask.task_id)
-                        .where(
-                            Task.status == WorkflowStatus.READY_IN_REVIEW,
-                            Task.current_head_sha == CITask.head_sha,
-                            Task.repository == REPOSITORY,
-                        )
-                        .order_by(CITask.task_id)
-                        .limit(limit + 1)
-                    ).all()
-                    result = [
-                        _TrackedTaskDTO.model_validate(binding).model_dump()
-                        for binding in bindings
-                    ]
-                    if len(result) > limit:
-                        raise WorkflowError("too many in-flight CI tasks")
-                    transaction.rollback()
-                    return result
+                    .order_by(CITask.task_id)
+                    .limit(limit + 1)
+                ).all()
+                result = [
+                    _TrackedTaskDTO.model_validate(binding).model_dump()
+                    for binding in bindings
+                ]
+                if len(result) > limit:
+                    raise WorkflowError("too many in-flight CI tasks")
+                return result
         except (SQLAlchemyError, ValidationError):
             raise PostgresUnavailableError(_OPERATION_ERROR) from None
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         try:
-            with self._session_scope() as session:
-                with session.begin() as transaction:
-                    _set_repository_transaction_options(
-                        session.connection(), read_only=True
+            with self._read_session() as session:
+                failure = (
+                    select(CIObservation.id)
+                    .where(
+                        CIObservation.task_id == task_id,
+                        CIObservation.head_sha == head_sha,
+                        CIObservation.verdict == CiVerdict.FAILURE,
                     )
-                    failure = (
-                        select(CIObservation.id)
-                        .where(
-                            CIObservation.task_id == task_id,
-                            CIObservation.head_sha == head_sha,
-                            CIObservation.verdict == CiVerdict.FAILURE,
-                        )
-                        .exists()
-                    )
-                    result = bool(session.scalar(select(failure)))
-                    transaction.rollback()
-                    return result
+                    .exists()
+                )
+                result = bool(session.scalar(select(failure)))
+                return result
         except (SQLAlchemyError, ValidationError):
             raise PostgresUnavailableError(_OPERATION_ERROR) from None
 
     def approved(self, task_id: str, head_sha: str) -> bool:
         try:
-            with self._session_scope() as session:
-                with session.begin() as transaction:
-                    _set_repository_transaction_options(
-                        session.connection(), read_only=True
+            with self._read_session() as session:
+                success = (
+                    select(CIObservation.id)
+                    .where(
+                        CIObservation.task_id == CITask.task_id,
+                        CIObservation.pr_number == CITask.pr_number,
+                        CIObservation.head_sha == CITask.head_sha,
+                        CIObservation.verdict == CiVerdict.SUCCESS,
+                        CIObservation.reason == "REQUIRED_CHECK_PASSED",
+                        CIObservation.check_run_id > 0,
+                        CIObservation.workflow_run_id > 0,
+                        CIObservation.run_attempt > 0,
                     )
-                    success = (
-                        select(CIObservation.id)
+                    .exists()
+                )
+                result = (
+                    session.scalar(
+                        select(CITask.task_id)
+                        .join(Task, Task.task_id == CITask.task_id)
                         .where(
-                            CIObservation.task_id == CITask.task_id,
-                            CIObservation.pr_number == CITask.pr_number,
-                            CIObservation.head_sha == CITask.head_sha,
-                            CIObservation.verdict == CiVerdict.SUCCESS,
-                            CIObservation.reason == "REQUIRED_CHECK_PASSED",
-                            CIObservation.check_run_id > 0,
-                            CIObservation.workflow_run_id > 0,
-                            CIObservation.run_attempt > 0,
+                            CITask.task_id == task_id,
+                            CITask.head_sha == head_sha,
+                            CITask.verdict == CiVerdict.SUCCESS,
+                            Task.current_head_sha == CITask.head_sha,
+                            Task.repository == REPOSITORY,
+                            success,
                         )
-                        .exists()
                     )
-                    result = (
-                        session.scalar(
-                            select(CITask.task_id)
-                            .join(Task, Task.task_id == CITask.task_id)
-                            .where(
-                                CITask.task_id == task_id,
-                                CITask.head_sha == head_sha,
-                                CITask.verdict == CiVerdict.SUCCESS,
-                                Task.current_head_sha == CITask.head_sha,
-                                Task.repository == REPOSITORY,
-                                success,
-                            )
-                        )
-                        is not None
-                    )
-                    transaction.rollback()
-                    return result
+                    is not None
+                )
+                return result
         except (SQLAlchemyError, ValidationError):
             raise PostgresUnavailableError(_OPERATION_ERROR) from None
 
@@ -153,29 +152,24 @@ class SqlAlchemyCiStateReader:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("bounded webhook scan required")
         try:
-            with self._session_scope() as session:
-                with session.begin() as transaction:
-                    _set_repository_transaction_options(
-                        session.connection(), read_only=True
+            with self._read_session() as session:
+                rows = session.scalars(
+                    select(WebhookInboxRow)
+                    .outerjoin(
+                        CIProcessedDelivery,
+                        CIProcessedDelivery.delivery_id
+                        == WebhookInboxRow.delivery_id,
                     )
-                    rows = session.scalars(
-                        select(WebhookInboxRow)
-                        .outerjoin(
-                            CIProcessedDelivery,
-                            CIProcessedDelivery.delivery_id
-                            == WebhookInboxRow.delivery_id,
-                        )
-                        .where(CIProcessedDelivery.delivery_id.is_(None))
-                        .order_by(WebhookInboxRow.delivery_id)
-                        .limit(limit)
-                    ).all()
-                    result = [
-                        WebhookNotification(
-                            **_NotificationDTO.model_validate(row).model_dump()
-                        )
-                        for row in rows
-                    ]
-                    transaction.rollback()
-                    return result
+                    .where(CIProcessedDelivery.delivery_id.is_(None))
+                    .order_by(WebhookInboxRow.delivery_id)
+                    .limit(limit)
+                ).all()
+                result = [
+                    WebhookNotification(
+                        **_NotificationDTO.model_validate(row).model_dump()
+                    )
+                    for row in rows
+                ]
+                return result
         except (SQLAlchemyError, ValidationError):
             raise PostgresUnavailableError(_OPERATION_ERROR) from None

@@ -7,7 +7,7 @@ from dataclasses import replace
 from hashlib import sha256
 from queue import Queue
 from threading import Barrier, Event
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -93,6 +93,39 @@ def test_ci_dependencies_resolve_scoped_session_after_composition():
     assert state._reader._session_scope() is replacement_scope.return_value
     assert state._repository._session_scope() is replacement_scope.return_value
     assert replacement_scope.call_count == 2
+
+
+@pytest.mark.parametrize("fail_during_read", [False, True])
+def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
+    session = MagicMock()
+    transaction = session.begin.return_value.__enter__.return_value
+    transaction.is_active = True
+    transaction.rollback.side_effect = lambda: setattr(
+        transaction, "is_active", False
+    )
+    scope = MagicMock()
+    scope.__enter__.return_value = session
+    configure = Mock()
+    monkeypatch.setattr(
+        "agent_workflow.infrastructure.database.repositories.ci_state_reader."
+        "_set_repository_transaction_options",
+        configure,
+    )
+    reader = SqlAlchemyCiStateReader(lambda: scope)
+
+    if fail_during_read:
+        with pytest.raises(WorkflowError, match="forced read failure"):
+            with reader._read_session() as active_session:
+                assert active_session is session
+                raise WorkflowError("forced read failure")
+    else:
+        with reader._read_session() as active_session:
+            assert active_session is session
+
+    configure.assert_called_once_with(session.connection.return_value, read_only=True)
+    transaction.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    scope.__exit__.assert_called_once()
 
 
 @pytest.fixture
