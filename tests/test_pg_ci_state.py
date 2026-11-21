@@ -20,6 +20,7 @@ from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
+from agent_workflow.composition.ci_deps import create_ci_state
 from agent_workflow.composition.postgres_ci_entrypoint import (
     run_postgres_ci_once,
     run_postgres_ci_watch,
@@ -77,6 +78,21 @@ def test_ci_state_accepts_keyword_factory_compatibility():
     assert state._reader._session_scope is state._repository._session_scope
     state._reader._session_scope()
     factory.get_scoped_session.assert_called_once_with()
+
+
+def test_ci_dependencies_resolve_scoped_session_after_composition():
+    factory = Mock(spec=PostgresFactory)
+    original_scope = factory.get_scoped_session
+
+    state = create_ci_state(factory)
+
+    original_scope.assert_not_called()
+    replacement_scope = Mock()
+    factory.get_scoped_session = replacement_scope
+
+    assert state._reader._session_scope() is replacement_scope.return_value
+    assert state._repository._session_scope() is replacement_scope.return_value
+    assert replacement_scope.call_count == 2
 
 
 @pytest.fixture
