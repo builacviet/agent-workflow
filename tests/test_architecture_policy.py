@@ -215,8 +215,8 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
         for module in receiver
     )
 
-    # Webhook infrastructure adapter must use the caller-owned Session,
-    # never construct a factory or own a commit.
+    # Webhook infrastructure adapter owns its transaction over a supplied
+    # factory-scoped Session provider, never a Composition UoW.
     repo_path = (
         SOURCE
         / "agent_workflow"
@@ -248,9 +248,15 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
         if isinstance(node, ast.FunctionDef) and node.name == "__init__"
     )
     assert len(init.args.args) == 2
-    assert init.args.args[1].arg == "session"
+    assert init.args.args[1].arg == "session_scope"
     assert isinstance(init.args.args[1].annotation, ast.Name)
-    assert init.args.args[1].annotation.id == "Session"
+    assert init.args.args[1].annotation.id == "SessionScope"
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "begin"
+        for node in ast.walk(repository)
+    )
     assert "sqlalchemy.orm" in imports(repo_path)
 
 
@@ -280,25 +286,29 @@ def test_webhook_dependency_assembly_is_separate_from_http_bootstrap():
     dependencies = ast.parse(
         (composition / "webhook_deps.py").read_text(encoding="utf-8")
     )
-    dependency_names = {
-        node.name for node in dependencies.body if isinstance(node, ast.ClassDef)
-    }
-    assert "_ScopedWebhookInbox" in dependency_names
-    assert any(
-        isinstance(node, ast.FunctionDef) and node.name == "create_webhook_use_case"
-        for node in dependencies.body
-    )
-    assert any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "repository_session"
-        for node in ast.walk(dependencies)
-    )
+    assert "_ScopedWebhookInbox" not in ast.dump(dependencies)
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "SqlAlchemyWebhookInboxRepository"
         for node in ast.walk(dependencies)
+    )
+    factory_call = next(
+        node
+        for node in ast.walk(dependencies)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SqlAlchemyWebhookInboxRepository"
+    )
+    assert any(
+        keyword.arg == "session_scope"
+        and isinstance(keyword.value, ast.Attribute)
+        and keyword.value.attr == "get_scoped_session"
+        for keyword in factory_call.keywords
+    )
+    assert any(
+        isinstance(node, ast.FunctionDef) and node.name == "create_webhook_use_case"
+        for node in dependencies.body
     )
 
 
@@ -797,7 +807,7 @@ def test_task_authorization_wiring_is_explicit():
         for item in block.items:
             if not isinstance(item.context_expr, ast.Call) or not _qualified(
                 item.context_expr.func
-            ).endswith(".scoped_session"):
+            ).endswith(".get_scoped_session"):
                 continue
             session = _qualified(item.optional_vars)
             assignments = {

@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
 from threading import Barrier, Event, Thread
@@ -35,30 +36,26 @@ from agent_workflow.storage.webhook_inbox import (
 
 
 class _SessionInbox:
-    """Test-only facade; each record/get uses the factory's safe transaction."""
+    """Test helper that exposes the repository's owned Session scope."""
 
     def __init__(self, factory):
-        self._factory = factory
+        self._repository = SqlAlchemyWebhookInboxRepository(
+            session_scope=factory.get_scoped_session
+        )
 
     def record(self, notification, digest):
-        with self._factory.repository_session(
-            error_message="PostgreSQL webhook inbox operation failed"
-        ) as session:
-            return SqlAlchemyWebhookInboxRepository(session).record(
-                notification, digest
-            )
+        return self._repository.record(notification, digest)
 
     def get(self, delivery_id):
-        with self._factory.repository_session(
-            error_message="PostgreSQL webhook inbox operation failed",
-            read_only=True,
-        ) as session:
-            return SqlAlchemyWebhookInboxRepository(session).get(delivery_id)
+        return self._repository.get(delivery_id)
 
 
-def test_repository_requires_caller_session_and_never_commits():
+def test_repository_owns_a_scoped_session_transaction():
     session = MagicMock(spec=Session)
     session.scalar.return_value = "00000000-0000-4000-8000-000000000001"
+    scope = MagicMock()
+    scope.__enter__.return_value = session
+    session_scope = MagicMock(return_value=scope)
     notification = WebhookNotification(
         "00000000-0000-4000-8000-000000000001",
         "workflow_run",
@@ -68,11 +65,77 @@ def test_repository_requires_caller_session_and_never_commits():
         4,
         "a" * 40,
     )
-    repo = SqlAlchemyWebhookInboxRepository(session)
+    repo = SqlAlchemyWebhookInboxRepository(session_scope=session_scope)
     assert repo.record(notification, "b" * 64) is InboxResult.INSERTED
+    session_scope.assert_called_once_with()
+    scope.__enter__.assert_called_once_with()
+    session.begin.assert_called_once_with()
+    scope.__exit__.assert_called_once_with(None, None, None)
     session.flush.assert_called_once()
     session.commit.assert_not_called()
     session.rollback.assert_not_called()
+
+
+def test_repository_commits_before_return_and_uses_fresh_sessions(config, delivery):
+    engine = create_engine(config.pg_runtime_dsn, poolclass=NullPool)
+    sessions = []
+    settings = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def capture_settings(conn, cursor, statement, parameters, context, executemany):
+        if "SET TRANSACTION ISOLATION LEVEL READ COMMITTED" in statement:
+            settings.append((statement, parameters))
+        elif "set_config('lock_timeout'" in statement:
+            settings.append((statement, parameters))
+
+    with PostgresFactory(engine) as factory:
+        open_scope = factory.get_scoped_session
+
+        @contextmanager
+        def capture_session():
+            with open_scope() as session:
+                sessions.append(session)
+                yield session
+
+        repository = SqlAlchemyWebhookInboxRepository(session_scope=capture_session)
+        digest = _digest(delivery)
+        assert repository.record(delivery, digest) is InboxResult.INSERTED
+
+        # A separate Connection sees the row as soon as record() returns.
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT body_digest FROM webhook_inbox "
+                        "WHERE delivery_id = :delivery_id"
+                    ),
+                    {"delivery_id": delivery.delivery_id},
+                ).scalar_one()
+                == digest
+            )
+
+        assert repository.get(delivery.delivery_id) == delivery
+
+    assert len(sessions) == 2
+    assert sessions[0] is not sessions[1]
+    assert any(
+        statement.endswith("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        for statement, _ in settings
+    )
+    assert any(
+        statement.endswith("SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY")
+        for statement, _ in settings
+    )
+    set_config = next(
+        params
+        for statement, params in settings
+        if "set_config('lock_timeout'" in statement
+    )
+    assert set_config == {
+        "lock_timeout": "5s",
+        "statement_timeout": "5s",
+        "synchronous_commit": "on",
+    }
 
 
 @pytest.fixture
@@ -227,7 +290,7 @@ def test_invalid_input_is_rejected_before_connecting():
     ]:
         with pytest.raises(ValueError):
             use_case.execute(invalid, digest)
-    factory.repository_session.assert_not_called()
+    factory.get_scoped_session.assert_not_called()
 
 
 def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, delivery):

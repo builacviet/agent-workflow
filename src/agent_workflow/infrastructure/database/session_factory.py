@@ -134,8 +134,8 @@ class PostgresFactory:
             yield session
 
     @contextmanager
-    def scoped_session(self) -> Iterator[Session]:
-        """Lend an idle connection-bound Session to a caller-owned UoW."""
+    def get_scoped_session(self) -> Iterator[Session]:
+        """Yield a fresh Session bound to an idle connection."""
         with (
             self.connect_session() as connection,
             self.get_sync_session(connection) as session,

@@ -1,14 +1,39 @@
-"""PostgreSQL webhook inbox persistence using a caller-owned SQLAlchemy Session."""
+"""PostgreSQL webhook inbox persistence with Repository-owned transactions."""
 
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.models import WebhookInboxRow
 from agent_workflow.infrastructure.database.unit_of_work import PostgresUnavailableError
+
+_OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
+SessionScope = Callable[[], AbstractContextManager[Session]]
+
+
+def _set_transaction_options(session: Session, *, read_only: bool) -> None:
+    mode = ", READ ONLY" if read_only else ""
+    connection = session.connection()
+    connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
+    connection.execute(
+        text(
+            "SELECT set_config('lock_timeout', :lock_timeout, true), "
+            "set_config('statement_timeout', :statement_timeout, true), "
+            "set_config('synchronous_commit', :synchronous_commit, true)"
+        ),
+        {
+            "lock_timeout": "5s",
+            "statement_timeout": "5s",
+            "synchronous_commit": "on",
+        },
+    )
 
 
 class _NotificationDTO(BaseModel):
@@ -24,18 +49,33 @@ class _NotificationDTO(BaseModel):
 
 
 class SqlAlchemyWebhookInboxRepository:
-    """Execute inbox queries in the transaction owned by the caller."""
+    """Own a short transaction for each Webhook inbox operation."""
 
-    def __init__(self, session: Session) -> None:
-        self._session = session
+    def __init__(self, session_scope: SessionScope) -> None:
+        self._session_scope = session_scope
 
     def record(
         self, notification: WebhookNotification, body_digest: str
     ) -> InboxResult:
-        """Return a result; the caller must commit before HTTP acknowledges it."""
+        """Commit the inbox operation before returning its outcome."""
+        try:
+            with self._session_scope() as session:
+                with session.begin():
+                    _set_transaction_options(session, read_only=False)
+                    result = self._record(session, notification, body_digest)
+            return result
+        except (SQLAlchemyError, ValidationError):
+            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+
+    def _record(
+        self,
+        session: Session,
+        notification: WebhookNotification,
+        body_digest: str,
+    ) -> InboxResult:
         row = WebhookInboxRow
         inbox = row.__table__
-        inserted_id = self._session.scalar(
+        inserted_id = session.scalar(
             insert(inbox)
             .values(
                 delivery_id=notification.delivery_id,
@@ -50,12 +90,12 @@ class SqlAlchemyWebhookInboxRepository:
             .on_conflict_do_nothing()
             .returning(inbox.c.delivery_id)
         )
-        self._session.flush()
+        session.flush()
         if inserted_id is not None:
             return InboxResult.INSERTED
 
         same_delivery = row.delivery_id == notification.delivery_id
-        existing = self._session.execute(
+        existing = session.execute(
             select(row.delivery_id, row.body_digest)
             .where(same_delivery | (row.body_digest == body_digest))
             .order_by(same_delivery.desc())
@@ -73,8 +113,16 @@ class SqlAlchemyWebhookInboxRepository:
         return InboxResult.DUPLICATE
 
     def get(self, delivery_id: str) -> WebhookNotification | None:
-        row = self._session.get(WebhookInboxRow, delivery_id)
-        if row is None:
-            return None
-        dto = _NotificationDTO.model_validate(row)
-        return WebhookNotification(**dto.model_dump())
+        try:
+            with self._session_scope() as session:
+                with session.begin():
+                    _set_transaction_options(session, read_only=True)
+                    row = session.get(WebhookInboxRow, delivery_id)
+                    if row is None:
+                        result = None
+                    else:
+                        dto = _NotificationDTO.model_validate(row)
+                        result = WebhookNotification(**dto.model_dump())
+            return result
+        except (SQLAlchemyError, ValidationError):
+            raise PostgresUnavailableError(_OPERATION_ERROR) from None

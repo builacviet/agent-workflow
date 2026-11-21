@@ -361,7 +361,7 @@ def test_cli_regenerates_correlation_and_logs_once_per_call(
 
 def test_composition_injects_same_scoped_session(monkeypatch):
     factory = Mock()
-    session_scope = factory.scoped_session.return_value = MagicMock()
+    session_scope = factory.get_scoped_session.return_value = MagicMock()
     session = session_scope.__enter__.return_value
     unit_type = Mock()
     repo_type = Mock()

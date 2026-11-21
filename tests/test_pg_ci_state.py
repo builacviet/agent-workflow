@@ -144,16 +144,9 @@ def observations(factory, task_id):
 
 def add_delivery(factory, notification):
     digest = sha256(notification.delivery_id.encode()).hexdigest()
-    with factory.repository_session(
-        error_message="PostgreSQL webhook inbox operation failed"
-    ) as session:
-        inbox = SqlAlchemyWebhookInboxRepository(session)
-        assert inbox.record(notification, digest) is InboxResult.INSERTED
-    with factory.repository_session(
-        error_message="PostgreSQL webhook inbox operation failed"
-    ) as session:
-        inbox = SqlAlchemyWebhookInboxRepository(session)
-        assert inbox.record(notification, digest) is InboxResult.DUPLICATE
+    inbox = SqlAlchemyWebhookInboxRepository(session_scope=factory.get_scoped_session)
+    assert inbox.record(notification, digest) is InboxResult.INSERTED
+    assert inbox.record(notification, digest) is InboxResult.DUPLICATE
 
 
 def run_race(*operations):

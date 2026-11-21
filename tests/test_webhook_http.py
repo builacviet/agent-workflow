@@ -13,6 +13,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
+    SqlAlchemyWebhookInboxRepository,
+)
 from agent_workflow.integrations.github_webhook import GitHubWebhookReceiver
 from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.storage.postgres_connection import PostgresUnavailableError
@@ -119,7 +122,9 @@ def test_main_selects_pg_only_and_closes_factory(monkeypatch, tmp_path):
     webhook_entrypoint.main()
 
     assert len(receivers) == 1
-    assert receivers[0]._use_case._inbox._factory is factory
+    inbox = receivers[0]._use_case._inbox
+    assert isinstance(inbox, SqlAlchemyWebhookInboxRepository)
+    assert inbox._session_scope is factory.get_scoped_session
     factory.__exit__.assert_called_once()
     server.server_close.assert_called_once()
 

@@ -128,7 +128,7 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
 ) -> None:
     factory = Mock(spec=PostgresFactory)
     uow = MagicMock()
-    session_scope = factory.scoped_session.return_value = MagicMock()
+    session_scope = factory.get_scoped_session.return_value = MagicMock()
     session = session_scope.__enter__.return_value
     uow_type = Mock(return_value=uow)
     tasks = Mock()
