@@ -99,73 +99,6 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path):
         controller.main()
 
 
-def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
-    factory = Mock()
-    factory.__enter__ = Mock(return_value=factory)
-    factory.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr(
-        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
-    )
-    watcher = object()
-    monkeypatch.setattr(
-        postgres_ci_entrypoint,
-        "compose_postgres_controller",
-        lambda _: Namespace(ci_watcher=watcher),
-    )
-    runner = Mock(return_value=None)
-    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
-    checks = Mock(installation_id=17)
-    config = {
-        "controller_github_app": {
-            "app_id": 1,
-            "installation_id": 17,
-            "pem": "controller.pem",
-        }
-    }
-    app_config = AppConfig(
-        pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
-    )
-
-    with pytest.raises(ApplicationError, match="leadership unavailable"):
-        postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=checks)
-    runner.assert_called_once_with(watcher, checks, installation_id=17, startup=True)
-    checks.get_pull_request.assert_not_called()
-    factory.__exit__.assert_called_once()
-
-
-def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
-    factory = Mock()
-    factory.__enter__ = Mock(return_value=factory)
-    factory.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr(
-        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
-    )
-    monkeypatch.setattr(
-        postgres_ci_entrypoint,
-        "compose_postgres_controller",
-        lambda _: Namespace(ci_watcher=object()),
-    )
-    monkeypatch.setattr(
-        postgres_ci_entrypoint,
-        "run_ci_watcher_once",
-        Mock(side_effect=RuntimeError("failed")),
-    )
-    config = {
-        "controller_github_app": {
-            "app_id": 1,
-            "installation_id": 17,
-            "pem": "controller.pem",
-        }
-    }
-    app_config = AppConfig(
-        pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
-    )
-
-    with pytest.raises(RuntimeError, match="failed"):
-        postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=Mock())
-    factory.__exit__.assert_called_once()
-
-
 def _watch_setup(monkeypatch):
     factory = Mock()
     factory.__enter__ = Mock(return_value=factory)
@@ -173,130 +106,11 @@ def _watch_setup(monkeypatch):
     monkeypatch.setattr(
         postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
     )
-    watchers = []
-
-    def compose(_):
-        watcher = object()
-        watchers.append(watcher)
-        return Namespace(ci_watcher=watcher)
-
+    use_case = Mock()
+    compose = Mock(return_value=use_case)
     monkeypatch.setattr(
-        postgres_ci_entrypoint,
-        "compose_postgres_controller",
-        compose,
+        postgres_ci_entrypoint, "create_ci_pass_use_case", compose
     )
-    config = {
-        "controller_github_app": {
-            "app_id": 1,
-            "installation_id": 17,
-            "pem": "controller.pem",
-        }
-    }
-    app_config = AppConfig(
-        pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
-    )
-    return factory, watchers, config, app_config
-
-
-def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
-    factory, watchers, config, app_config = _watch_setup(monkeypatch)
-    verdicts = ["BLOCKED"] * 7 + ["SUCCESS", "SUCCESS"]
-    runner = Mock(side_effect=[(Namespace(verdict=verdict),) for verdict in verdicts])
-    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
-    sleeps = []
-    checks = Mock()
-
-    postgres_ci_entrypoint.run_postgres_ci_watch(
-        config,
-        app_config,
-        checks=checks,
-        sleep=sleeps.append,
-        stop=lambda: runner.call_count == len(verdicts),
-    )
-
-    assert [call.kwargs["startup"] for call in runner.call_args_list] == [
-        True,
-        *([False] * 8),
-    ]
-    assert len(watchers) == len(verdicts)
-    assert len({id(watcher) for watcher in watchers}) == len(verdicts)
-    assert all(
-        call.args == (watcher, checks) and call.kwargs["installation_id"] == 17
-        for call, watcher in zip(runner.call_args_list, watchers, strict=True)
-    )
-    assert sleeps == [4, 8, 16, 32, 60, 60, 60, 2]
-    factory.__enter__.assert_called_once()
-    factory.__exit__.assert_called_once()
-
-
-@pytest.mark.parametrize("failure", [None, RuntimeError("lost leader")])
-def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure):
-    factory, _, config, app_config = _watch_setup(monkeypatch)
-    runner = Mock(side_effect=[(Namespace(verdict="SUCCESS"),), failure])
-    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
-    checks = Mock()
-    sleeps = []
-
-    with pytest.raises((WorkflowError, RuntimeError)):
-        postgres_ci_entrypoint.run_postgres_ci_watch(
-            config, app_config, checks=checks, sleep=sleeps.append
-        )
-
-    assert runner.call_count == 2
-    assert sleeps == [2]
-    checks.get_pull_request.assert_not_called()
-    factory.__exit__.assert_called_once()
-
-
-def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
-    factory, _, config, app_config = _watch_setup(monkeypatch)
-    runner = Mock(side_effect=OSError("database unavailable"))
-    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
-    with pytest.raises(OSError, match="database unavailable"):
-        postgres_ci_entrypoint.run_postgres_ci_watch(
-            config, app_config, checks=Mock(), sleep=Mock()
-        )
-    runner.assert_called_once()
-    factory.__exit__.assert_called_once()
-
-    factory.__exit__.reset_mock()
-    runner.reset_mock(side_effect=True)
-    runner.return_value = ()
-    with pytest.raises(KeyboardInterrupt):
-        postgres_ci_entrypoint.run_postgres_ci_watch(
-            config,
-            app_config,
-            checks=Mock(),
-            sleep=Mock(side_effect=KeyboardInterrupt),
-        )
-    runner.assert_called_once()
-    factory.__exit__.assert_called_once()
-
-
-def test_composition_maps_ci_evidence_to_typed_presentation_response(monkeypatch):
-    """No ORM, checks or evidence objects reach the CLI Presenter."""
-    from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
-
-    factory = Mock()
-    factory.__enter__ = Mock(return_value=factory)
-    factory.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr(
-        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
-    )
-    watcher = object()
-    monkeypatch.setattr(
-        postgres_ci_entrypoint,
-        "compose_postgres_controller",
-        lambda _: Namespace(ci_watcher=watcher),
-    )
-    runner = Mock(
-        return_value=(
-            Namespace(verdict="SUCCESS"),
-            Namespace(verdict="BLOCKED"),
-            Namespace(verdict="FAILURE"),
-        )
-    )
-    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
     config = {
         "controller_github_app": {
             "app_id": 1,
@@ -308,12 +122,134 @@ def test_composition_maps_ci_evidence_to_typed_presentation_response(monkeypatch
         pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
     checks = Mock(installation_id=17)
+    return factory, use_case, compose, config, app_config, checks
+
+
+def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    use_case.execute.side_effect = ApplicationError(
+        "PostgreSQL CI watcher leadership unavailable"
+    )
+
+    with pytest.raises(ApplicationError, match="leadership unavailable"):
+        postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=checks)
+
+    compose.assert_called_once_with(factory, checks, installation_id=17)
+    use_case.execute.assert_called_once_with(startup=True)
+    checks.get_pull_request.assert_not_called()
+    factory.__exit__.assert_called_once()
+
+
+def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    use_case.execute.side_effect = RuntimeError("failed")
+
+    with pytest.raises(RuntimeError, match="failed"):
+        postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=checks)
+
+    compose.assert_called_once()
+    use_case.execute.assert_called_once_with(startup=True)
+    factory.__exit__.assert_called_once()
+
+
+def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    verdicts = ["BLOCKED"] * 7 + ["SUCCESS", "SUCCESS"]
+    use_case.execute.side_effect = [
+        (Namespace(verdict=verdict),) for verdict in verdicts
+    ]
+    sleeps = []
+
+    postgres_ci_entrypoint.run_postgres_ci_watch(
+        config,
+        app_config,
+        checks=checks,
+        sleep=sleeps.append,
+        stop=lambda: use_case.execute.call_count == len(verdicts),
+    )
+
+    assert [call.kwargs["startup"] for call in use_case.execute.call_args_list] == [
+        True,
+        *([False] * 8),
+    ]
+    compose.assert_called_once_with(factory, checks, installation_id=17)
+    assert sleeps == [4, 8, 16, 32, 60, 60, 60, 2]
+    factory.__enter__.assert_called_once()
+    factory.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "failure", [ApplicationError("leadership unavailable"), PermissionError("lost")]
+)
+def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure):
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    use_case.execute.side_effect = [
+        (Namespace(verdict="SUCCESS"),),
+        failure,
+    ]
+    sleeps = []
+
+    with pytest.raises(type(failure)):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config, app_config, checks=checks, sleep=sleeps.append
+        )
+
+    assert use_case.execute.call_count == 2
+    compose.assert_called_once()
+    assert sleeps == [2]
+    checks.get_pull_request.assert_not_called()
+    factory.__exit__.assert_called_once()
+
+
+def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    use_case.execute.side_effect = OSError("database unavailable")
+    with pytest.raises(OSError, match="database unavailable"):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config, app_config, checks=checks, sleep=Mock()
+        )
+    use_case.execute.assert_called_once()
+    compose.assert_called_once()
+    factory.__exit__.assert_called_once()
+
+    factory.__exit__.reset_mock()
+    use_case.execute.reset_mock(side_effect=True)
+    use_case.execute.return_value = ()
+    with pytest.raises(KeyboardInterrupt):
+        postgres_ci_entrypoint.run_postgres_ci_watch(
+            config,
+            app_config,
+            checks=checks,
+            sleep=Mock(side_effect=KeyboardInterrupt),
+        )
+    use_case.execute.assert_called_once()
+    factory.__exit__.assert_called_once()
+
+
+def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
+    """No runtime callback may reenter composition or leak a database adapter."""
+    from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
+
+    factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
+    use_case.execute.side_effect = [
+        (
+            Namespace(verdict="SUCCESS"),
+            Namespace(verdict="BLOCKED"),
+            Namespace(verdict="FAILURE"),
+        ),
+        (),
+    ]
 
     with postgres_ci_entrypoint.compose_ci_execution(
         config, app_config, checks=checks
     ) as execute:
-        actual = execute(CiRunRequest(startup=True))
+        first = execute(CiRunRequest(startup=True))
+        second = execute(CiRunRequest(startup=False))
 
-    assert actual == CiRunResponse(observed_count=3, blocked_count=1)
-    runner.assert_called_once_with(watcher, checks, installation_id=17, startup=True)
+    assert first == CiRunResponse(observed_count=3, blocked_count=1)
+    assert second == CiRunResponse(observed_count=0, blocked_count=0)
+    compose.assert_called_once_with(factory, checks, installation_id=17)
+    assert [c.kwargs for c in use_case.execute.call_args_list] == [
+        {"startup": True}, {"startup": False}
+    ]
     factory.__exit__.assert_called_once()
