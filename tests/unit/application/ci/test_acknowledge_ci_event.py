@@ -9,7 +9,6 @@ from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
 )
 from agent_workflow.domain.workflow_identity import WorkflowError
 
-
 HEAD = "a" * 40
 OTHER = "b" * 40
 REPOSITORY = "builacviet/agent-workflow"

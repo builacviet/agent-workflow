@@ -17,7 +17,12 @@ def test_invalid_signed_notification_rejects_without_acking():
     state.pending_events.return_value = [
         WebhookNotification(
             "12345678-1234-1234-1234-123456789abc",
-            "workflow_run", "completed", "other/repo", 17, 44, HEAD,
+            "workflow_run",
+            "completed",
+            "other/repo",
+            17,
+            44,
+            HEAD,
         )
     ]
     checks = Mock(installation_id=17)
@@ -39,7 +44,12 @@ def test_no_pending_event_does_not_poll_checks():
 def test_github_unavailable_records_blocked_and_retains_pending_event():
     event = WebhookNotification(
         "12345678-1234-1234-1234-123456789abc",
-        "workflow_run", "completed", REPO, 17, 44, HEAD,
+        "workflow_run",
+        "completed",
+        REPO,
+        17,
+        44,
+        HEAD,
     )
     state = Mock()
     state.pending_events.return_value = [event]

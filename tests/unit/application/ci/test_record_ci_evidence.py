@@ -11,7 +11,6 @@ from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot
 from agent_workflow.domain.workflow_identity import WorkflowError
 
-
 HEAD = "a" * 40
 OTHER = "b" * 40
 REPOSITORY = "builacviet/agent-workflow"
@@ -49,6 +48,8 @@ def evidence(verdict="SUCCESS"):
         "2026-11-10T00:00:00Z",
         "2026-11-10T00:01:00Z",
     )
+
+
 @pytest.mark.parametrize(
     ("had_failure", "incoming", "expected"),
     [

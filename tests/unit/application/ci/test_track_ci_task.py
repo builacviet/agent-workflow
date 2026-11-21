@@ -10,7 +10,6 @@ from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUse
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.workflow_identity import WorkflowError
 
-
 HEAD = "a" * 40
 OTHER = "b" * 40
 REPOSITORY = "builacviet/agent-workflow"
@@ -66,6 +65,8 @@ def test_rejected_tracking_does_not_write(snapshot, reason):
         TrackCiTaskUseCase(repository).execute("task-1", 21, HEAD)
     operation.track.assert_not_called()
     assert scope.__exit__.call_count == 1
+
+
 def test_ci_repository_does_not_depend_on_application_use_case_module():
     """The existing global AST import gate does not enforce this ownership."""
     root = Path(__file__).resolve().parents[4]
