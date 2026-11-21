@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent_workflow.composition import postgres_controller as composition
+from agent_workflow.composition.ci_deps import ComposedCiState
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -45,10 +46,8 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
         monkeypatch.setattr(PostgresFactory, method, forbidden)
     monkeypatch.setattr(PostgresLeadershipLock, "try_acquire", forbidden)
     monkeypatch.setattr(PostgresDispatchLedger, "claim", forbidden)
-    monkeypatch.setattr(PostgresControllerCiState, "track", forbidden)
-    monkeypatch.setattr(
-        PostgresControllerCiState, "reconcile_once", forbidden, raising=False
-    )
+    monkeypatch.setattr(ComposedCiState, "track", forbidden)
+    monkeypatch.setattr(ComposedCiState, "record", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
@@ -67,7 +66,8 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
         "dev",
         "code",
     )
-    assert isinstance(bundle.controller.ci_state, PostgresControllerCiState)
+    assert isinstance(bundle.controller.ci_state, ComposedCiState)
+    assert not isinstance(bundle.controller.ci_state, PostgresControllerCiState)
     assert bundle.controller.ci_state._factory is factory
     assert bundle.ci_watcher.ci_state is bundle.controller.ci_state
     assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
