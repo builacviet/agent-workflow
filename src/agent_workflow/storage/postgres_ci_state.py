@@ -10,13 +10,13 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
-from agent_workflow.interfaces.ci.state_adapter import CiStateAdapter
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
+from agent_workflow.interfaces.ci.state_adapter import CiStateAdapter
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
@@ -55,8 +55,12 @@ class PostgresControllerCiState(CiStateAdapter):
         super().__init__(
             reader=reader,
             tracker=tracker if tracker is not None else TrackCiTaskUseCase(repository),
-            recorder=recorder if recorder is not None else RecordCiEvidenceUseCase(repository),
-            approval=approval if approval is not None else CheckCiApprovalUseCase(reader),
+            recorder=recorder
+            if recorder is not None
+            else RecordCiEvidenceUseCase(repository),
+            approval=approval
+            if approval is not None
+            else CheckCiApprovalUseCase(reader),
             acknowledger=(
                 acknowledger
                 if acknowledger is not None

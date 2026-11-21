@@ -1,21 +1,37 @@
-"""Presentation adapter for PostgreSQL CI Controller one-shot and watch modes.
+"""Typed Presentation boundary for Controller CI one-shot and watch commands.
 
-No database, GitHub client, factory or composition imports. A composed callback
-executes exactly one leadership-fenced reconciliation pass on demand.
+The CLI owns argument interpretation, result display and retry scheduling.
+A composition-provided operation performs the actual guarded reconciliation.
+No PostgreSQL, GitHub clients, or Domain evidence enter this API.
 """
 
 import argparse
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
-from agent_workflow.domain.ci_evidence import CiEvidence
 
-CiPass = Callable[[bool], tuple[CiEvidence, ...]]
+@dataclass(frozen=True, slots=True)
+class CiRunRequest:
+    """One Controller CI pass; startup may recheck durable tracked work."""
+
+    startup: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CiRunResponse:
+    """Presentation projection of the durable, completed CI pass."""
+
+    observed_count: int
+    blocked_count: int
+
+
+CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
 sleep = time.sleep
 
 
 def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
-    """Register PostgreSQL/legacy CI-only operator modes on the shared parser."""
+    """Register the two explicit CI-only operator modes on the shared parser."""
     parser.add_argument(
         "--ci-once",
         action="store_true",
@@ -28,31 +44,28 @@ def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def run_ci_once(reconcile: CiPass) -> None:
-    """Report one trusted reconciliation after its transaction is complete."""
-    observations = reconcile(True)
+def run_ci_once(reconcile: CiRunOperation) -> None:
+    """Print only after a successful committed pass."""
+    result = reconcile(CiRunRequest(startup=True))
     print(
-        "CI reconciliation: " + str(len(observations)) + " tracked observations",
+        f"CI reconciliation: {result.observed_count} tracked observations",
         flush=True,
     )
 
 
 def run_ci_watch(
-    reconcile: CiPass,
+    reconcile: CiRunOperation,
     *,
     sleep: Callable[[float], None] = sleep,
     stop: Callable[[], bool] | None = None,
 ) -> None:
-    """Bounded CLI backoff; no false retry on a lost or denied leader."""
+    """Bounded backoff on BLOCKED; never swallow a lost leadership exception."""
     delay = 2
     startup = True
     while stop is None or not stop():
-        observations = reconcile(startup)
+        result = reconcile(CiRunRequest(startup=startup))
         startup = False
-        if any(e.verdict == "BLOCKED" for e in observations):
-            delay = min(60, delay * 2)
-        else:
-            delay = 2
+        delay = min(60, delay * 2) if result.blocked_count else 2
         if stop is not None and stop():
             break
         sleep(delay)

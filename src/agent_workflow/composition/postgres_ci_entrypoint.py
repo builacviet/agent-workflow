@@ -1,7 +1,7 @@
 """Own PostgreSQL CI reconciliation and its Controller-only credentials."""
 
-from contextlib import contextmanager
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from agent_workflow.app_config import AppConfig
@@ -12,12 +12,11 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
-from agent_workflow.domain.ci_evidence import CiEvidence
-from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,
     ControllerChecksClient,
 )
+from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
@@ -27,7 +26,7 @@ def compose_ci_execution(
     app_config: AppConfig,
     *,
     checks: ICiChecksReader | None = None,
-) -> Iterator[Callable[[bool], tuple[CiEvidence, ...]]]:
+) -> Iterator[ci_cli.CiRunOperation]:
     """Own CI credentials, PostgreSQL lifetime and leader-fenced reconciliation.
 
     The yielded callback is an Application operation bound to a live composition.
@@ -36,14 +35,20 @@ def compose_ci_execution(
     installation_id, checks = _controller_checks(config, checks)
     with PostgresFactory.open(app_config) as factory:
 
-        def reconcile(startup: bool) -> tuple[CiEvidence, ...]:
+        def reconcile(request: ci_cli.CiRunRequest) -> ci_cli.CiRunResponse:
             dependencies = compose_postgres_controller(factory).ci_watcher
             observations = run_ci_watcher_once(
-                dependencies, checks, installation_id=installation_id, startup=startup
+                dependencies,
+                checks,
+                installation_id=installation_id,
+                startup=request.startup,
             )
             if observations is None:
                 raise ApplicationError("PostgreSQL CI watcher leadership unavailable")
-            return observations
+            return ci_cli.CiRunResponse(
+                observed_count=len(observations),
+                blocked_count=sum(e.verdict == "BLOCKED" for e in observations),
+            )
 
         yield reconcile
 
