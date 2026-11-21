@@ -137,13 +137,11 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
         (PR, NEXT, "CI tracking HEAD differs"),
     ],
 )
-def test_ci_binding_policy_in_application(
-    persisted_pr, persisted_head, expected_error
-):
+def test_ci_binding_policy_in_application(persisted_pr, persisted_head, expected_error):
     if expected_error is None:
-        assert require_matching_ci_binding(
-            persisted_pr, persisted_head, PR, HEAD
-        ) is None
+        assert (
+            require_matching_ci_binding(persisted_pr, persisted_head, PR, HEAD) is None
+        )
     else:
         with pytest.raises(WorkflowError, match=expected_error):
             require_matching_ci_binding(persisted_pr, persisted_head, PR, HEAD)
@@ -766,6 +764,7 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
             match="^PostgreSQL Controller CI operation failed$",
         ) as error:
             PostgresControllerCiState(failing).record(evidence(task_id))
+        assert type(error.value) is PersistenceUnavailableError
         assert error.value.__cause__ is None
 
     assert attempted == [2]
