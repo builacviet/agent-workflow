@@ -1,5 +1,6 @@
 """CI Controller presentation transports typed request/response objects."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -57,9 +58,7 @@ def test_watch_does_not_consume_runtime_errors(failure):
     reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
 
 
-
 def test_presenter_maps_domain_verdicts_to_typed_response():
-    from types import SimpleNamespace
 
     observations = (
         SimpleNamespace(verdict="BLOCKED"),
