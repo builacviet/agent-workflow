@@ -206,7 +206,9 @@ def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
         (DomainError, 409),
     ],
 )
-def test_http_layer_maps_error_by_ownership_and_allows_retry(error_type, expected_status):
+def test_http_layer_maps_error_by_ownership_and_allows_retry(
+    error_type, expected_status
+):
     class FailingInbox:
         def __init__(self):
             self.calls = 0
@@ -225,7 +227,10 @@ def test_http_layer_maps_error_by_ownership_and_allows_retry(error_type, expecte
     try:
         body = payload()
         headers = signed(body)
-        assert send(server.server_address[1], body=body, headers=headers) == expected_status
+        assert (
+            send(server.server_address[1], body=body, headers=headers)
+            == expected_status
+        )
         assert send(server.server_address[1], body=body, headers=headers) == 202
         assert inbox.calls == 2
     finally:

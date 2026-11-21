@@ -2,7 +2,10 @@ from dataclasses import replace
 
 import pytest
 
-from agent_workflow.application.exceptions import ApplicationError, InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    InvalidApplicationRequestError,
+)
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult

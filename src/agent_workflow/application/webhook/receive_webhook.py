@@ -2,11 +2,14 @@
 
 import re
 
-from agent_workflow.application.exceptions import ApplicationError, InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    InvalidApplicationRequestError,
+)
 from agent_workflow.application.webhook.ports import IWebhookInboxRepository
 from agent_workflow.domain.ci_evidence import WebhookNotification
-from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.domain.workflow_identity import validate_sha
 
 _DELIVERY = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}")
@@ -47,7 +50,9 @@ class ReceiveWebhookUseCase:
         try:
             validate_sha(notification.head_sha)
         except DomainError:
-            raise InvalidApplicationRequestError("invalid webhook notification") from None
+            raise InvalidApplicationRequestError(
+                "invalid webhook notification"
+            ) from None
         if not isinstance(body_digest, str) or not re.fullmatch(
             r"[0-9a-f]{64}", body_digest
         ):

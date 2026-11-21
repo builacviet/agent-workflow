@@ -15,7 +15,6 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.exceptions import DomainError
-
 from agent_workflow.integrations.github_webhook import (
     GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
 )
