@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
-from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
@@ -24,13 +24,13 @@ class CiTrackingSnapshot:
             or self.current_head_sha != head_sha
             or self.repository != REPOSITORY
         ):
-            raise DomainError("CI tracking requires authorized exact task HEAD")
+            raise BusinessRuleError("CI tracking requires authorized exact task HEAD")
         if self.pr_number is None:
             return True
         if self.pr_number != pr_number:
-            raise DomainError("CI tracking PR differs from persisted binding")
+            raise BusinessRuleError("CI tracking PR differs from persisted binding")
         if self.binding_head_sha != head_sha:
-            raise DomainError("CI tracking HEAD differs from persisted binding")
+            raise BusinessRuleError("CI tracking HEAD differs from persisted binding")
         return False
 
 
@@ -52,7 +52,7 @@ class CiRecordSnapshot:
             or self.pr_number != evidence.pr_number
             or self.binding_head_sha != evidence.expected_head_sha
         ):
-            raise DomainError("CI evidence mismatched task/PR/HEAD")
+            raise BusinessRuleError("CI evidence mismatched task/PR/HEAD")
         return CiVerdict.FAILURE if self.had_failure else evidence.verdict
 
 

@@ -2,7 +2,7 @@
 
 from agent_workflow.application.ci.ports import ICiWriteRepository
 from agent_workflow.domain.ci_evidence import validate_delivery_id
-from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 
 class AcknowledgeCiEventUseCase:
@@ -13,5 +13,5 @@ class AcknowledgeCiEventUseCase:
         validate_delivery_id(delivery_id)
         with self._repository.transaction() as tx:
             if not tx.inbox_delivery_exists(delivery_id):
-                raise DomainError("unknown webhook delivery")
+                raise BusinessRuleError("unknown webhook delivery")
             tx.mark_processed(delivery_id)

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 
 from agent_workflow.domain.states import CiVerdict
-from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 Verdict = Literal["SUCCESS", "FAILURE", "BLOCKED"]
 
@@ -66,16 +66,16 @@ class ControllerCiStore(Protocol):
 def validate_evidence(evidence: CiEvidence) -> None:
     """Validate the durable ledger's trust and exact-HEAD requirements."""
     if type(evidence) is not CiEvidence:
-        raise DomainError("untrusted CI evidence type")
+        raise BusinessRuleError("untrusted CI evidence type")
     if (
         evidence.check_name != "Python tests"
         or evidence.check_app_slug != "github-actions"
         or type(evidence.installation_id) is not int
         or evidence.installation_id <= 0
     ):
-        raise DomainError("CI evidence source is not authorized")
+        raise BusinessRuleError("CI evidence source is not authorized")
     if evidence.verdict not in tuple(CiVerdict):
-        raise DomainError("invalid CI verdict")
+        raise BusinessRuleError("invalid CI verdict")
     terminal_reasons = {
         CiVerdict.SUCCESS: "REQUIRED_CHECK_PASSED",
         CiVerdict.FAILURE: "REQUIRED_CHECK_FAILED",
@@ -93,7 +93,7 @@ def validate_evidence(evidence: CiEvidence) -> None:
         or not isinstance(evidence.completed_at, str)
         or not evidence.completed_at
     ):
-        raise DomainError(
+        raise BusinessRuleError(
             f"CI {evidence.verdict.lower()} lacks exact-HEAD trusted evidence"
         )
 
@@ -102,4 +102,4 @@ def validate_delivery_id(delivery_id: str) -> None:
     if not isinstance(delivery_id, str) or not re.fullmatch(
         r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}", delivery_id
     ):
-        raise DomainError("invalid webhook delivery identity")
+        raise BusinessRuleError("invalid webhook delivery identity")
