@@ -177,7 +177,7 @@ def test_missing_approval_is_false():
 
 def test_ci_repository_does_not_depend_on_application_use_case_module():
     """The existing global AST import gate does not enforce this ownership."""
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[4]
     source = (
         root
         / "src/agent_workflow/infrastructure/database/repositories/ci_state_repository.py"
