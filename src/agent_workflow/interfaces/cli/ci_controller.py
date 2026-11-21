@@ -4,6 +4,7 @@ No database, GitHub client, factory or composition imports. A composed callback
 executes exactly one leadership-fenced reconciliation pass on demand.
 """
 
+import argparse
 import time
 from collections.abc import Callable
 
@@ -11,6 +12,20 @@ from agent_workflow.domain.ci_evidence import CiEvidence
 
 CiPass = Callable[[bool], tuple[CiEvidence, ...]]
 sleep = time.sleep
+
+
+def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register PostgreSQL/legacy CI-only operator modes on the shared parser."""
+    parser.add_argument(
+        "--ci-once",
+        action="store_true",
+        help="reconcile CI only, never dispatch agents",
+    )
+    parser.add_argument(
+        "--ci-watch",
+        action="store_true",
+        help="consume local inbox, never dispatch agents",
+    )
 
 
 def run_ci_once(reconcile: CiPass) -> None:

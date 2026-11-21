@@ -34,6 +34,16 @@ class ICiApprovalReader(Protocol):
     def approved(self, task_id: str, head_sha: str) -> CiApprovalSnapshot | None: ...
 
 
+class ICiStateReader(ICiApprovalReader, Protocol):
+    """CI read projections used by the Controller-facing inbound adapter."""
+
+    def tracked(self, limit: int = 32) -> list[dict]: ...
+
+    def previous_failure(self, task_id: str, head_sha: str) -> bool: ...
+
+    def pending_events(self, limit: int = 20) -> list[WebhookNotification]: ...
+
+
 class ICiChecksReader(Protocol):
     """Trusted GitHub Checks transport, including complete pagination."""
 

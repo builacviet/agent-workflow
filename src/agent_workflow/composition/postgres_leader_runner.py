@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.ci.ports import (
+    ICiChecksReader,
+    ICiReconciliationState,
+)
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
@@ -19,7 +22,6 @@ from agent_workflow.composition.postgres_controller import (
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 
 
 def _require_owner(leadership: object) -> None:
@@ -110,7 +112,7 @@ def run_controller_once(
 
 
 class _GuardedCiState:
-    def __init__(self, state: PostgresControllerCiState, leadership: object) -> None:
+    def __init__(self, state: ICiReconciliationState, leadership: object) -> None:
         self._state, self._leadership = state, leadership
 
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:

@@ -15,6 +15,7 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.interfaces.cli.ci_controller import add_ci_arguments
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 
@@ -90,16 +91,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--acknowledge", metavar="DISPATCH_ID")
     parser.add_argument("--reconciled", action="store_true")
-    parser.add_argument(
-        "--ci-once",
-        action="store_true",
-        help="reconcile CI only, never dispatch agents",
-    )
-    parser.add_argument(
-        "--ci-watch",
-        action="store_true",
-        help="consume local inbox, never dispatch agents",
-    )
+    add_ci_arguments(parser)
     args = parser.parse_args()
     config = json.loads(
         args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
