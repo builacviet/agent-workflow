@@ -3,16 +3,12 @@
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.exceptions import (
-    CorruptedPersistenceDataError,
-    PersistenceUnavailableError,
-)
+from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot, CiTrackingSnapshot
 from agent_workflow.domain.states import CiVerdict
@@ -59,8 +55,6 @@ class SqlAlchemyCiStateRepository:
                     yield SqlAlchemyCiStateRepository(
                         self._session_scope, _session=session
                     )
-        except ValidationError:
-            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
         except SQLAlchemyError:
             raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 

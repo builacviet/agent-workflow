@@ -6,7 +6,9 @@ from agent_workflow.application.ci.dtos import CiRequest
 from agent_workflow.application.ci.ports import ICiChecksReader, ICiReconciliationState
 from agent_workflow.application.ci.verification import verify_ci
 from agent_workflow.domain.ci_evidence import CiEvidence
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
 class ReconcileCiUseCase:
@@ -19,11 +21,11 @@ class ReconcileCiUseCase:
         check_name: str = "Python tests",
     ):
         if type(installation_id) is not int or installation_id <= 0:
-            raise ValueError("invalid Controller installation ID")
+            raise InvalidApplicationRequestError("invalid Controller installation ID")
         if checks.installation_id != installation_id:
-            raise WorkflowError("Controller checks installation differs from App")
+            raise InvalidApplicationRequestError("Controller checks installation differs from App")
         if check_name != "Python tests":
-            raise WorkflowError("only approved V1 check may pass CI")
+            raise InvalidApplicationRequestError("only approved V1 check may pass CI")
         self.state = state
         self.checks = checks
         self.installation_id = installation_id
@@ -76,7 +78,7 @@ class ReconcileCiUseCase:
                     ("workflow_run", "completed"),
                 }
             ):
-                raise WorkflowError("CI inbox has incompatible notification")
+                raise DomainError("CI inbox has incompatible notification")
         observations = self.observe_all()
         # BLOCKED means CI evidence is not terminal, even when GitHub was
         # reachable. Keep the signed wake-up until a fresh observation decides

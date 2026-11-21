@@ -2,7 +2,9 @@
 
 from agent_workflow.application.ci.ports import ICiWriteRepository
 from agent_workflow.domain.ci_evidence import CiEvidence, validate_evidence
-from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.workflow_identity import validate_sha
 
 
 class RecordCiEvidenceUseCase:
@@ -11,9 +13,12 @@ class RecordCiEvidenceUseCase:
 
     def execute(self, evidence: CiEvidence) -> None:
         validate_evidence(evidence)
-        validate_sha(evidence.expected_head_sha)
+        try:
+            validate_sha(evidence.expected_head_sha)
+        except DomainError:
+            raise InvalidApplicationRequestError("invalid CI evidence HEAD") from None
         if type(evidence.pr_number) is not int or evidence.pr_number < 1:
-            raise WorkflowError("invalid CI evidence PR")
+            raise InvalidApplicationRequestError("invalid CI evidence PR")
         with self._repository.transaction() as tx:
             state = tx.load_for_record(evidence.task_id)
             verdict = state.verdict_for(evidence)
