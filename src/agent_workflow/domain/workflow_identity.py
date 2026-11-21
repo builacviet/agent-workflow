@@ -15,8 +15,8 @@ def canonical_repository(repository: str) -> str:
     return repository
 
 
-class WorkflowError(DomainError):
-    """Invalid workflow input/state."""
+# Legacy public name; new R2 code uses DomainError from domain.exceptions.
+WorkflowError = DomainError
 
 
 def validate_sha(sha: str) -> None:

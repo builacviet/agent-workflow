@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 
 from agent_workflow.application.ci.dtos import CiRequest
 from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.domain.ci_evidence import CiEvidence, Verdict
-from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
+from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.workflow_identity import validate_sha
 
 
 def _head(pr: object, repository: str, number: int) -> str | None:
@@ -23,7 +25,7 @@ def _head(pr: object, repository: str, number: int) -> str | None:
     sha = head.get("sha")
     try:
         validate_sha(sha)
-    except (WorkflowError, TypeError):
+    except (DomainError, TypeError):
         return None
     return sha
 
@@ -65,22 +67,22 @@ def verify_ci(
     must construct these booleans, never an untrusted worker or webhook.
     """
     if type(request) is not CiRequest:
-        raise WorkflowError("invalid CI request")
+        raise InvalidApplicationRequestError("invalid CI request")
     if (
         request.repository != allowed_repository
         or request.check_name not in allowed_check_names
     ):
-        raise WorkflowError("unapproved CI repository or required check")
+        raise InvalidApplicationRequestError("unapproved CI repository or required check")
     if checks.installation_id != request.installation_id:
-        raise WorkflowError("CI GitHub installation mismatch")
+        raise InvalidApplicationRequestError("CI GitHub installation mismatch")
     if (
         type(failure_history_complete) is not bool
         or type(previous_failure_for_sha) is not bool
     ):
-        raise WorkflowError("CI history must be trusted booleans")
+        raise InvalidApplicationRequestError("CI history must be trusted booleans")
     now = observed_at or datetime.now(timezone.utc)
     if not isinstance(now, datetime) or now.tzinfo is None:
-        raise WorkflowError("CI observation must be timezone-aware")
+        raise InvalidApplicationRequestError("CI observation must be timezone-aware")
     seen_head = None
     tested = None
     check_id = None
@@ -168,5 +170,8 @@ def verify_ci(
         if conclusions == {"failure"}:
             return evidence("FAILURE", "REQUIRED_CHECK_FAILED")
         return evidence("BLOCKED", "CHECK_CONCLUSION_UNVERIFIED")
+    except (PermissionError, DomainError):
+        # Leadership fencing and domain errors are never GitHub API outages.
+        raise
     except (OSError, TimeoutError, KeyError, ValueError, TypeError, AttributeError):
         return evidence("BLOCKED", "GITHUB_READ_UNAVAILABLE")
