@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
+    SessionScope,
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
@@ -54,10 +55,15 @@ def compose_postgres_controller(
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    session_scope = factory.get_scoped_session
+    # Resolve the provider per call so tests and operator scopes can replace it
+    # after inert composition, without opening a Session during dependency wiring.
+    def session_scope():
+        return factory.get_scoped_session()
+
+    provider: SessionScope = session_scope
     ci_state = PostgresControllerCiState(
-        reader=SqlAlchemyCiStateReader(session_scope),
-        repository=SqlAlchemyCiStateRepository(session_scope),
+        reader=SqlAlchemyCiStateReader(provider),
+        repository=SqlAlchemyCiStateRepository(provider),
         factory=factory,
     )
     return PostgresControllerComposition(
