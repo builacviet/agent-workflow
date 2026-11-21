@@ -199,8 +199,7 @@ def verify_ci(
         if not failure_history_complete:
             return evidence("BLOCKED", "DURABLE_HISTORY_UNVERIFIED")
         if previous_failure_for_sha or (
-            "success" in conclusions
-            and "failure" in conclusions
+            "success" in conclusions and "failure" in conclusions
         ):
             return evidence("BLOCKED", "SAME_SHA_FAILURE_CONFLICT")
         if conclusions == {"success"}:

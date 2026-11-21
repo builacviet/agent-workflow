@@ -10,7 +10,6 @@ from agent_workflow.application.ci_tracking import (
     RecordCiEvidenceUseCase,
     TrackCiTaskUseCase,
 )
-
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SessionScope,
     SqlAlchemyCiStateReader,

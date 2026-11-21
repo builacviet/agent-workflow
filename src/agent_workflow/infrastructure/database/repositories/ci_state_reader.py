@@ -120,9 +120,7 @@ class SqlAlchemyCiStateReader:
         except SQLAlchemyError:
             raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
-    def approved(
-        self, task_id: str, head_sha: str
-    ) -> CiApprovalSnapshot | None:
+    def approved(self, task_id: str, head_sha: str) -> CiApprovalSnapshot | None:
         """Return a materialized approval projection; Application owns verdict."""
         try:
             with self._read_session() as session:

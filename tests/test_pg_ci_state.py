@@ -21,11 +21,11 @@ from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci_tracking import TrackCiTaskUseCase
-from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
 )
+from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.composition.ci_deps import create_ci_state
 from agent_workflow.composition.postgres_ci_entrypoint import (
@@ -173,7 +173,6 @@ def test_ci_tracking_use_case_creates_missing_binding():
     repository = Mock(transaction=Mock(return_value=scope))
     TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
     operation.track.assert_called_once_with("sample", PR, HEAD)
-
 
 
 def test_ci_reader_invalid_persisted_dto_is_corrupted_data():
