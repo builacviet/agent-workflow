@@ -271,3 +271,49 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
         )
     runner.assert_called_once()
     factory.__exit__.assert_called_once()
+
+
+def test_composition_maps_ci_evidence_to_typed_presentation_response(monkeypatch):
+    """No ORM, checks or evidence objects reach the CLI Presenter."""
+    from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
+
+    factory = Mock()
+    factory.__enter__ = Mock(return_value=factory)
+    factory.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(
+        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
+    )
+    watcher = object()
+    monkeypatch.setattr(
+        postgres_ci_entrypoint,
+        "compose_postgres_controller",
+        lambda _: Namespace(ci_watcher=watcher),
+    )
+    runner = Mock(
+        return_value=(
+            Namespace(verdict="SUCCESS"),
+            Namespace(verdict="BLOCKED"),
+            Namespace(verdict="FAILURE"),
+        )
+    )
+    monkeypatch.setattr(postgres_ci_entrypoint, "run_ci_watcher_once", runner)
+    config = {
+        "controller_github_app": {
+            "app_id": 1,
+            "installation_id": 17,
+            "pem": "controller.pem",
+        }
+    }
+    app_config = AppConfig(
+        pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    checks = Mock(installation_id=17)
+
+    with postgres_ci_entrypoint.compose_ci_execution(
+        config, app_config, checks=checks
+    ) as execute:
+        actual = execute(CiRunRequest(startup=True))
+
+    assert actual == CiRunResponse(observed_count=3, blocked_count=1)
+    runner.assert_called_once_with(watcher, checks, installation_id=17, startup=True)
+    factory.__exit__.assert_called_once()
