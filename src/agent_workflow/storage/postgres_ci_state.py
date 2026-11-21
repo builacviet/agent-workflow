@@ -56,4 +56,3 @@ class PostgresControllerCiState:
 
     def mark_processed(self, delivery_id: str) -> None:
         self._repository.mark_processed(delivery_id)
-
