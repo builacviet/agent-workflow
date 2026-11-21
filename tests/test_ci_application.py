@@ -158,7 +158,9 @@ def test_ack_requires_locked_inbox_but_is_idempotent_at_persistence():
         ("SUCCESS", True, OTHER, False),
     ],
 )
-def test_approval_policy_requires_exact_head_and_proof(verdict, verified, head, expected):
+def test_approval_policy_requires_exact_head_and_proof(
+    verdict, verified, head, expected
+):
     reader = Mock()
     reader.approved.return_value = CiApprovalSnapshot(
         HEAD, verdict, HEAD, REPOSITORY, verified
