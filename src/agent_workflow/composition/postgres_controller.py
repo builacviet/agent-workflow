@@ -2,12 +2,11 @@
 
 from dataclasses import dataclass
 
-from agent_workflow.composition.ci_deps import create_ci_state
+from agent_workflow.composition.ci_deps import ComposedCiState, create_ci_state
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -20,13 +19,13 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 class PostgresControllerDependencies:
     workflow: PostgresWorkflowRepository
     dispatch: PostgresDispatchLedger
-    ci_state: PostgresControllerCiState
+    ci_state: ComposedCiState
     leadership: PostgresLeadershipLock
 
 
 @dataclass(frozen=True)
 class PostgresCiWatcherDependencies:
-    ci_state: PostgresControllerCiState
+    ci_state: ComposedCiState
     leadership: PostgresLeadershipLock
 
 

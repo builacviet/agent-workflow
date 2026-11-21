@@ -21,11 +21,40 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
+from agent_workflow.interfaces.ci.state_adapter import CiStateAdapter
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
-def create_ci_state(factory: PostgresFactory) -> PostgresControllerCiState:
+class ComposedCiState(CiStateAdapter):
+    """Controller-facing adapter with composition-owned factory provenance.
+
+    Neither Application nor Interfaces receives the factory. The Worker uses
+    this identity to reject dependencies from different open factories.
+    """
+
+    def __init__(
+        self,
+        factory: PostgresFactory,
+        *,
+        reader: SqlAlchemyCiStateReader,
+        repository: SqlAlchemyCiStateRepository,
+        tracker: TrackCiTaskUseCase,
+        recorder: RecordCiEvidenceUseCase,
+        approval: CheckCiApprovalUseCase,
+        acknowledger: AcknowledgeCiEventUseCase,
+    ) -> None:
+        self._factory = factory
+        self._repository = repository
+        super().__init__(
+            reader=reader,
+            tracker=tracker,
+            recorder=recorder,
+            approval=approval,
+            acknowledger=acknowledger,
+        )
+
+
+def create_ci_state(factory: PostgresFactory) -> ComposedCiState:
     """Assemble CI reader/repository without opening a Session.
 
     Resolve the session provider on each invocation so operator scopes and
@@ -38,10 +67,10 @@ def create_ci_state(factory: PostgresFactory) -> PostgresControllerCiState:
     provider: SessionScope = session_scope
     reader = SqlAlchemyCiStateReader(provider)
     repository = SqlAlchemyCiStateRepository(provider)
-    return PostgresControllerCiState(
+    return ComposedCiState(
+        factory,
         reader=reader,
         repository=repository,
-        factory=factory,
         tracker=TrackCiTaskUseCase(repository),
         recorder=RecordCiEvidenceUseCase(repository),
         approval=CheckCiApprovalUseCase(reader),

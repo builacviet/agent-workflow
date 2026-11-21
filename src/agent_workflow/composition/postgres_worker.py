@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterable
 
+from agent_workflow.composition.ci_deps import ComposedCiState
 from agent_workflow.composition.postgres_controller import (
     PostgresControllerDependencies,
 )
@@ -12,7 +13,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
 )
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
@@ -46,7 +46,7 @@ def compose_postgres_worker(
     if (
         not isinstance(dispatch, PostgresDispatchLedger)
         or (dispatch.role, dispatch.phase) != ("dev", "code")
-        or not isinstance(ci_state, PostgresControllerCiState)
+        or not isinstance(ci_state, ComposedCiState)
         or not isinstance(leadership, PostgresLeadershipLock)
         or leadership._key["domain"] != LeadershipDomain.CONTROLLER
         or not callable(leadership_guard)

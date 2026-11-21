@@ -10,17 +10,17 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
-from agent_workflow.interfaces.ci.state_adapter import CiStateAdapter
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
-class PostgresControllerCiState(CiStateAdapter):
+class PostgresControllerCiState:
     """Combine the separated reader and repository for existing callers."""
 
     def __init__(
@@ -46,24 +46,32 @@ class PostgresControllerCiState(CiStateAdapter):
             repository = SqlAlchemyCiStateRepository(session_scope)
         if reader is None or repository is None:
             raise TypeError("CI state reader and repository are required")
-        # Legacy identity is retained for Worker admission until its own cutover.
-        self._factory = factory
+        self._reader = reader
         self._repository = repository
-        # Normal PostgreSQL composition supplies all four Use Cases. This
-        # fallback exists solely for older PostgresControllerCiState(factory)
-        # callers and must not be replicated in new adapters.
-        super().__init__(
-            reader=reader,
-            tracker=tracker if tracker is not None else TrackCiTaskUseCase(repository),
-            recorder=recorder
-            if recorder is not None
-            else RecordCiEvidenceUseCase(repository),
-            approval=approval
-            if approval is not None
-            else CheckCiApprovalUseCase(reader),
-            acknowledger=(
-                acknowledger
-                if acknowledger is not None
-                else AcknowledgeCiEventUseCase(repository)
-            ),
-        )
+        self._factory = factory
+        # Composition supplies the Use Cases; legacy constructors retain wiring.
+        self._tracker = tracker or TrackCiTaskUseCase(repository)
+        self._recorder = recorder or RecordCiEvidenceUseCase(repository)
+        self._approval = approval or CheckCiApprovalUseCase(reader)
+        self._acknowledger = acknowledger or AcknowledgeCiEventUseCase(repository)
+
+    def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
+        self._tracker.execute(task_id, pr_number, head_sha)
+
+    def tracked(self, limit: int = 32) -> list[dict]:
+        return self._reader.tracked(limit)
+
+    def previous_failure(self, task_id: str, head_sha: str) -> bool:
+        return self._reader.previous_failure(task_id, head_sha)
+
+    def record(self, evidence: CiEvidence) -> None:
+        self._recorder.execute(evidence)
+
+    def approved(self, task_id: str, head_sha: str) -> bool:
+        return self._approval.execute(task_id, head_sha)
+
+    def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
+        return self._reader.pending_events(limit)
+
+    def mark_processed(self, delivery_id: str) -> None:
+        self._acknowledger.execute(delivery_id)

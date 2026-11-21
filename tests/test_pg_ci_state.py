@@ -28,7 +28,7 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
-from agent_workflow.composition.ci_deps import create_ci_state
+from agent_workflow.composition.ci_deps import ComposedCiState, create_ci_state
 from agent_workflow.composition.postgres_ci_entrypoint import (
     run_postgres_ci_once,
     run_postgres_ci_watch,
@@ -91,6 +91,8 @@ def test_ci_dependencies_resolve_scoped_session_after_composition():
     original_scope = factory.get_scoped_session
 
     state = create_ci_state(factory)
+    assert isinstance(state, ComposedCiState)
+    assert not isinstance(state, PostgresControllerCiState)
 
     original_scope.assert_not_called()
     replacement_scope = Mock()
