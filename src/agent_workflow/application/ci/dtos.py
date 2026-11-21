@@ -29,7 +29,9 @@ class CiRequest:
         try:
             validate_sha(self.expected_head_sha)
         except DomainError:
-            raise InvalidApplicationRequestError("CI expected HEAD SHA invalid") from None
+            raise InvalidApplicationRequestError(
+                "CI expected HEAD SHA invalid"
+            ) from None
         if not isinstance(self.check_name, str) or not self.check_name.strip():
             raise InvalidApplicationRequestError("CI check name required")
         if not isinstance(self.check_app_slug, str) or not self.check_app_slug.strip():

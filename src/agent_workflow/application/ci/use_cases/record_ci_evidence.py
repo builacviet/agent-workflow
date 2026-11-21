@@ -1,8 +1,8 @@
 """Record trusted CI evidence and sticky same-HEAD failure atomically."""
 
 from agent_workflow.application.ci.ports import ICiWriteRepository
-from agent_workflow.domain.ci_evidence import CiEvidence, validate_evidence
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.domain.ci_evidence import CiEvidence, validate_evidence
 from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import validate_sha
 

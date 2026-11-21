@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 
 from agent_workflow.domain.ci_evidence import CiEvidence
-from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 
 

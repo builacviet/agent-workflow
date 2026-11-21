@@ -5,8 +5,8 @@ from __future__ import annotations
 from agent_workflow.application.ci.dtos import CiRequest
 from agent_workflow.application.ci.ports import ICiChecksReader, ICiReconciliationState
 from agent_workflow.application.ci.verification import verify_ci
-from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 
@@ -23,7 +23,9 @@ class ReconcileCiUseCase:
         if type(installation_id) is not int or installation_id <= 0:
             raise InvalidApplicationRequestError("invalid Controller installation ID")
         if checks.installation_id != installation_id:
-            raise InvalidApplicationRequestError("Controller checks installation differs from App")
+            raise InvalidApplicationRequestError(
+                "Controller checks installation differs from App"
+            )
         if check_name != "Python tests":
             raise InvalidApplicationRequestError("only approved V1 check may pass CI")
         self.state = state

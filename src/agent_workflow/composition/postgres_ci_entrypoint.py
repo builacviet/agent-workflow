@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Callable
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.exceptions import ApplicationError, InvalidApplicationRequestError
 from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    InvalidApplicationRequestError,
+)
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.integrations.github_app_checks import (
@@ -70,7 +73,9 @@ def _controller_checks(
     """Validate the separate Controller App before opening the database."""
     gate = config.get("controller_github_app")
     if not isinstance(gate, dict):
-        raise InvalidApplicationRequestError("separate read-only Controller GitHub App config required")
+        raise InvalidApplicationRequestError(
+            "separate read-only Controller GitHub App config required"
+        )
     app_id, installation_id, pem = (
         gate.get("app_id"),
         gate.get("installation_id"),
@@ -79,7 +84,9 @@ def _controller_checks(
     if type(app_id) is not int or type(installation_id) is not int or not pem:
         raise InvalidApplicationRequestError("invalid Controller GitHub App config")
     if config.get("pem") and Path(config["pem"]).resolve() == Path(pem).resolve():
-        raise InvalidApplicationRequestError("Controller GitHub App must not use worker App PEM")
+        raise InvalidApplicationRequestError(
+            "Controller GitHub App must not use worker App PEM"
+        )
 
     if checks is None:
         token = ControllerAppToken(

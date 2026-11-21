@@ -4,8 +4,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 
-from agent_workflow.domain.states import CiVerdict
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.states import CiVerdict
 
 Verdict = Literal["SUCCESS", "FAILURE", "BLOCKED"]
 

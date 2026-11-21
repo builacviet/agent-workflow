@@ -72,7 +72,9 @@ def verify_ci(
         request.repository != allowed_repository
         or request.check_name not in allowed_check_names
     ):
-        raise InvalidApplicationRequestError("unapproved CI repository or required check")
+        raise InvalidApplicationRequestError(
+            "unapproved CI repository or required check"
+        )
     if checks.installation_id != request.installation_id:
         raise InvalidApplicationRequestError("CI GitHub installation mismatch")
     if (
