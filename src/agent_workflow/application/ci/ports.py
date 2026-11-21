@@ -44,6 +44,12 @@ class ICiStateReader(ICiApprovalReader, Protocol):
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]: ...
 
 
+class ICiLeadershipScope(Protocol):
+    """Run a single CI pass under a freshly acquired ownership lifetime."""
+
+    def acquired_scope(self) -> AbstractContextManager[None]: ...
+
+
 class ICiChecksReader(Protocol):
     """Trusted GitHub Checks transport, including complete pagination."""
 

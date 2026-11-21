@@ -6,12 +6,8 @@ from pathlib import Path
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.ports import ICiChecksReader
-from agent_workflow.application.exceptions import (
-    ApplicationError,
-    InvalidApplicationRequestError,
-)
-from agent_workflow.composition.postgres_controller import compose_postgres_controller
-from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.composition.ci_deps import create_ci_pass_use_case
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,
     ControllerChecksClient,
@@ -27,27 +23,18 @@ def compose_ci_execution(
     *,
     checks: ICiChecksReader | None = None,
 ) -> Iterator[ci_cli.CiRunOperation]:
-    """Own CI credentials, PostgreSQL lifetime and leader-fenced reconciliation.
+    """Build CI dependencies once, inject Use Cases and own resource lifetime.
 
-    The yielded callback is an Application operation bound to a live composition.
-    It performs one pass only; the caller owns output, retry timing and shutdown.
+    The yielded Interface adapter invokes Application directly on every pass.
+    Composition never re-enters the request execution path.
     """
     installation_id, checks = _controller_checks(config, checks)
     with PostgresFactory.open(app_config) as factory:
-
-        def reconcile(request: ci_cli.CiRunRequest) -> ci_cli.CiRunResponse:
-            dependencies = compose_postgres_controller(factory).ci_watcher
-            observations = run_ci_watcher_once(
-                dependencies,
-                checks,
-                installation_id=installation_id,
-                startup=request.startup,
-            )
-            if observations is None:
-                raise ApplicationError("PostgreSQL CI watcher leadership unavailable")
-            return ci_cli.present_ci_observations(observations)
-
-        yield reconcile
+        use_case = create_ci_pass_use_case(
+            factory, checks, installation_id=installation_id
+        )
+        controller = ci_cli.CiController(use_case)
+        yield controller.reconcile
 
 
 def run_postgres_ci_once(

@@ -13,6 +13,9 @@ from agent_workflow.application.ci.use_cases.check_ci_approval import (
 from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
+from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
+from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
+from agent_workflow.application.ci.ports import ICiChecksReader
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SessionScope,
@@ -21,6 +24,11 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
+from agent_workflow.infrastructure.ci.guarded_adapters import (
+    GuardedCiChecks,
+    GuardedCiState,
+)
+from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
 from agent_workflow.interfaces.ci.state_adapter import CiStateAdapter
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
@@ -76,3 +84,20 @@ def create_ci_state(factory: PostgresFactory) -> ComposedCiState:
         approval=CheckCiApprovalUseCase(reader),
         acknowledger=AcknowledgeCiEventUseCase(repository),
     )
+
+
+def create_ci_pass_use_case(
+    factory: PostgresFactory,
+    checks: ICiChecksReader,
+    *,
+    installation_id: int,
+) -> RunCiPassUseCase:
+    """Assemble the entire guarded CI Application graph once at bootstrap."""
+    state = create_ci_state(factory)
+    leadership = PostgresCiLeadershipScope(factory)
+    reconciler = ReconcileCiUseCase(
+        GuardedCiState(state, leadership.require_owner),
+        GuardedCiChecks(checks, leadership.require_owner),
+        installation_id=installation_id,
+    )
+    return RunCiPassUseCase(reconciler, leadership)

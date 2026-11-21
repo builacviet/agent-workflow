@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
 from agent_workflow.domain.ci_evidence import CiEvidence
 
 
@@ -30,6 +31,18 @@ class CiRunResponse:
 
 CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
 sleep = time.sleep
+
+
+class CiController:
+    """Inbound adapter: request DTO → injected Application UC → response DTO."""
+
+    def __init__(self, use_case: RunCiPassUseCase) -> None:
+        self._use_case = use_case
+
+    def reconcile(self, request: CiRunRequest) -> CiRunResponse:
+        observations = self._use_case.execute(startup=request.startup)
+        return present_ci_observations(observations)
+
 
 
 def present_ci_observations(
