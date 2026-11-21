@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.orchestration import controller
@@ -125,7 +126,7 @@ def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
         pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
 
-    with pytest.raises(WorkflowError, match="leadership unavailable"):
+    with pytest.raises(ApplicationError, match="leadership unavailable"):
         postgres_ci_entrypoint.run_postgres_ci_once(config, app_config, checks=checks)
     runner.assert_called_once_with(watcher, checks, installation_id=17, startup=True)
     checks.get_pull_request.assert_not_called()

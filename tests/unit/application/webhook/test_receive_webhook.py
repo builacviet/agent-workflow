@@ -2,6 +2,10 @@ from dataclasses import replace
 
 import pytest
 
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    InvalidApplicationRequestError,
+)
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
@@ -58,7 +62,7 @@ def test_receive_webhook_returns_repository_outcome(result):
 def test_invalid_direct_call_is_rejected_before_persistence(notification, digest):
     inbox = FakeWebhookInbox()
 
-    with pytest.raises(ValueError, match="invalid webhook"):
+    with pytest.raises(InvalidApplicationRequestError, match="invalid webhook"):
         ReceiveWebhookUseCase(inbox).execute(notification, digest)
 
     assert inbox.calls == []
@@ -67,7 +71,7 @@ def test_invalid_direct_call_is_rejected_before_persistence(notification, digest
 def test_untyped_repository_outcome_is_rejected():
     inbox = FakeWebhookInbox("inserted")
 
-    with pytest.raises(ValueError, match="invalid webhook inbox result"):
+    with pytest.raises(ApplicationError, match="invalid webhook inbox result"):
         ReceiveWebhookUseCase(inbox).execute(valid_notification(), "b" * 64)
 
     assert len(inbox.calls) == 1

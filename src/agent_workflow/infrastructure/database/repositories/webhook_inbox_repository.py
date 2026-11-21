@@ -9,10 +9,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.models import WebhookInboxRow
-from agent_workflow.infrastructure.database.unit_of_work import PostgresUnavailableError
 
 _OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 SessionScope = Callable[[], AbstractContextManager[Session]]
@@ -64,8 +67,8 @@ class SqlAlchemyWebhookInboxRepository:
                     _set_transaction_options(session, read_only=False)
                     result = self._record(session, notification, body_digest)
             return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
     def _record(
         self,
@@ -102,7 +105,7 @@ class SqlAlchemyWebhookInboxRepository:
             .limit(1)
         ).one_or_none()
         if existing is None:
-            raise PostgresUnavailableError(
+            raise PersistenceUnavailableError(
                 "PostgreSQL webhook inbox insert was not confirmed"
             )
         if (
@@ -124,5 +127,7 @@ class SqlAlchemyWebhookInboxRepository:
                     dto = _NotificationDTO.model_validate(row)
                     result = WebhookNotification(**dto.model_dump())
             return result
-        except (SQLAlchemyError, ValidationError):
-            raise PostgresUnavailableError(_OPERATION_ERROR) from None
+        except ValidationError:
+            raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
