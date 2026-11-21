@@ -6,7 +6,10 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
+from agent_workflow.storage.postgres_ci_state import (
+    PostgresControllerCiState,
+    create_ci_state,
+)
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -48,7 +51,7 @@ def compose_postgres_controller(
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_state = PostgresControllerCiState(factory)
+    ci_state = create_ci_state(factory)
     return PostgresControllerComposition(
         controller=PostgresControllerDependencies(
             workflow=PostgresWorkflowRepository(factory),

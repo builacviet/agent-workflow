@@ -378,6 +378,7 @@ def test_pg_once_runs_native_dev_stages(
     )
 
     session = Mock()
+    session.begin.return_value = nullcontext()
     session.add.side_effect = events.track
 
     def get_row(model, task_id, *, with_for_update):
@@ -392,7 +393,7 @@ def test_pg_once_runs_native_dev_stages(
         return None
 
     session.get.side_effect = get_row
-    monkeypatch.setattr(factory, "repository_session", lambda **_: nullcontext(session))
+    monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
     for module in (coder_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")

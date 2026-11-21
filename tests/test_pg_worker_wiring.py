@@ -236,15 +236,14 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
         {}, service, dependencies, leadership_guard=lambda: None
     )
     session = Mock()
+    session.begin.return_value = nullcontext()
     session.get.side_effect = [
         SimpleNamespace(
             repository=REPOSITORY, current_head_sha=HEAD, status="READY_IN_REVIEW"
         ),
         None,
     ]
-    monkeypatch.setattr(
-        factory, "repository_session", lambda **kwargs: nullcontext(session)
-    )
+    monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
 
     if tracked_head == INPUT:
         with pytest.raises(WorkflowError, match="authorized exact task HEAD"):

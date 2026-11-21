@@ -2,6 +2,7 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
 from queue import Queue
@@ -26,6 +27,12 @@ from agent_workflow.composition.postgres_ci_entrypoint import (
 from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
+    SqlAlchemyCiStateReader,
+)
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
@@ -661,3 +668,62 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
     assert not state.approved(task_id, HEAD)
     state.record(evidence(task_id))
     assert state.approved(task_id, HEAD)
+
+
+def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
+    config, factory, service, task_id, (notification, _) = setup
+    handoff(service, task_id, HEAD)
+    sessions = []
+
+    @contextmanager
+    def session_scope():
+        with factory.get_scoped_session() as session:
+            sessions.append(session)
+            yield session
+
+    reader = SqlAlchemyCiStateReader(session_scope)
+    repository = SqlAlchemyCiStateRepository(session_scope)
+    state = PostgresControllerCiState(reader, repository, factory=factory)
+    repository.track(task_id, PR, HEAD)
+    add_delivery(factory, notification)
+
+    commits, rollbacks = [], []
+    engine = factory._engine
+    event.listen(engine, "commit", lambda _conn: commits.append("commit"))
+    event.listen(engine, "rollback", lambda _conn: rollbacks.append("rollback"))
+    assert state.tracked() == [
+        {
+            "task_id": task_id,
+            "pr_number": PR,
+            "head_sha": HEAD,
+            "verdict": "BLOCKED",
+            "repair_heads": 0,
+        }
+    ]
+    assert not state.previous_failure(task_id, HEAD)
+    assert not state.approved(task_id, HEAD)
+    assert state.pending_events() == [notification]
+    assert commits == []
+    assert len(rollbacks) == 4
+
+    should_fail = True
+
+    def fail_commit(connection):
+        nonlocal should_fail
+        if should_fail:
+            should_fail = False
+            connection.execute(text("SELECT 1 / 0"))
+
+    event.listen(engine, "commit", fail_commit)
+    with pytest.raises(PostgresUnavailableError, match="Controller CI operation"):
+        state.record(evidence(task_id))
+    event.remove(engine, "commit", fail_commit)
+    assert observations(factory, task_id) == []
+    assert state.tracked()[0]["verdict"] == "BLOCKED"
+
+    # The retry commits before returning and is visible through another Session.
+    state.record(evidence(task_id))
+    assert state.approved(task_id, HEAD)
+    state.mark_processed(notification.delivery_id)
+    assert state.pending_events() == []
+    assert len({id(session) for session in sessions}) == len(sessions)
