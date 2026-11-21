@@ -10,10 +10,10 @@ from http import HTTPStatus
 from agent_workflow.application.webhook.ports import IWebhookInboxRepository
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
-    WorkflowError,
     validate_sha,
 )
 
@@ -194,7 +194,7 @@ class GitHubWebhookReceiver:
             return HTTPStatus.BAD_REQUEST
         try:
             validate_sha(head_sha)
-        except WorkflowError:
+        except DomainError:
             return HTTPStatus.BAD_REQUEST
 
         notification = WebhookNotification(
