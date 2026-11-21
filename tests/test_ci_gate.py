@@ -1,4 +1,5 @@
 """V1-03A exact-SHA CI gate: deterministic read-only fixtures only."""
+
 from datetime import datetime, timezone
 
 import pytest
@@ -13,20 +14,35 @@ WHEN = datetime(2026, 11, 10, tzinfo=timezone.utc)
 
 
 def request(**changes):
-    return CiRequest(**({
-        "task_id": "V1-03A", "repository": REPO, "installation_id": 17,
-        "pr_number": 55, "expected_head_sha": HEAD,
-        "check_name": "Python tests",
-    } | changes))
+    return CiRequest(
+        **(
+            {
+                "task_id": "V1-03A",
+                "repository": REPO,
+                "installation_id": 17,
+                "pr_number": 55,
+                "expected_head_sha": HEAD,
+                "check_name": "Python tests",
+            }
+            | changes
+        )
+    )
 
 
 def run(conclusion="success", **changes):
     return {
-        "id": 19, "name": "Python tests", "head_sha": HEAD,
-        "app": {"slug": "github-actions"}, "status": "completed",
-        "conclusion": conclusion, "completed_at": "2026-11-10T00:01:00Z",
-        "event": "push", "workflow_path": ".github/workflows/v1-ci.yml",
-        "tested_sha": HEAD, "workflow_run_id": 123, "run_attempt": 1,
+        "id": 19,
+        "name": "Python tests",
+        "head_sha": HEAD,
+        "app": {"slug": "github-actions"},
+        "status": "completed",
+        "conclusion": conclusion,
+        "completed_at": "2026-11-10T00:01:00Z",
+        "event": "push",
+        "workflow_path": ".github/workflows/v1-ci.yml",
+        "tested_sha": HEAD,
+        "workflow_run_id": 123,
+        "run_attempt": 1,
     } | changes
 
 
@@ -40,8 +56,11 @@ class FakeGitHub:
 
     def get_pull_request(self, repo, number):
         self.calls.append("pr")
-        return {"number": number, "base": {"repo": {"full_name": repo}},
-                "head": {"sha": self.head}}
+        return {
+            "number": number,
+            "base": {"repo": {"full_name": repo}},
+            "head": {"sha": self.head},
+        }
 
     def list_check_runs(self, repo, sha):
         self.calls.append(("checks", sha))
@@ -69,15 +88,18 @@ def test_c01_true_head_success_and_serializable_evidence():
     assert client.calls == ["pr", ("checks", HEAD), "pr"]
 
 
-@pytest.mark.parametrize("runs,reason", [
-    ([], "REQUIRED_CHECK_MISSING"),
-    ([run(status="queued", conclusion=None)], "CHECK_PENDING"),
-    ([run(status="in_progress", conclusion=None)], "CHECK_PENDING"),
-    ([run(conclusion="cancelled")], "CHECK_CONCLUSION_UNVERIFIED"),
-    ([run(conclusion="timed_out")], "CHECK_CONCLUSION_UNVERIFIED"),
-    ([run(conclusion="neutral")], "CHECK_CONCLUSION_UNVERIFIED"),
-    ([run(conclusion=None)], "CHECK_CONCLUSION_UNVERIFIED"),
-])
+@pytest.mark.parametrize(
+    "runs,reason",
+    [
+        ([], "REQUIRED_CHECK_MISSING"),
+        ([run(status="queued", conclusion=None)], "CHECK_PENDING"),
+        ([run(status="in_progress", conclusion=None)], "CHECK_PENDING"),
+        ([run(conclusion="cancelled")], "CHECK_CONCLUSION_UNVERIFIED"),
+        ([run(conclusion="timed_out")], "CHECK_CONCLUSION_UNVERIFIED"),
+        ([run(conclusion="neutral")], "CHECK_CONCLUSION_UNVERIFIED"),
+        ([run(conclusion=None)], "CHECK_CONCLUSION_UNVERIFIED"),
+    ],
+)
 def test_c02_c07_missing_pending_unaccepted_conclusion(runs, reason):
     ev = verdict(FakeGitHub(runs))
     assert (ev.verdict, ev.reason) == ("BLOCKED", reason)
@@ -156,16 +178,21 @@ def test_mismatched_installation_is_rejected():
 
 def test_unapproved_named_check_or_repo_is_rejected():
     with pytest.raises(InvalidApplicationRequestError, match="unapproved"):
-        verify_ci(request(check_name="Fake success"), FakeGitHub(),
-                  allowed_repository=REPO,
-                  allowed_check_names=frozenset({"Python tests"}),
-                  failure_history_complete=True, previous_failure_for_sha=False)
+        verify_ci(
+            request(check_name="Fake success"),
+            FakeGitHub(),
+            allowed_repository=REPO,
+            allowed_check_names=frozenset({"Python tests"}),
+            failure_history_complete=True,
+            previous_failure_for_sha=False,
+        )
 
 
 def test_partial_paginated_check_history_blocks():
     class Incomplete(FakeGitHub):
         def list_check_runs(self, repo, sha):
             return {"total_count": 2, "check_runs": [run()]}
+
     ev = verdict(Incomplete())
     assert ev.verdict == "BLOCKED" and ev.reason == "CHECK_HISTORY_INCOMPLETE"
 
@@ -177,6 +204,7 @@ def test_pr_head_changed_while_querying_prevents_stale_pass():
             if self.calls.count("pr") == 2:
                 result["head"]["sha"] = OLD
             return result
+
     ev = verdict(Racy())
     assert ev.verdict == "BLOCKED" and ev.reason == "PR_HEAD_CHANGED_DURING_QUERY"
 
@@ -185,6 +213,7 @@ def test_github_errors_fail_closed():
     class Offline(FakeGitHub):
         def list_check_runs(self, repo, sha):
             raise TimeoutError("unavailable")
+
     ev = verdict(Offline())
     assert ev.verdict == "BLOCKED" and ev.reason == "GITHUB_READ_UNAVAILABLE"
 
