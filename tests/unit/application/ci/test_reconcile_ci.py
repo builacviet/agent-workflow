@@ -65,3 +65,29 @@ def test_github_unavailable_records_blocked_and_retains_pending_event():
     assert result[0].reason == "GITHUB_READ_UNAVAILABLE"
     state.record.assert_called_once_with(result[0])
     state.mark_processed.assert_not_called()
+
+
+def test_leadership_loss_is_never_recorded_as_github_api_unavailable():
+    event = WebhookNotification(
+        "12345678-1234-1234-1234-123456789abc",
+        "workflow_run",
+        "completed",
+        REPO,
+        17,
+        44,
+        HEAD,
+    )
+    state = Mock()
+    state.pending_events.return_value = [event]
+    state.tracked.return_value = [
+        {"task_id": "task-1", "pr_number": 21, "head_sha": HEAD}
+    ]
+    state.previous_failure.return_value = False
+    checks = Mock(installation_id=17)
+    checks.get_pull_request.side_effect = PermissionError("leadership lost")
+
+    with pytest.raises(PermissionError, match="leadership lost"):
+        ReconcileCiUseCase(state, checks, installation_id=17).execute()
+
+    state.record.assert_not_called()
+    state.mark_processed.assert_not_called()
