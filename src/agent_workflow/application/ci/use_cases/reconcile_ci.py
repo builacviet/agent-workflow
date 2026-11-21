@@ -1,25 +1,19 @@
-"""Application CI reconciliation of pending inbox hints and trusted checks.
-
-The Controller layer owns the leader; this use case enforces trusted verdicts,
-sticky same-SHA failure and ACK-after-terminal semantics.
-"""
+"""Reconcile pending GitHub notifications with trusted, fresh CI evidence."""
 
 from __future__ import annotations
 
-from agent_workflow.application.ci_verification import (
-    CiRequest,
-    ReadOnlyChecks,
-    verify_ci,
-)
-from agent_workflow.domain.ci_evidence import CiEvidence, ControllerCiStore
+from agent_workflow.application.ci.dtos import CiRequest
+from agent_workflow.application.ci.ports import ICiChecksReader, ICiReconciliationState
+from agent_workflow.application.ci.verification import verify_ci
+from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 
 
-class ControllerCiCoordinator:
+class ReconcileCiUseCase:
     def __init__(
         self,
-        state: ControllerCiStore,
-        checks: ReadOnlyChecks,
+        state: ICiReconciliationState,
+        checks: ICiChecksReader,
         *,
         installation_id: int,
         check_name: str = "Python tests",
@@ -62,7 +56,7 @@ class ControllerCiCoordinator:
             observed.append(evidence)
         return tuple(observed)
 
-    def reconcile_once(self, *, startup: bool = False) -> tuple[CiEvidence, ...]:
+    def execute(self, *, startup: bool = False) -> tuple[CiEvidence, ...]:
         """Reconcile all pending notifications once, not once per webhook row.
 
         An unavailable GitHub API leaves events pending for future retries.
@@ -92,3 +86,7 @@ class ControllerCiCoordinator:
         for notification in notifications:
             self.state.mark_processed(notification.delivery_id)
         return observations
+
+    def reconcile_once(self, *, startup: bool = False) -> tuple[CiEvidence, ...]:
+        """Compatibility for existing Controller callers; execute is canonical."""
+        return self.execute(startup=startup)

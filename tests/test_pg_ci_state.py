@@ -20,7 +20,7 @@ from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.ci_tracking import TrackCiTaskUseCase
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,

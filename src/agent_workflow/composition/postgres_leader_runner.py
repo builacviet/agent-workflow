@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from agent_workflow.application.ci_reconciliation import ControllerCiCoordinator
-from agent_workflow.application.ci_verification import ReadOnlyChecks
+from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     PostgresCiWatcherDependencies,
@@ -132,7 +132,7 @@ class _GuardedCiState:
 
 
 class _GuardedChecks:
-    def __init__(self, checks: ReadOnlyChecks, leadership: object) -> None:
+    def __init__(self, checks: ICiChecksReader, leadership: object) -> None:
         self._checks, self._leadership = checks, leadership
         self.installation_id = checks.installation_id
 
@@ -147,7 +147,7 @@ class _GuardedChecks:
 
 def run_ci_watcher_once(
     dependencies: PostgresCiWatcherDependencies,
-    checks: ReadOnlyChecks,
+    checks: ICiChecksReader,
     *,
     installation_id: int,
     startup: bool = False,
@@ -161,11 +161,11 @@ def run_ci_watcher_once(
         if not leadership.try_acquire():
             return None
         _require_owner(leadership)
-        coordinator = ControllerCiCoordinator(
+        coordinator = ReconcileCiUseCase(
             _GuardedCiState(dependencies.ci_state, leadership),
             _GuardedChecks(checks, leadership),
             installation_id=installation_id,
         )
-        return _fenced(leadership, coordinator.reconcile_once, startup=startup)
+        return _fenced(leadership, coordinator.execute, startup=startup)
     finally:
         leadership.release()

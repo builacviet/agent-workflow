@@ -1,53 +1,14 @@
-"""Application-level read-only GitHub Checks verification for exact PR/HEAD.
-
-This use case uses the injected trusted transport; webhooks are hints only.
-"""
+"""Trusted GitHub Checks verification; Application service used by reconciliation."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Mapping, Protocol
 
-from agent_workflow.domain.ci_evidence import CiEvidence as CiEvidence
-from agent_workflow.domain.ci_evidence import Verdict as Verdict
+from agent_workflow.application.ci.dtos import CiRequest
+from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.domain.ci_evidence import CiEvidence, Verdict
 from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
-
-
-class ReadOnlyChecks(Protocol):
-    """Trusted GitHub transport; implementations must fetch all check-run pages."""
-
-    installation_id: int
-
-    def get_pull_request(self, repository: str, number: int) -> Mapping: ...
-
-    def list_check_runs(self, repository: str, sha: str) -> Mapping: ...
-
-
-@dataclass(frozen=True, slots=True)
-class CiRequest:
-    task_id: str
-    repository: str
-    installation_id: int
-    pr_number: int
-    expected_head_sha: str
-    check_name: str
-    check_app_slug: str = "github-actions"
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.task_id, str) or not self.task_id.strip():
-            raise WorkflowError("CI task id required")
-        if not isinstance(self.repository, str) or not self.repository.strip():
-            raise WorkflowError("CI repository required")
-        if type(self.installation_id) is not int or self.installation_id < 1:
-            raise WorkflowError("CI installation id invalid")
-        if type(self.pr_number) is not int or self.pr_number < 1:
-            raise WorkflowError("CI PR number invalid")
-        validate_sha(self.expected_head_sha)
-        if not isinstance(self.check_name, str) or not self.check_name.strip():
-            raise WorkflowError("CI check name required")
-        if not isinstance(self.check_app_slug, str) or not self.check_app_slug.strip():
-            raise WorkflowError("CI check source required")
 
 
 def _head(pr: object, repository: str, number: int) -> str | None:
@@ -90,7 +51,7 @@ def _check_run(run: object, sha: str, request: CiRequest) -> bool:
 
 def verify_ci(
     request: CiRequest,
-    checks: ReadOnlyChecks,
+    checks: ICiChecksReader,
     *,
     allowed_repository: str,
     allowed_check_names: frozenset[str],

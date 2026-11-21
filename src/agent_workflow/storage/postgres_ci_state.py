@@ -1,11 +1,15 @@
 """Compatibility facade for the PostgreSQL Controller CI state contract."""
 
-from agent_workflow.application.ci_tracking import (
+from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
     AcknowledgeCiEventUseCase,
-    CheckCiApprovalUseCase,
-    RecordCiEvidenceUseCase,
-    TrackCiTaskUseCase,
 )
+from agent_workflow.application.ci.use_cases.check_ci_approval import (
+    CheckCiApprovalUseCase,
+)
+from agent_workflow.application.ci.use_cases.record_ci_evidence import (
+    RecordCiEvidenceUseCase,
+)
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
