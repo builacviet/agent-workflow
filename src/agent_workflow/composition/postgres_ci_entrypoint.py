@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Callable
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.ci_verification import ReadOnlyChecks
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
-from agent_workflow.integrations.ci_gate import ReadOnlyChecks
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,

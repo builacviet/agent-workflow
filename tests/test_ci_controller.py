@@ -163,3 +163,22 @@ def test_terminal_ci_failure_settles_notification_without_polling(tmp_path):
     )
     assert state.pending_events() == []
     assert not state.approved("T", SHA)
+
+
+def test_reconciliation_use_case_is_canonical_application_implementation(tmp_path):
+    """Legacy import and canonical use case must share one implementation."""
+    from agent_workflow.application.ci_reconciliation import (
+        ControllerCiCoordinator as ApplicationCoordinator,
+    )
+    from agent_workflow.application.ci_verification import (
+        verify_ci as application_verify,
+    )
+    from agent_workflow.integrations.ci_gate import verify_ci as legacy_verify
+
+    assert ControllerCiCoordinator is ApplicationCoordinator
+    assert legacy_verify is application_verify
+    _, state = fixture(tmp_path)
+    observed = ApplicationCoordinator(
+        state, FakeChecks(), installation_id=17
+    ).reconcile_once()
+    assert len(observed) == 1 and observed[0].verdict == "SUCCESS"

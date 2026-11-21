@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from agent_workflow.application.ci_reconciliation import ControllerCiCoordinator
+from agent_workflow.application.ci_verification import ReadOnlyChecks
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     PostgresCiWatcherDependencies,
@@ -16,8 +18,6 @@ from agent_workflow.composition.postgres_controller import (
 )
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.service import WorkflowService
-from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
-from agent_workflow.integrations.ci_gate import ReadOnlyChecks
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 
