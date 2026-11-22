@@ -8,15 +8,19 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
+    AcknowledgeCiEventUseCase,
+)
+from agent_workflow.application.ci.use_cases.record_ci_evidence import (
+    RecordCiEvidenceUseCase,
+)
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
 from agent_workflow.composition.ci_deps import PostgresCiStateDependencies
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.application.ci.use_cases.acknowledge_ci_event import AcknowledgeCiEventUseCase
-from agent_workflow.application.ci.use_cases.record_ci_evidence import RecordCiEvidenceUseCase
-from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
@@ -75,7 +79,10 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
     assert bundle.controller.ci_state.factory is factory
     assert bundle.ci_watcher.reader is bundle.controller.ci_state.reader
     assert bundle.ci_watcher.recorder is bundle.controller.ci_state.recorder
-    assert bundle.ci_watcher.acknowledger is bundle.controller.ci_state.acknowledger
+    assert (
+        bundle.ci_watcher.acknowledger
+        is bundle.controller.ci_state.acknowledger
+    )
     assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
     assert isinstance(bundle.ci_watcher.leadership, PostgresLeadershipLock)
     assert bundle.controller.leadership is not bundle.ci_watcher.leadership
