@@ -575,7 +575,7 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
         ) == (3, 44, 1)
 
 
-def test_pg_ci_entrypoint_reconciles_one_real_inbox_delivery(setup):
+def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
     config, factory, service, task_id, deliveries = setup
     handoff(service, task_id, HEAD)
     state = PostgresControllerCiState(factory)
@@ -583,17 +583,22 @@ def test_pg_ci_entrypoint_reconciles_one_real_inbox_delivery(setup):
     add_delivery(factory, deliveries[0])
     checks = FakeChecks(head=HEAD)
 
-    run_postgres_ci_once(
-        {
-            "controller_github_app": {
-                "app_id": 1,
-                "installation_id": INSTALLATION,
-                "pem": "controller.pem",
-            }
-        },
-        config,
-        checks=checks,
-    )
+    with PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller:
+        assert controller.try_acquire()
+        run_postgres_ci_once(
+            {
+                "controller_github_app": {
+                    "app_id": 1,
+                    "installation_id": INSTALLATION,
+                    "pem": "controller.pem",
+                }
+            },
+            config,
+            checks=checks,
+        )
+        assert controller.is_held()
+        with PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as successor:
+            assert successor.try_acquire()
 
     assert checks.calls > 0
     assert state.approved(task_id, HEAD)

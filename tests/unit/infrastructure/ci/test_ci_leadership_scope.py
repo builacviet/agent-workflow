@@ -50,11 +50,12 @@ def test_lost_owner_does_not_continue_reconciliation(monkeypatch):
     assert locks[0].release.call_count == 1
 
 
-def test_exception_from_pass_releases_and_resets_lease(monkeypatch):
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_exception_from_pass_releases_and_resets_lease(monkeypatch, error):
     scope, locks = _scope(monkeypatch)
-    with pytest.raises(RuntimeError, match="failure"):
+    with pytest.raises(error, match="failure"):
         with scope.acquired_scope():
-            raise RuntimeError("failure")
+            raise error("failure")
     locks[0].release.assert_called_once()
     with pytest.raises(PermissionError):
         scope.require_owner()
