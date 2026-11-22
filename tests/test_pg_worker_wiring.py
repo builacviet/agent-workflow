@@ -65,7 +65,17 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     dispose.assert_not_called()
 
 
-@pytest.mark.parametrize("missing", ["workflow", "dispatch", "ci_tracking", "ci_repository", "ci_factory", "leadership"])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "workflow",
+        "dispatch",
+        "ci_tracking",
+        "ci_repository",
+        "ci_factory",
+        "leadership",
+    ],
+)
 def test_missing_or_wrong_controller_dependency_fails_closed(
     wiring, monkeypatch, missing
 ):
@@ -104,7 +114,9 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
     ).controller
     with pytest.raises(TypeError, match="Worker requires"):
         compose_postgres_worker(
-            {}, service, replace(dependencies, **{foreign: getattr(other, foreign)}),
+            {},
+            service,
+            replace(dependencies, **{foreign: getattr(other, foreign)}),
             leadership_guard=forbidden,
         )
 

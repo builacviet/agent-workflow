@@ -1086,7 +1086,9 @@ def test_ci_composition_does_not_expose_postgres_state_bundle():
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-        classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+        classes = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        }
         assert "PostgresCiStateDependencies" not in identifiers | classes
         assert "CiStateAdapter" not in identifiers | classes
     worker = ast.parse(paths[2].read_text(encoding="utf-8"))

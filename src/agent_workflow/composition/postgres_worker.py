@@ -3,13 +3,13 @@
 from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
-from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
-    SqlAlchemyCiStateRepository,
-)
 from agent_workflow.composition.postgres_controller import (
     PostgresControllerDependencies,
 )
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
