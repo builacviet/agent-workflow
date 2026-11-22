@@ -3,7 +3,7 @@
 import socket
 import sqlite3
 import subprocess
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from unittest.mock import Mock
 
 import pytest
@@ -16,6 +16,14 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
+from agent_workflow.composition import postgres_leader_runner
+from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
+from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
+    SqlAlchemyCiStateReader,
+)
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -36,13 +44,14 @@ def _opened_factory() -> PostgresFactory:
     return factory
 
 
-def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
+def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monkeypatch):
     factory = _opened_factory()
     forbidden = Mock(side_effect=AssertionError("construction performed work"))
     for method in (
         "open",
         "assert_schema_ready",
         "connect_session",
+        "get_scoped_session",
         "transaction",
         "unit_of_work_session",
         "repository_session",
@@ -52,14 +61,28 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
     monkeypatch.setattr(PostgresLeadershipLock, "try_acquire", forbidden)
     monkeypatch.setattr(PostgresDispatchLedger, "claim", forbidden)
     monkeypatch.setattr(TrackCiTaskUseCase, "execute", forbidden)
-    monkeypatch.setattr(RecordCiEvidenceUseCase, "execute", forbidden)
-    monkeypatch.setattr(AcknowledgeCiEventUseCase, "execute", forbidden)
+    for watcher_component in (
+        SqlAlchemyCiStateReader,
+        RecordCiEvidenceUseCase,
+        AcknowledgeCiEventUseCase,
+        PostgresCiLeadershipScope,
+    ):
+        monkeypatch.setattr(watcher_component, "__init__", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
 
+    constructed_locks = Mock()
+    init_lock = PostgresLeadershipLock.__init__
+
+    def track_lock(lock, lock_factory, domain):
+        constructed_locks(lock_factory, domain)
+        init_lock(lock, lock_factory, domain)
+
+    monkeypatch.setattr(PostgresLeadershipLock, "__init__", track_lock)
     bundle = composition.compose_postgres_controller(factory)
 
+    assert [field.name for field in fields(bundle)] == ["controller"]
     assert isinstance(bundle.controller.workflow, PostgresWorkflowRepository)
     assert bundle.controller.workflow.factory is factory
     assert isinstance(bundle.controller.dispatch, PostgresDispatchLedger)
@@ -73,21 +96,13 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
         "code",
     )
     assert isinstance(bundle.controller.ci_tracking, TrackCiTaskUseCase)
+    assert isinstance(bundle.controller.ci_repository, SqlAlchemyCiStateRepository)
     assert bundle.controller.ci_tracking._repository is bundle.controller.ci_repository
     assert bundle.controller.ci_factory is factory
-    assert (
-        bundle.ci_watcher.reader._session_scope
-        is bundle.controller.ci_repository._session_scope
-    )
-    assert bundle.ci_watcher.recorder._repository is bundle.controller.ci_repository
-    assert bundle.ci_watcher.acknowledger._repository is bundle.controller.ci_repository
     assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
-    assert isinstance(bundle.ci_watcher.leadership, PostgresLeadershipLock)
-    assert bundle.controller.leadership is not bundle.ci_watcher.leadership
+    constructed_locks.assert_called_once_with(factory, LeadershipDomain.CONTROLLER)
     assert bundle.controller.leadership._key["domain"] == LeadershipDomain.CONTROLLER
-    assert bundle.ci_watcher.leadership._key["domain"] == LeadershipDomain.CI_WATCHER
     assert bundle.controller.leadership._connection is None
-    assert bundle.ci_watcher.leadership._connection is None
     assert factory._closed is False
     factory._engine.assert_not_called()
     forbidden.assert_not_called()
@@ -95,6 +110,18 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
         assert not hasattr(bundle, method)
     with pytest.raises(FrozenInstanceError):
         bundle.controller = None
+
+    scoped_session = Mock()
+    monkeypatch.setattr(factory, "get_scoped_session", scoped_session)
+    assert (
+        bundle.controller.ci_repository._session_scope() is scoped_session.return_value
+    )
+    scoped_session.assert_called_once_with()
+
+
+def test_dispatch_composition_does_not_expose_obsolete_watcher_path():
+    assert not hasattr(composition, "PostgresCiWatcherDependencies")
+    assert not hasattr(postgres_leader_runner, "run_ci_watcher_once")
 
 
 def test_invalid_or_closed_factory_fails_without_fallback():
@@ -116,7 +143,6 @@ def test_borrowed_factory_closure_fails_on_later_use():
         with bundle.controller.workflow.read():
             pass
     assert bundle.controller.leadership._connection is None
-    assert bundle.ci_watcher.leadership._connection is None
 
 
 def test_constructor_failure_does_not_close_borrowed_factory(monkeypatch):

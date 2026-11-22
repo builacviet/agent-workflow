@@ -12,6 +12,10 @@ from agent_workflow.composition.postgres_controller import compose_postgres_cont
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.postgres_leadership import (
+    LeadershipDomain,
+    PostgresLeadershipLock,
+)
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.runners import coder_runtime
 from agent_workflow.storage.postgres_connection import PostgresFactory
@@ -133,7 +137,10 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
         compose_postgres_worker(
             {},
             service,
-            replace(dependencies, leadership=other.ci_watcher.leadership),
+            replace(
+                dependencies,
+                leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
+            ),
             leadership_guard=forbidden,
         )
     factory.close()
