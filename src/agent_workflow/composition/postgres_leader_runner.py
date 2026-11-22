@@ -11,16 +11,17 @@ from collections.abc import Callable
 
 from agent_workflow.application.ci.ports import ICiChecksReader
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
-from agent_workflow.infrastructure.ci.guarded_adapters import (
-    GuardedCiChecks,
-    GuardedCiState,
-)
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     PostgresCiWatcherDependencies,
     PostgresControllerDependencies,
 )
+from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.ci.guarded_adapters import (
+    GuardedCiChecks,
+    GuardedCiState,
+)
 from agent_workflow.integrations.github import WorkflowError
 
 
@@ -127,6 +128,7 @@ def run_ci_watcher_once(
         if not leadership.try_acquire():
             return None
         _require_owner(leadership)
+
         def require_owner() -> None:
             _require_owner(leadership)
 

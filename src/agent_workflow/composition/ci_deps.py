@@ -42,7 +42,9 @@ class PostgresCiStateDependencies:
     acknowledger: AcknowledgeCiEventUseCase
 
 
-def create_ci_state_dependencies(factory: PostgresFactory) -> PostgresCiStateDependencies:
+def create_ci_state_dependencies(
+    factory: PostgresFactory,
+) -> PostgresCiStateDependencies:
     """Assemble CI reader/repository without opening a Session.
 
     Resolve the session provider on each invocation so operator scopes and
