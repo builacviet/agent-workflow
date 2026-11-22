@@ -59,13 +59,13 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
 
     assert runtime.service.repository is dependencies.workflow
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
-    assert runtime.agent_runtime.ci is dependencies.ci_state.tracker
+    assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
     connect.assert_not_called()
     dispose.assert_not_called()
 
 
-@pytest.mark.parametrize("missing", ["workflow", "dispatch", "ci_state", "leadership"])
+@pytest.mark.parametrize("missing", ["workflow", "dispatch", "ci_tracking", "ci_repository", "ci_factory", "leadership"])
 def test_missing_or_wrong_controller_dependency_fails_closed(
     wiring, monkeypatch, missing
 ):
@@ -81,7 +81,7 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
             )
 
 
-@pytest.mark.parametrize("foreign", ["dispatch", "ci_state", "leadership"])
+@pytest.mark.parametrize("foreign", ["dispatch", "ci_factory", "leadership"])
 def test_mixed_factories_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
@@ -92,6 +92,19 @@ def test_mixed_factories_are_rejected(wiring, foreign):
             {},
             service,
             replace(dependencies, **{foreign: getattr(other, foreign)}),
+            leadership_guard=forbidden,
+        )
+
+
+@pytest.mark.parametrize("foreign", ["ci_tracking", "ci_repository"])
+def test_mixed_ci_operations_are_rejected(wiring, foreign):
+    _, dependencies, service = wiring
+    other = compose_postgres_controller(
+        PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
+    ).controller
+    with pytest.raises(TypeError, match="Worker requires"):
+        compose_postgres_worker(
+            {}, service, replace(dependencies, **{foreign: getattr(other, foreign)}),
             leadership_guard=forbidden,
         )
 
@@ -129,7 +142,7 @@ def test_missing_or_invalid_injection_cannot_fall_back(wiring, monkeypatch):
 
     injected = {
         "dispatch": dependencies.dispatch,
-        "ci": dependencies.ci_state.tracker,
+        "ci": dependencies.ci_tracking,
         "leadership_guard": lambda: True,
     }
     for port in injected:

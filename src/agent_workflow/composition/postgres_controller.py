@@ -2,17 +2,15 @@
 
 from dataclasses import dataclass
 
-from agent_workflow.application.ci.ports import ICiStateReader
+from agent_workflow.application.ci.ports import ICiStateReader, ICiWriteRepository
 from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
     AcknowledgeCiEventUseCase,
 )
 from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
-from agent_workflow.composition.ci_deps import (
-    PostgresCiStateDependencies,
-    create_ci_state_dependencies,
-)
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.composition.ci_deps import create_ci_state_adapters
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -29,7 +27,9 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 class PostgresControllerDependencies:
     workflow: PostgresWorkflowRepository
     dispatch: PostgresDispatchLedger
-    ci_state: PostgresCiStateDependencies
+    ci_tracking: TrackCiTaskUseCase
+    ci_repository: ICiWriteRepository
+    ci_factory: PostgresFactory
     leadership: PostgresLeadershipLock
 
 
@@ -60,18 +60,20 @@ def compose_postgres_controller(
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_state = create_ci_state_dependencies(factory)
+    ci_reader, ci_repository = create_ci_state_adapters(factory)
     return PostgresControllerComposition(
         controller=PostgresControllerDependencies(
             workflow=PostgresWorkflowRepository(factory),
             dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
-            ci_state=ci_state,
+            ci_tracking=TrackCiTaskUseCase(ci_repository),
+            ci_repository=ci_repository,
+            ci_factory=factory,
             leadership=PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER),
         ),
         ci_watcher=PostgresCiWatcherDependencies(
-            reader=ci_state.reader,
-            recorder=ci_state.recorder,
-            acknowledger=ci_state.acknowledger,
+            reader=ci_reader,
+            recorder=RecordCiEvidenceUseCase(ci_repository),
+            acknowledger=AcknowledgeCiEventUseCase(ci_repository),
             leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
         ),
     )

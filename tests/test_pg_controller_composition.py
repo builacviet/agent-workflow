@@ -16,12 +16,10 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
-from agent_workflow.composition.ci_deps import PostgresCiStateDependencies
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -74,12 +72,15 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
         "dev",
         "code",
     )
-    assert isinstance(bundle.controller.ci_state, PostgresCiStateDependencies)
-    assert not isinstance(bundle.controller.ci_state, PostgresControllerCiState)
-    assert bundle.controller.ci_state.factory is factory
-    assert bundle.ci_watcher.reader is bundle.controller.ci_state.reader
-    assert bundle.ci_watcher.recorder is bundle.controller.ci_state.recorder
-    assert bundle.ci_watcher.acknowledger is bundle.controller.ci_state.acknowledger
+    assert isinstance(bundle.controller.ci_tracking, TrackCiTaskUseCase)
+    assert bundle.controller.ci_tracking._repository is bundle.controller.ci_repository
+    assert bundle.controller.ci_factory is factory
+    assert (
+        bundle.ci_watcher.reader._session_scope
+        is bundle.controller.ci_repository._session_scope
+    )
+    assert bundle.ci_watcher.recorder._repository is bundle.controller.ci_repository
+    assert bundle.ci_watcher.acknowledger._repository is bundle.controller.ci_repository
     assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
     assert isinstance(bundle.ci_watcher.leadership, PostgresLeadershipLock)
     assert bundle.controller.leadership is not bundle.ci_watcher.leadership

@@ -2,7 +2,10 @@
 
 from collections.abc import Callable, Iterable
 
-from agent_workflow.composition.ci_deps import PostgresCiStateDependencies
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.composition.postgres_controller import (
     PostgresControllerDependencies,
 )
@@ -35,7 +38,9 @@ def compose_postgres_worker(
         raise TypeError("PostgreSQL Controller dependencies are required")
     workflow = dependencies.workflow
     dispatch = dependencies.dispatch
-    ci_state = dependencies.ci_state
+    ci_tracking = dependencies.ci_tracking
+    ci_repository = dependencies.ci_repository
+    ci_factory = dependencies.ci_factory
     leadership = dependencies.leadership
     if (
         not isinstance(workflow, PostgresWorkflowRepository)
@@ -46,7 +51,10 @@ def compose_postgres_worker(
     if (
         not isinstance(dispatch, PostgresDispatchLedger)
         or (dispatch.role, dispatch.phase) != ("dev", "code")
-        or not isinstance(ci_state, PostgresCiStateDependencies)
+        or not isinstance(ci_tracking, TrackCiTaskUseCase)
+        or not isinstance(ci_repository, SqlAlchemyCiStateRepository)
+        or ci_tracking._repository is not ci_repository
+        or not isinstance(ci_factory, PostgresFactory)
         or not isinstance(leadership, PostgresLeadershipLock)
         or leadership._key["domain"] != LeadershipDomain.CONTROLLER
         or not callable(leadership_guard)
@@ -60,7 +68,7 @@ def compose_postgres_worker(
         not isinstance(factory, PostgresFactory)
         or factory._closed
         or dispatch.factory is not factory
-        or ci_state.factory is not factory
+        or ci_factory is not factory
         or leadership._factory is not factory
     ):
         raise TypeError("Worker dependencies must share the open Controller factory")
@@ -79,6 +87,6 @@ def compose_postgres_worker(
         service,
         plugins=plugins,
         dispatch=dispatch,
-        ci=ci_state.tracker,
+        ci=ci_tracking,
         leadership_guard=guard,
     )

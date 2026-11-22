@@ -1,7 +1,6 @@
-"""Feature-local dependency assembly for Controller CI persistence."""
+"""Feature-local CI persistence assembly; database specifics stay in Composition."""
 
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -14,7 +13,6 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
 from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
-from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
     GuardedCiState,
@@ -30,41 +28,20 @@ from agent_workflow.infrastructure.database.repositories.ci_state_repository imp
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
-@dataclass(frozen=True)
-class PostgresCiStateDependencies:
-    """Composition-owned dependency bundle; it exposes no runtime facade."""
-
-    factory: PostgresFactory
-    reader: SqlAlchemyCiStateReader
-    repository: SqlAlchemyCiStateRepository
-    tracker: TrackCiTaskUseCase
-    recorder: RecordCiEvidenceUseCase
-    acknowledger: AcknowledgeCiEventUseCase
-
-
-def create_ci_state_dependencies(
+def create_ci_state_adapters(
     factory: PostgresFactory,
-) -> PostgresCiStateDependencies:
-    """Assemble CI reader/repository without opening a Session.
+) -> tuple[SqlAlchemyCiStateReader, SqlAlchemyCiStateRepository]:
+    """Wire adapters without a technology-specific dependency bundle.
 
-    Resolve the session provider on each invocation so operator scopes and
-    post-composition test replacements preserve the existing late binding.
+    Resolve sessions at invocation time for correct late binding, without
+    acquiring a database session during bootstrap.
     """
 
     def session_scope() -> AbstractContextManager[Session]:
         return factory.get_scoped_session()
 
     provider: SessionScope = session_scope
-    reader = SqlAlchemyCiStateReader(provider)
-    repository = SqlAlchemyCiStateRepository(provider)
-    return PostgresCiStateDependencies(
-        factory=factory,
-        reader=reader,
-        repository=repository,
-        tracker=TrackCiTaskUseCase(repository),
-        recorder=RecordCiEvidenceUseCase(repository),
-        acknowledger=AcknowledgeCiEventUseCase(repository),
-    )
+    return SqlAlchemyCiStateReader(provider), SqlAlchemyCiStateRepository(provider)
 
 
 def create_ci_pass_use_case(
@@ -73,14 +50,14 @@ def create_ci_pass_use_case(
     *,
     installation_id: int,
 ) -> RunCiPassUseCase:
-    """Assemble the entire guarded CI Application graph once at bootstrap."""
-    state = create_ci_state_dependencies(factory)
+    """Assemble guarded CI Application graph once at bootstrap."""
+    reader, repository = create_ci_state_adapters(factory)
     leadership = PostgresCiLeadershipScope(factory)
     reconciler = ReconcileCiUseCase(
         GuardedCiState(
-            reader=state.reader,
-            recorder=state.recorder,
-            acknowledger=state.acknowledger,
+            reader=reader,
+            recorder=RecordCiEvidenceUseCase(repository),
+            acknowledger=AcknowledgeCiEventUseCase(repository),
             require_owner=leadership.require_owner,
         ),
         GuardedCiChecks(checks, leadership.require_owner),

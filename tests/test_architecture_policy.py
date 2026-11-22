@@ -1074,3 +1074,23 @@ def test_r2_ast_rejects_callback_task_di():
         AssertionError, match="inject IUnitOfWork and ITaskAuthorizationRepository"
     ):
         _task_di(ast.parse(source), TASK_USE_CASE)
+
+
+def test_ci_composition_does_not_expose_postgres_state_bundle():
+    """CI wiring injects focused operations, never a DB-specific state facade."""
+    paths = (
+        SOURCE / "agent_workflow" / "composition" / "ci_deps.py",
+        SOURCE / "agent_workflow" / "composition" / "postgres_controller.py",
+        SOURCE / "agent_workflow" / "composition" / "postgres_worker.py",
+    )
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+        assert "PostgresCiStateDependencies" not in identifiers | classes
+        assert "CiStateAdapter" not in identifiers | classes
+    worker = ast.parse(paths[2].read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "ci_state"
+        for node in ast.walk(worker)
+    )
