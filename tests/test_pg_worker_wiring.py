@@ -59,7 +59,7 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
 
     assert runtime.service.repository is dependencies.workflow
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
-    assert runtime.agent_runtime.ci is dependencies.ci_state
+    assert runtime.agent_runtime.ci is dependencies.ci_state.tracker
     assert runtime.agent_runtime.require_ci_tracking is True
     connect.assert_not_called()
     dispose.assert_not_called()
@@ -129,7 +129,7 @@ def test_missing_or_invalid_injection_cannot_fall_back(wiring, monkeypatch):
 
     injected = {
         "dispatch": dependencies.dispatch,
-        "ci": dependencies.ci_state,
+        "ci": dependencies.ci_state.tracker,
         "leadership_guard": lambda: True,
     }
     for port in injected:
@@ -247,10 +247,10 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
 
     if tracked_head == INPUT:
         with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
-            runtime.agent_runtime.ci.track("T", 7, tracked_head)
+            runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         session.add.assert_not_called()
     else:
-        runtime.agent_runtime.ci.track("T", 7, tracked_head)
+        runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         binding = session.add.call_args.args[0]
         assert (
             binding.task_id,

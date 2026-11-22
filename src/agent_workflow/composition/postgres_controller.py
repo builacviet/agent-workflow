@@ -2,7 +2,17 @@
 
 from dataclasses import dataclass
 
-from agent_workflow.composition.ci_deps import ComposedCiState, create_ci_state
+from agent_workflow.application.ci.ports import ICiStateReader
+from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
+    AcknowledgeCiEventUseCase,
+)
+from agent_workflow.application.ci.use_cases.record_ci_evidence import (
+    RecordCiEvidenceUseCase,
+)
+from agent_workflow.composition.ci_deps import (
+    PostgresCiStateDependencies,
+    create_ci_state_dependencies,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -19,13 +29,15 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 class PostgresControllerDependencies:
     workflow: PostgresWorkflowRepository
     dispatch: PostgresDispatchLedger
-    ci_state: ComposedCiState
+    ci_state: PostgresCiStateDependencies
     leadership: PostgresLeadershipLock
 
 
 @dataclass(frozen=True)
 class PostgresCiWatcherDependencies:
-    ci_state: ComposedCiState
+    reader: ICiStateReader
+    recorder: RecordCiEvidenceUseCase
+    acknowledger: AcknowledgeCiEventUseCase
     leadership: PostgresLeadershipLock
 
 
@@ -48,7 +60,7 @@ def compose_postgres_controller(
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_state = create_ci_state(factory)
+    ci_state = create_ci_state_dependencies(factory)
     return PostgresControllerComposition(
         controller=PostgresControllerDependencies(
             workflow=PostgresWorkflowRepository(factory),
@@ -57,7 +69,9 @@ def compose_postgres_controller(
             leadership=PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER),
         ),
         ci_watcher=PostgresCiWatcherDependencies(
-            ci_state=ci_state,
+            reader=ci_state.reader,
+            recorder=ci_state.recorder,
+            acknowledger=ci_state.acknowledger,
             leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
         ),
     )

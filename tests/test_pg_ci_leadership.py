@@ -44,18 +44,20 @@ def live_pg_factory():
 
 def fixture(acquired=True):
     leader = Leader(acquired)
-    state = Mock()
-    state.pending_events.return_value = [
+    reader = Mock()
+    reader.pending_events.return_value = [
         WebhookNotification(DELIVERY, "workflow_run", "completed", REPO, 17, 31, SHA)
     ]
-    state.tracked.return_value = [
+    reader.tracked.return_value = [
         {
             "task_id": "T",
             "pr_number": 31,
             "head_sha": SHA,
         }
     ]
-    state.previous_failure.return_value = False
+    reader.previous_failure.return_value = False
+    recorder = Mock()
+    acknowledger = Mock()
     checks = Mock()
     checks.installation_id = 17
     checks.get_pull_request.return_value = {
@@ -82,22 +84,22 @@ def fixture(acquired=True):
             }
         ],
     }
-    return PostgresCiWatcherDependencies(state, leader), checks
+    return PostgresCiWatcherDependencies(reader, recorder, acknowledger, leader), checks
 
 
 def test_denied_or_error_does_not_read_or_settle():
     deps, checks = fixture(False)
     assert run_ci_watcher_once(deps, checks, installation_id=17, startup=True) is None
-    deps.ci_state.pending_events.assert_not_called()
+    deps.reader.pending_events.assert_not_called()
     checks.get_pull_request.assert_not_called()
-    deps.ci_state.record.assert_not_called()
+    deps.recorder.execute.assert_not_called()
     assert deps.leadership.release_calls == 1
 
     deps, checks = fixture()
     deps.leadership.try_acquire = Mock(side_effect=RuntimeError("offline"))
     with pytest.raises(RuntimeError):
         run_ci_watcher_once(deps, checks, installation_id=17)
-    deps.ci_state.pending_events.assert_not_called()
+    deps.reader.pending_events.assert_not_called()
     assert deps.leadership.release_calls == 1
 
 
@@ -105,12 +107,12 @@ def test_positive_iteration_records_and_acknowledges_then_retires():
     deps, checks = fixture()
     observed = run_ci_watcher_once(deps, checks, installation_id=17, startup=True)
     assert len(observed) == 1 and observed[0].verdict == "SUCCESS"
-    deps.ci_state.record.assert_called_once()
-    deps.ci_state.mark_processed.assert_called_once_with(DELIVERY)
+    deps.recorder.execute.assert_called_once()
+    deps.acknowledger.execute.assert_called_once_with(DELIVERY)
     assert checks.get_pull_request.call_count == 2
     assert deps.leadership.release_calls == 1
     assert run_ci_watcher_once(deps, checks, installation_id=17) is None
-    deps.ci_state.record.assert_called_once()
+    deps.recorder.execute.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -120,13 +122,13 @@ def test_positive_iteration_records_and_acknowledges_then_retires():
 def test_loss_stops_subsequent_ci_effects(lost_at):
     deps, checks = fixture()
     operation = {
-        "pending_events": deps.ci_state.pending_events,
+        "pending_events": deps.reader.pending_events,
         "tracked": deps.ci_state.tracked,
         "previous_failure": deps.ci_state.previous_failure,
         "pr": checks.get_pull_request,
         "checks": checks.list_check_runs,
-        "record": deps.ci_state.record,
-        "ack": deps.ci_state.mark_processed,
+        "record": deps.recorder.execute,
+        "ack": deps.acknowledger.execute,
     }[lost_at]
     original = operation.return_value
 
@@ -139,9 +141,9 @@ def test_loss_stops_subsequent_ci_effects(lost_at):
         run_ci_watcher_once(deps, checks, installation_id=17, startup=True)
     assert deps.leadership.release_calls == 1
     if lost_at in {"pending_events", "tracked", "previous_failure", "pr", "checks"}:
-        deps.ci_state.record.assert_not_called()
+        deps.recorder.execute.assert_not_called()
     if lost_at != "ack":
-        deps.ci_state.mark_processed.assert_not_called()
+        deps.acknowledger.execute.assert_not_called()
 
 
 def test_domains_can_operate_independently():
@@ -170,7 +172,7 @@ def test_live_pinned_sessions_contend_and_separate_domains(live_pg_factory):
         assert controller_owner.try_acquire()
         assert (
             run_ci_watcher_once(
-                PostgresCiWatcherDependencies(state, watcher),
+                PostgresCiWatcherDependencies(reader=state, recorder=Mock(), acknowledger=Mock(), leadership=watcher),
                 checks,
                 installation_id=17,
             )

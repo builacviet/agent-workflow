@@ -430,7 +430,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         )
         assert service.repository is deps.workflow
         assert runtime.agent_runtime.dispatch is deps.dispatch
-        assert runtime.agent_runtime.ci is deps.ci_state
+        assert runtime.agent_runtime.ci is deps.ci_state.tracker
         host = FakeHost(calls)
         host._validated_result = lambda *_: {
             "head_sha": HEAD,

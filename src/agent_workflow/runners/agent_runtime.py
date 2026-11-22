@@ -41,7 +41,7 @@ class DispatchEvidence(Protocol):
 
 
 class CiTracking(Protocol):
-    def track(self, task_id: str, pr_number: int, head_sha: str) -> None: ...
+    def execute(self, task_id: str, pr_number: int, head_sha: str) -> None: ...
 
 
 class RuntimeHost(Protocol):
@@ -178,7 +178,7 @@ class AgentRuntime:
         # CI remains BLOCKED until the separate Controller re-verifies HEAD.
         if track_ci and self.ci is not None:
             self.require_leadership()
-            self.ci.track(
+            self.ci.execute(
                 context["task_id"],
                 int(result["pr_url"].rsplit("/", 1)[1]),
                 result["head_sha"],

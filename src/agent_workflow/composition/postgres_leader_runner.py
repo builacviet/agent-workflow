@@ -7,19 +7,19 @@ or constructs a Worker/RuntimeHost.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
-from agent_workflow.application.ci.ports import (
-    ICiChecksReader,
-    ICiReconciliationState,
-)
+from agent_workflow.application.ci.ports import ICiChecksReader
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
+from agent_workflow.infrastructure.ci.guarded_adapters import (
+    GuardedCiChecks,
+    GuardedCiState,
+)
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     PostgresCiWatcherDependencies,
     PostgresControllerDependencies,
 )
-from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 
@@ -111,42 +111,6 @@ def run_controller_once(
         leadership.release()
 
 
-class _GuardedCiState:
-    def __init__(self, state: ICiReconciliationState, leadership: object) -> None:
-        self._state, self._leadership = state, leadership
-
-    def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
-        return _fenced(self._leadership, self._state.pending_events, limit)
-
-    def tracked(self, limit: int = 32) -> list[dict]:
-        return _fenced(self._leadership, self._state.tracked, limit)
-
-    def previous_failure(self, task_id: str, head_sha: str) -> bool:
-        return _fenced(
-            self._leadership, self._state.previous_failure, task_id, head_sha
-        )
-
-    def record(self, evidence: CiEvidence) -> None:
-        _fenced(self._leadership, self._state.record, evidence)
-
-    def mark_processed(self, delivery_id: str) -> None:
-        _fenced(self._leadership, self._state.mark_processed, delivery_id)
-
-
-class _GuardedChecks:
-    def __init__(self, checks: ICiChecksReader, leadership: object) -> None:
-        self._checks, self._leadership = checks, leadership
-        self.installation_id = checks.installation_id
-
-    def get_pull_request(self, repository: str, number: int) -> Mapping:
-        return _fenced(
-            self._leadership, self._checks.get_pull_request, repository, number
-        )
-
-    def list_check_runs(self, repository: str, sha: str) -> Mapping:
-        return _fenced(self._leadership, self._checks.list_check_runs, repository, sha)
-
-
 def run_ci_watcher_once(
     dependencies: PostgresCiWatcherDependencies,
     checks: ICiChecksReader,
@@ -163,9 +127,17 @@ def run_ci_watcher_once(
         if not leadership.try_acquire():
             return None
         _require_owner(leadership)
+        def require_owner() -> None:
+            _require_owner(leadership)
+
         coordinator = ReconcileCiUseCase(
-            _GuardedCiState(dependencies.ci_state, leadership),
-            _GuardedChecks(checks, leadership),
+            GuardedCiState(
+                reader=dependencies.reader,
+                recorder=dependencies.recorder,
+                acknowledger=dependencies.acknowledger,
+                require_owner=require_owner,
+            ),
+            GuardedCiChecks(checks, require_owner),
             installation_id=installation_id,
         )
         return _fenced(leadership, coordinator.execute, startup=startup)

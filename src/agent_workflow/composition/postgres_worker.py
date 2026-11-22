@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable
 
-from agent_workflow.composition.ci_deps import ComposedCiState
+from agent_workflow.composition.ci_deps import PostgresCiStateDependencies
 from agent_workflow.composition.postgres_controller import (
     PostgresControllerDependencies,
 )
@@ -46,7 +46,7 @@ def compose_postgres_worker(
     if (
         not isinstance(dispatch, PostgresDispatchLedger)
         or (dispatch.role, dispatch.phase) != ("dev", "code")
-        or not isinstance(ci_state, ComposedCiState)
+        or not isinstance(ci_state, PostgresCiStateDependencies)
         or not isinstance(leadership, PostgresLeadershipLock)
         or leadership._key["domain"] != LeadershipDomain.CONTROLLER
         or not callable(leadership_guard)
@@ -60,7 +60,7 @@ def compose_postgres_worker(
         not isinstance(factory, PostgresFactory)
         or factory._closed
         or dispatch.factory is not factory
-        or ci_state._factory is not factory
+        or ci_state.factory is not factory
         or leadership._factory is not factory
     ):
         raise TypeError("Worker dependencies must share the open Controller factory")
@@ -79,6 +79,6 @@ def compose_postgres_worker(
         service,
         plugins=plugins,
         dispatch=dispatch,
-        ci=ci_state,
+        ci=ci_state.tracker,
         leadership_guard=guard,
     )

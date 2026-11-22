@@ -28,7 +28,10 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
-from agent_workflow.composition.ci_deps import ComposedCiState, create_ci_state
+from agent_workflow.composition.ci_deps import (
+    PostgresCiStateDependencies,
+    create_ci_state_dependencies,
+)
 from agent_workflow.composition.postgres_ci_entrypoint import (
     run_postgres_ci_once,
     run_postgres_ci_watch,
@@ -90,16 +93,17 @@ def test_ci_dependencies_resolve_scoped_session_after_composition():
     factory = Mock(spec=PostgresFactory)
     original_scope = factory.get_scoped_session
 
-    state = create_ci_state(factory)
-    assert isinstance(state, ComposedCiState)
+    state = create_ci_state_dependencies(factory)
+    assert isinstance(state, PostgresCiStateDependencies)
     assert not isinstance(state, PostgresControllerCiState)
+    assert state.factory is factory
 
     original_scope.assert_not_called()
     replacement_scope = Mock()
     factory.get_scoped_session = replacement_scope
 
-    assert state._reader._session_scope() is replacement_scope.return_value
-    assert state._repository._session_scope() is replacement_scope.return_value
+    assert state.reader._session_scope() is replacement_scope.return_value
+    assert state.repository._session_scope() is replacement_scope.return_value
     assert replacement_scope.call_count == 2
 
 
@@ -703,10 +707,11 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
     state = PostgresControllerCiState(factory)
     state.track(task_id, PR, HEAD)
     add_delivery(factory, notification)
-    original_record = state.record
-    original_ack = state.mark_processed
-    state.record = Mock(wraps=original_record)
-    state.mark_processed = Mock(wraps=original_ack)
+    ci_dependencies = create_ci_state_dependencies(factory)
+    original_record = ci_dependencies.recorder.execute
+    original_ack = ci_dependencies.acknowledger.execute
+    ci_dependencies.recorder.execute = Mock(wraps=original_record)
+    ci_dependencies.acknowledger.execute = Mock(wraps=original_ack)
 
     leadership = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
     controller = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
@@ -728,7 +733,12 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
         return {}
 
     checks.get_pull_request = Mock(side_effect=blocked_request)
-    dependencies = PostgresCiWatcherDependencies(state, leadership)
+    dependencies = PostgresCiWatcherDependencies(
+        reader=ci_dependencies.reader,
+        recorder=ci_dependencies.recorder,
+        acknowledger=ci_dependencies.acknowledger,
+        leadership=leadership,
+    )
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
@@ -760,8 +770,8 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
             with pytest.raises(PermissionError, match="leadership lost"):
                 future.result(timeout=10)
         assert state.pending_events() == [notification]
-        state.record.assert_not_called()
-        state.mark_processed.assert_not_called()
+        ci_dependencies.recorder.execute.assert_not_called()
+        ci_dependencies.acknowledger.execute.assert_not_called()
     finally:
         resume.set()
         contender.release()
