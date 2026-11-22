@@ -1081,7 +1081,7 @@ def test_ci_composition_does_not_expose_postgres_state_bundle():
     paths = (
         SOURCE / "agent_workflow" / "composition" / "ci_deps.py",
         SOURCE / "agent_workflow" / "composition" / "postgres_controller.py",
-        SOURCE / "agent_workflow" / "composition" / "postgres_worker.py",
+        SOURCE / "agent_workflow" / "composition" / "worker_deps.py",
     )
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))

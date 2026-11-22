@@ -1,4 +1,4 @@
-"""Inert PostgreSQL state wiring for the trusted Worker runtime."""
+"""Compose a trusted Worker runtime from already assembled dependencies."""
 
 from collections.abc import Callable, Iterable
 
