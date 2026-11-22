@@ -79,10 +79,7 @@ def test_composition_borrows_factory_and_separates_leadership(monkeypatch):
     assert bundle.controller.ci_state.factory is factory
     assert bundle.ci_watcher.reader is bundle.controller.ci_state.reader
     assert bundle.ci_watcher.recorder is bundle.controller.ci_state.recorder
-    assert (
-        bundle.ci_watcher.acknowledger
-        is bundle.controller.ci_state.acknowledger
-    )
+    assert bundle.ci_watcher.acknowledger is bundle.controller.ci_state.acknowledger
     assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
     assert isinstance(bundle.ci_watcher.leadership, PostgresLeadershipLock)
     assert bundle.controller.leadership is not bundle.ci_watcher.leadership

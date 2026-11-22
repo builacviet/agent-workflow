@@ -46,9 +46,7 @@ def fixture(acquired=True):
     leader = Leader(acquired)
     reader = Mock()
     reader.pending_events.return_value = [
-        WebhookNotification(
-            DELIVERY, "workflow_run", "completed", REPO, 17, 31, SHA
-        )
+        WebhookNotification(DELIVERY, "workflow_run", "completed", REPO, 17, 31, SHA)
     ]
     reader.tracked.return_value = [
         {
@@ -175,11 +173,11 @@ def test_live_pinned_sessions_contend_and_separate_domains(live_pg_factory):
         assert (
             run_ci_watcher_once(
                 PostgresCiWatcherDependencies(
-                reader=state,
-                recorder=Mock(),
-                acknowledger=Mock(),
-                leadership=watcher,
-            ),
+                    reader=state,
+                    recorder=Mock(),
+                    acknowledger=Mock(),
+                    leadership=watcher,
+                ),
                 checks,
                 installation_id=17,
             )
