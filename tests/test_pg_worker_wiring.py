@@ -32,7 +32,7 @@ def wiring(monkeypatch, tmp_path):
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
     monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda self: None)
     factory = PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
-    dependencies = compose_postgres_controller(factory).controller
+    dependencies = compose_postgres_controller(factory)
     service = WorkflowService(repository=dependencies.workflow)
     return factory, dependencies, service
 
@@ -100,7 +100,7 @@ def test_mixed_factories_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
         PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
-    ).controller
+    )
     with pytest.raises(TypeError, match="share the open Controller factory"):
         compose_postgres_worker(
             {},
@@ -115,7 +115,7 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
         PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
-    ).controller
+    )
     with pytest.raises(TypeError, match="Worker requires"):
         compose_postgres_worker(
             {},
@@ -128,7 +128,7 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
 def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
     factory, dependencies, service = wiring
     other = compose_postgres_controller(factory)
-    unrelated_service = WorkflowService(repository=other.controller.workflow)
+    unrelated_service = WorkflowService(repository=other.workflow)
     with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
         compose_postgres_worker(
             {}, unrelated_service, dependencies, leadership_guard=forbidden

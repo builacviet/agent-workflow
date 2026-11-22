@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, make_url
 
 from agent_workflow.composition.postgres_controller import (
-    PostgresControllerDependencies,
+    ControllerDependencies,
 )
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.infrastructure.postgres_leadership import (
@@ -239,7 +239,7 @@ def _controller_process(mode, channel):
                 dispatch.claim.return_value = None
                 assignment = Mock(repository=workflow)
                 execute = Mock()
-                dependencies = PostgresControllerDependencies(
+                dependencies = ControllerDependencies(
                     workflow=workflow,
                     dispatch=dispatch,
                     ci_tracking=Mock(),

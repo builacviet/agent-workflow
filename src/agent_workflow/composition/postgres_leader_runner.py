@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
-    PostgresControllerDependencies,
+    ControllerDependencies,
 )
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
@@ -30,7 +30,7 @@ def _fenced(leadership: object, operation: Callable, *args: object, **kwargs: ob
 
 
 def run_controller_once(
-    dependencies: PostgresControllerDependencies,
+    dependencies: ControllerDependencies,
     assignment: WorkflowService,
     task_ids: set[str],
     execute: Callable[[dict, dict, Callable[[], None]], str],

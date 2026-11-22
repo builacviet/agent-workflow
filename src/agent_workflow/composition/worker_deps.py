@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition.postgres_controller import (
-    PostgresControllerDependencies,
+    ControllerDependencies,
 )
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
@@ -24,7 +24,7 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 def compose_postgres_worker(
     config: dict,
     service: WorkflowService,
-    dependencies: PostgresControllerDependencies,
+    dependencies: ControllerDependencies,
     *,
     leadership_guard: Callable[[], None],
     plugins: Iterable[AgentRuntimePlugin] = (),
@@ -34,7 +34,7 @@ def compose_postgres_worker(
     Constructing the runtime performs no ownership check or Worker execution.
     The Controller caller owns the factory and the leadership session.
     """
-    if not isinstance(dependencies, PostgresControllerDependencies):
+    if not isinstance(dependencies, ControllerDependencies):
         raise TypeError("PostgreSQL Controller dependencies are required")
     workflow = dependencies.workflow
     dispatch = dependencies.dispatch

@@ -167,8 +167,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     config, monkeypatch, outcome, offline_factory
 ):
     factory = offline_factory
-    composition = compose_postgres_controller(factory)
-    deps = composition.controller
+    deps = compose_postgres_controller(factory)
     events = []
     held = True
     claim = {
@@ -210,7 +209,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(
         entry,
         "compose_postgres_controller",
-        lambda borrowed: composition if borrowed is factory else forbidden(),
+        lambda borrowed: deps if borrowed is factory else forbidden(),
     )
     monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
     monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
@@ -341,12 +340,9 @@ def test_pg_once_runs_native_dev_stages(
     }
 
     factory = offline_factory
-    composition = compose_postgres_controller(factory)
-    deps = composition.controller
+    deps = compose_postgres_controller(factory)
     monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
-    monkeypatch.setattr(
-        entry, "compose_postgres_controller", Mock(return_value=composition)
-    )
+    monkeypatch.setattr(entry, "compose_postgres_controller", Mock(return_value=deps))
     claim_task = Mock(return_value=claim)
     events = Mock()
     held = True

@@ -20,7 +20,7 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 @dataclass(frozen=True)
-class PostgresControllerDependencies:
+class ControllerDependencies:
     workflow: PostgresWorkflowRepository
     dispatch: PostgresDispatchLedger
     ci_tracking: TrackCiTaskUseCase
@@ -29,14 +29,7 @@ class PostgresControllerDependencies:
     leadership: PostgresLeadershipLock
 
 
-@dataclass(frozen=True)
-class PostgresControllerComposition:
-    controller: PostgresControllerDependencies
-
-
-def compose_postgres_controller(
-    factory: PostgresFactory,
-) -> PostgresControllerComposition:
+def compose_postgres_controller(factory: PostgresFactory) -> ControllerDependencies:
     """Borrow an already opened factory; the caller retains its entire lifetime.
 
     Only adapter and lock handles are constructed. In particular, no advisory
@@ -48,13 +41,11 @@ def compose_postgres_controller(
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
     ci_repository = SqlAlchemyCiStateRepository(lambda: factory.get_scoped_session())
-    return PostgresControllerComposition(
-        controller=PostgresControllerDependencies(
-            workflow=PostgresWorkflowRepository(factory),
-            dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
-            ci_tracking=TrackCiTaskUseCase(ci_repository),
-            ci_repository=ci_repository,
-            ci_factory=factory,
-            leadership=PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER),
-        ),
+    return ControllerDependencies(
+        workflow=PostgresWorkflowRepository(factory),
+        dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
+        ci_tracking=TrackCiTaskUseCase(ci_repository),
+        ci_repository=ci_repository,
+        ci_factory=factory,
+        leadership=PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER),
     )

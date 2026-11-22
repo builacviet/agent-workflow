@@ -3,7 +3,7 @@
 import socket
 import sqlite3
 import subprocess
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError
 from unittest.mock import Mock
 
 import pytest
@@ -80,42 +80,40 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
         init_lock(lock, lock_factory, domain)
 
     monkeypatch.setattr(PostgresLeadershipLock, "__init__", track_lock)
-    bundle = composition.compose_postgres_controller(factory)
+    dependencies = composition.compose_postgres_controller(factory)
 
-    assert [field.name for field in fields(bundle)] == ["controller"]
-    assert isinstance(bundle.controller.workflow, PostgresWorkflowRepository)
-    assert bundle.controller.workflow.factory is factory
-    assert isinstance(bundle.controller.dispatch, PostgresDispatchLedger)
+    assert isinstance(dependencies, composition.ControllerDependencies)
+    assert isinstance(dependencies.workflow, PostgresWorkflowRepository)
+    assert dependencies.workflow.factory is factory
+    assert isinstance(dependencies.dispatch, PostgresDispatchLedger)
     assert (
-        bundle.controller.dispatch.factory,
-        bundle.controller.dispatch.role,
-        bundle.controller.dispatch.phase,
+        dependencies.dispatch.factory,
+        dependencies.dispatch.role,
+        dependencies.dispatch.phase,
     ) == (
         factory,
         "dev",
         "code",
     )
-    assert isinstance(bundle.controller.ci_tracking, TrackCiTaskUseCase)
-    assert isinstance(bundle.controller.ci_repository, SqlAlchemyCiStateRepository)
-    assert bundle.controller.ci_tracking._repository is bundle.controller.ci_repository
-    assert bundle.controller.ci_factory is factory
-    assert isinstance(bundle.controller.leadership, PostgresLeadershipLock)
+    assert isinstance(dependencies.ci_tracking, TrackCiTaskUseCase)
+    assert isinstance(dependencies.ci_repository, SqlAlchemyCiStateRepository)
+    assert dependencies.ci_tracking._repository is dependencies.ci_repository
+    assert dependencies.ci_factory is factory
+    assert isinstance(dependencies.leadership, PostgresLeadershipLock)
     constructed_locks.assert_called_once_with(factory, LeadershipDomain.CONTROLLER)
-    assert bundle.controller.leadership._key["domain"] == LeadershipDomain.CONTROLLER
-    assert bundle.controller.leadership._connection is None
+    assert dependencies.leadership._key["domain"] == LeadershipDomain.CONTROLLER
+    assert dependencies.leadership._connection is None
     assert factory._closed is False
     factory._engine.assert_not_called()
     forbidden.assert_not_called()
     for method in ("run", "start", "activate", "close"):
-        assert not hasattr(bundle, method)
+        assert not hasattr(dependencies, method)
     with pytest.raises(FrozenInstanceError):
-        bundle.controller = None
+        dependencies.workflow = None
 
     scoped_session = Mock()
     monkeypatch.setattr(factory, "get_scoped_session", scoped_session)
-    assert (
-        bundle.controller.ci_repository._session_scope() is scoped_session.return_value
-    )
+    assert dependencies.ci_repository._session_scope() is scoped_session.return_value
     scoped_session.assert_called_once_with()
 
 
@@ -136,13 +134,13 @@ def test_invalid_or_closed_factory_fails_without_fallback():
 
 def test_borrowed_factory_closure_fails_on_later_use():
     factory = _opened_factory()
-    bundle = composition.compose_postgres_controller(factory)
+    dependencies = composition.compose_postgres_controller(factory)
     factory.close()
 
     with pytest.raises(PostgresUnavailableError, match="factory is closed"):
-        with bundle.controller.workflow.read():
+        with dependencies.workflow.read():
             pass
-    assert bundle.controller.leadership._connection is None
+    assert dependencies.leadership._connection is None
 
 
 def test_constructor_failure_does_not_close_borrowed_factory(monkeypatch):

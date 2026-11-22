@@ -15,7 +15,7 @@ from test_agent_workflow import HEAD, NEXT, spec
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
-    PostgresControllerDependencies,
+    ControllerDependencies,
 )
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.domain.service import WorkflowService
@@ -109,7 +109,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
             factory, role="dev", phase="code", clock=lambda: 1000.0
         )
         leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
-        dependencies = PostgresControllerDependencies(
+        dependencies = ControllerDependencies(
             workflow=service.repository,
             dispatch=successor,
             ci_tracking=Mock(),
@@ -420,14 +420,14 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         return factory
 
     def compose_controller(factory):
-        composition = original_controller(factory)
+        dependencies = original_controller(factory)
         if fault == "finish":
             monkeypatch.setattr(
-                composition.controller.dispatch,
+                dependencies.dispatch,
                 "finish",
                 Mock(side_effect=RuntimeError("uncertain finish")),
             )
-        return composition
+        return dependencies
 
     def compose_worker(config, service, deps, *, leadership_guard):
         runtime = original_compose(
