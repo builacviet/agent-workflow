@@ -1,11 +1,15 @@
 """Run one CI pass only under an injected leadership port."""
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
-from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
+from agent_workflow.application.ci.use_cases.run_ci_pass import (
+    CiPassResult,
+    RunCiPassUseCase,
+)
 
 
 class _Leadership:
@@ -21,19 +25,30 @@ class _Leadership:
             self.events.append("exit")
 
 
-def test_pass_is_called_inside_scope_and_returns_same_evidence():
+def test_pass_is_called_inside_scope_and_returns_observation_counts():
     leadership = _Leadership()
-    response = (object(),)
+    evidence = tuple(
+        SimpleNamespace(verdict=verdict)
+        for verdict in ("SUCCESS", "BLOCKED", "FAILURE", "BLOCKED")
+    )
     reconciler = Mock()
 
     def reconcile(*, startup):
         assert leadership.events == ["enter"]
         assert startup is True
-        return response
+        return evidence
 
     reconciler.execute.side_effect = reconcile
-    assert RunCiPassUseCase(reconciler, leadership).execute(startup=True) is response
+    assert RunCiPassUseCase(reconciler, leadership).execute(
+        startup=True
+    ) == CiPassResult(observed_count=4, blocked_count=2)
     assert leadership.events == ["enter", "exit"]
+
+
+def test_empty_pass_returns_zero_observation_counts():
+    reconciler = Mock()
+    reconciler.execute.return_value = ()
+    assert RunCiPassUseCase(reconciler, _Leadership()).execute() == CiPassResult(0, 0)
 
 
 def test_pass_error_unwinds_scope_without_retry():

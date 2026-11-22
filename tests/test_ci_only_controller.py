@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.ci.use_cases.run_ci_pass import CiPassResult
 from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.integrations.github import WorkflowError
@@ -152,10 +153,8 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
 
 def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
-    verdicts = ["BLOCKED"] * 7 + ["SUCCESS", "SUCCESS"]
-    use_case.execute.side_effect = [
-        (Namespace(verdict=verdict),) for verdict in verdicts
-    ]
+    results = [CiPassResult(1, 1)] * 7 + [CiPassResult(1, 0)] * 2
+    use_case.execute.side_effect = results
     sleeps = []
 
     postgres_ci_entrypoint.run_postgres_ci_watch(
@@ -163,7 +162,7 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
         app_config,
         checks=checks,
         sleep=sleeps.append,
-        stop=lambda: use_case.execute.call_count == len(verdicts),
+        stop=lambda: use_case.execute.call_count == len(results),
     )
 
     assert [call.kwargs["startup"] for call in use_case.execute.call_args_list] == [
@@ -182,7 +181,7 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
 def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure):
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
     use_case.execute.side_effect = [
-        (Namespace(verdict="SUCCESS"),),
+        CiPassResult(1, 0),
         failure,
     ]
     sleeps = []
@@ -212,7 +211,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
 
     factory.__exit__.reset_mock()
     use_case.execute.reset_mock(side_effect=True)
-    use_case.execute.return_value = ()
+    use_case.execute.return_value = CiPassResult(0, 0)
     with pytest.raises(KeyboardInterrupt):
         postgres_ci_entrypoint.run_postgres_ci_watch(
             config,
@@ -230,12 +229,8 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
 
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
     use_case.execute.side_effect = [
-        (
-            Namespace(verdict="SUCCESS"),
-            Namespace(verdict="BLOCKED"),
-            Namespace(verdict="FAILURE"),
-        ),
-        (),
+        CiPassResult(3, 1),
+        CiPassResult(0, 0),
     ]
 
     with postgres_ci_entrypoint.compose_ci_execution(

@@ -1,8 +1,7 @@
 """Typed Presentation boundary for Controller CI one-shot and watch commands.
 
 The CLI owns argument interpretation, result display and retry scheduling.
-A composition-provided operation performs the actual guarded reconciliation.
-No PostgreSQL, GitHub clients, or Domain evidence enter this API.
+The injected Application use case performs the guarded reconciliation.
 """
 
 import argparse
@@ -11,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
-from agent_workflow.domain.ci_evidence import CiEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,18 +38,11 @@ class CiController:
         self._use_case = use_case
 
     def reconcile(self, request: CiRunRequest) -> CiRunResponse:
-        observations = self._use_case.execute(startup=request.startup)
-        return present_ci_observations(observations)
-
-
-def present_ci_observations(
-    observations: tuple[CiEvidence, ...],
-) -> CiRunResponse:
-    """Map trusted Application evidence into the CLI response DTO."""
-    return CiRunResponse(
-        observed_count=len(observations),
-        blocked_count=sum(e.verdict == "BLOCKED" for e in observations),
-    )
+        result = self._use_case.execute(startup=request.startup)
+        return CiRunResponse(
+            observed_count=result.observed_count,
+            blocked_count=result.blocked_count,
+        )
 
 
 def add_ci_arguments(parser: argparse.ArgumentParser) -> None:

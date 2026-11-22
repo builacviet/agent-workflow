@@ -1,10 +1,10 @@
 """CI Controller presentation transports typed request/response objects."""
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.ci.use_cases.run_ci_pass import CiPassResult
 from agent_workflow.interfaces.cli import ci_controller
 
 
@@ -58,13 +58,12 @@ def test_watch_does_not_consume_runtime_errors(failure):
     reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
 
 
-def test_presenter_maps_domain_verdicts_to_typed_response():
+def test_controller_maps_application_result_to_typed_response():
+    use_case = Mock()
+    use_case.execute.return_value = CiPassResult(observed_count=3, blocked_count=1)
+    controller = ci_controller.CiController(use_case)
 
-    observations = (
-        SimpleNamespace(verdict="BLOCKED"),
-        SimpleNamespace(verdict="SUCCESS"),
-        SimpleNamespace(verdict="FAILURE"),
-    )
-    assert ci_controller.present_ci_observations(observations) == (
+    assert controller.reconcile(ci_controller.CiRunRequest(startup=True)) == (
         ci_controller.CiRunResponse(observed_count=3, blocked_count=1)
     )
+    use_case.execute.assert_called_once_with(startup=True)
