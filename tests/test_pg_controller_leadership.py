@@ -53,7 +53,14 @@ def fixture(acquired=True):
     assignment.repository = deps_workflow = Mock()
     assignment.get_coder_assignment.return_value = ASSIGNMENT.copy()
     execute = Mock(return_value=SHA)
-    deps = PostgresControllerDependencies(deps_workflow, dispatch, Mock(), leader)
+    deps = PostgresControllerDependencies(
+        workflow=deps_workflow,
+        dispatch=dispatch,
+        ci_tracking=Mock(),
+        ci_repository=Mock(),
+        ci_factory=Mock(),
+        leadership=leader,
+    )
     return deps, assignment, execute
 
 
