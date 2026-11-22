@@ -5,14 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
-from queue import Queue
 from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, delete, event, func, select, text, update
+from sqlalchemy import create_engine, delete, event, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import NullPool
@@ -20,12 +19,6 @@ from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 from test_ci_controller import FakeChecks
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
-    AcknowledgeCiEventUseCase,
-)
-from agent_workflow.application.ci.use_cases.record_ci_evidence import (
-    RecordCiEvidenceUseCase,
-)
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.exceptions import (
     ApplicationError,
@@ -39,8 +32,6 @@ from agent_workflow.composition.postgres_ci_entrypoint import (
     run_postgres_ci_once,
     run_postgres_ci_watch,
 )
-from agent_workflow.composition.postgres_controller import PostgresCiWatcherDependencies
-from agent_workflow.composition.postgres_leader_runner import run_ci_watcher_once
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
@@ -53,6 +44,7 @@ from agent_workflow.infrastructure.database.repositories.webhook_inbox_repositor
     SqlAlchemyWebhookInboxRepository,
 )
 from agent_workflow.infrastructure.postgres_leadership import (
+    _WORKFLOW_NAMESPACE,
     LeadershipDomain,
     PostgresLeadershipLock,
 )
@@ -710,83 +702,94 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
 
 
 def test_lost_watcher_session_keeps_real_inbox_pending(setup):
-    _, factory, service, task_id, (notification, _) = setup
+    config, factory, service, task_id, (notification, _) = setup
     handoff(service, task_id, HEAD)
     state = PostgresControllerCiState(factory)
     state.track(task_id, PR, HEAD)
     add_delivery(factory, notification)
-    ci_reader, ci_repository = create_ci_state_adapters(factory)
-    recorder = RecordCiEvidenceUseCase(ci_repository)
-    acknowledger = AcknowledgeCiEventUseCase(ci_repository)
-    original_record = recorder.execute
-    original_ack = acknowledger.execute
-    recorder.execute = Mock(wraps=original_record)
-    acknowledger.execute = Mock(wraps=original_ack)
-
-    leadership = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
-    controller = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
-    contender = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
     entered = Event()
     resume = Event()
-    backend_ids = Queue(maxsize=1)
-    checks = FakeChecks()
-    checks.installation_id = INSTALLATION
+    checks = FakeChecks(head=HEAD)
+    list_check_runs = checks.list_check_runs
 
-    def blocked_request(*_args):
-        connection = leadership._connection
-        assert connection is not None
-        with connection.begin():
-            pid = connection.scalar(select(func.pg_backend_pid()))
-        backend_ids.put(pid)
+    def blocked_request(repository, sha):
         entered.set()
-        assert resume.wait(10)
-        return {}
+        assert resume.wait(20)
+        return list_check_runs(repository, sha)
 
-    checks.get_pull_request = Mock(side_effect=blocked_request)
-    dependencies = PostgresCiWatcherDependencies(
-        reader=ci_reader,
-        recorder=recorder,
-        acknowledger=acknowledger,
-        leadership=leadership,
-    )
-    try:
+    checks.list_check_runs = Mock(side_effect=blocked_request)
+    with (
+        PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller,
+        PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as contender,
+    ):
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
-                run_ci_watcher_once,
-                dependencies,
-                checks,
-                installation_id=INSTALLATION,
+                run_postgres_ci_once,
+                {
+                    "controller_github_app": {
+                        "app_id": 1,
+                        "installation_id": INSTALLATION,
+                        "pem": "controller.pem",
+                    }
+                },
+                config,
+                checks=checks,
             )
-            assert entered.wait(10)
-            pid = backend_ids.get(timeout=1)
-            assert controller.try_acquire()
-            assert not contender.try_acquire()
-            with factory.transaction() as connection:
-                assert (
-                    connection.scalar(
+            try:
+                assert entered.wait(10)
+                assert controller.try_acquire()
+                assert not contender.try_acquire()
+                with factory.transaction() as connection:
+                    pid = connection.execute(
                         text(
-                            "SELECT datname = current_database() AND usename = current_user "
-                            "FROM pg_stat_activity WHERE pid = :pid"
+                            """
+                            SELECT locks.pid
+                            FROM pg_catalog.pg_locks AS locks
+                            JOIN pg_catalog.pg_stat_activity AS activity USING (pid)
+                            WHERE locks.locktype = 'advisory'
+                              AND locks.classid = :namespace
+                              AND locks.objid = :domain
+                              AND locks.objsubid = 2
+                              AND locks.mode = 'ExclusiveLock'
+                              AND locks.granted
+                              AND activity.datname = current_database()
+                              AND activity.usename = current_user
+                            """
                         ),
-                        {"pid": pid},
+                        {
+                            "namespace": _WORKFLOW_NAMESPACE,
+                            "domain": int(LeadershipDomain.CI_WATCHER),
+                        },
+                    ).scalar_one()
+                    assert (
+                        connection.scalar(
+                            text("SELECT pg_catalog.pg_terminate_backend(:pid, 5000)"),
+                            {"pid": pid},
+                        )
+                        is True
                     )
-                    is True
-                )
-                assert (
-                    connection.scalar(select(func.pg_terminate_backend(pid, 5000)))
-                    is True
-                )
-            resume.set()
+            finally:
+                resume.set()
             with pytest.raises(PermissionError, match="leadership lost"):
                 future.result(timeout=10)
-        assert state.pending_events() == [notification]
-        recorder.execute.assert_not_called()
-        acknowledger.execute.assert_not_called()
-    finally:
-        resume.set()
-        contender.release()
-        controller.release()
-        leadership.release()
+        assert controller.is_held()
+        with PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as successor:
+            assert successor.try_acquire()
+
+    checks.list_check_runs.assert_called_once_with(REPO, HEAD)
+    assert checks.calls == 2  # Initial PR read and the blocked Checks read.
+    assert observations(factory, task_id) == []
+    assert not state.approved(task_id, HEAD)
+    assert state.pending_events() == [notification]
+    with factory.transaction() as connection:
+        assert (
+            connection.scalar(
+                select(CIProcessedDelivery.delivery_id).where(
+                    CIProcessedDelivery.delivery_id == notification.delivery_id
+                )
+            )
+            is None
+        )
 
 
 def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
