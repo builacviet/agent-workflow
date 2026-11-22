@@ -110,7 +110,12 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
         )
         leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
         dependencies = PostgresControllerDependencies(
-            service.repository, successor, Mock(), leadership
+            workflow=service.repository,
+            dispatch=successor,
+            ci_tracking=Mock(),
+            ci_repository=Mock(),
+            ci_factory=Mock(),
+            leadership=leadership,
         )
         return run_controller_once(dependencies, service, {task_id}, simulated_publish)
 

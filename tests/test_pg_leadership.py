@@ -240,7 +240,12 @@ def _controller_process(mode, channel):
                 assignment = Mock(repository=workflow)
                 execute = Mock()
                 dependencies = PostgresControllerDependencies(
-                    workflow, dispatch, Mock(), lock
+                    workflow=workflow,
+                    dispatch=dispatch,
+                    ci_tracking=Mock(),
+                    ci_repository=Mock(),
+                    ci_factory=Mock(),
+                    leadership=lock,
                 )
                 acquired = run_controller_once(
                     dependencies, assignment, {"PG03-C-test"}, execute
