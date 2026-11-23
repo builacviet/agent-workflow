@@ -12,7 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
@@ -195,8 +197,18 @@ def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
         webhook_entrypoint.main()
 
 
-@pytest.mark.parametrize("error_type", [PostgresUnavailableError, RuntimeError])
-def test_pg_persistence_failure_returns_503_and_retry_succeeds(error_type):
+@pytest.mark.parametrize(
+    ("error_type", "expected_status"),
+    [
+        (PostgresUnavailableError, 503),
+        (RuntimeError, 500),
+        (InvalidApplicationRequestError, 400),
+        (DomainError, 409),
+    ],
+)
+def test_http_layer_maps_error_by_ownership_and_allows_retry(
+    error_type, expected_status
+):
     class FailingInbox:
         def __init__(self):
             self.calls = 0
@@ -215,7 +227,10 @@ def test_pg_persistence_failure_returns_503_and_retry_succeeds(error_type):
     try:
         body = payload()
         headers = signed(body)
-        assert send(server.server_address[1], body=body, headers=headers) == 503
+        assert (
+            send(server.server_address[1], body=body, headers=headers)
+            == expected_status
+        )
         assert send(server.server_address[1], body=body, headers=headers) == 202
         assert inbox.calls == 2
     finally:

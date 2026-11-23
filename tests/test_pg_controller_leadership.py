@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from agent_workflow.composition.postgres_controller import (
-    PostgresControllerDependencies,
+    ControllerDependencies,
 )
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.integrations.github import WorkflowError
@@ -53,7 +53,14 @@ def fixture(acquired=True):
     assignment.repository = deps_workflow = Mock()
     assignment.get_coder_assignment.return_value = ASSIGNMENT.copy()
     execute = Mock(return_value=SHA)
-    deps = PostgresControllerDependencies(deps_workflow, dispatch, Mock(), leader)
+    deps = ControllerDependencies(
+        workflow=deps_workflow,
+        dispatch=dispatch,
+        ci_tracking=Mock(),
+        ci_repository=Mock(),
+        ci_factory=Mock(),
+        leadership=leader,
+    )
     return deps, assignment, execute
 
 

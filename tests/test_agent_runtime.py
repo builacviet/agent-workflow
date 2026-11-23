@@ -34,7 +34,7 @@ class FakeCi:
     def __init__(self, calls: list) -> None:
         self.calls = calls
 
-    def track(self, *args) -> None:
+    def execute(self, *args) -> None:
         self.calls.append(("ci", *args))
 
 
@@ -217,7 +217,7 @@ def test_state_port_exception_propagates_without_republish(monkeypatch, failed_p
         def fail_ci(*args):
             raise RuntimeError("ci unavailable")
 
-        ci.track = fail_ci
+        ci.execute = fail_ci
 
     runtime = AgentRuntime(FakeHost(calls), dispatch, ci)
     with pytest.raises(RuntimeError, match=f"{failed_port} unavailable"):

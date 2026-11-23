@@ -2,7 +2,7 @@
 
 import re
 
-from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 REPOSITORY = "builacviet/agent-workflow"
 LEGACY_REPOSITORY = "builacviet/techlead-review-poc"
@@ -15,8 +15,8 @@ def canonical_repository(repository: str) -> str:
     return repository
 
 
-class WorkflowError(DomainError):
-    """Invalid workflow input/state."""
+# Legacy public name; new R2 code uses DomainError from domain.exceptions.
+WorkflowError = BusinessRuleError
 
 
 def validate_sha(sha: str) -> None:

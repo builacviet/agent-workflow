@@ -10,6 +10,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    PersistenceUnavailableError,
+)
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.integrations.github_webhook import (
     GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
 )
@@ -98,8 +103,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 self.headers.raw_items(),
                 body,
             )
-        except (OSError, RuntimeError, ValueError):
+        except InvalidApplicationRequestError:
+            status = HTTPStatus.BAD_REQUEST
+        except DomainError:
+            status = HTTPStatus.CONFLICT
+        except (PersistenceUnavailableError, OSError):
             status = HTTPStatus.SERVICE_UNAVAILABLE
+        except Exception:
+            # Unexpected application/transport failures are internal errors.
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
         return self._reply(status)
 
     def do_GET(self) -> None:

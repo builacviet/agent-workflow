@@ -312,6 +312,9 @@ class _SqliteCiTracking:
 
         ControllerCiState(self.service.db_path).track(task_id, pr_number, head_sha)
 
+    def execute(self, task_id: str, pr_number: int, head_sha: str) -> None:
+        self.track(task_id, pr_number, head_sha)
+
 
 class CoderRuntime:
     def __init__(
@@ -336,7 +339,7 @@ class CoderRuntime:
                 or not callable(getattr(dispatch, "retire_pre_launch", None))
                 or not callable(getattr(dispatch, "record_runtime_evidence", None))
                 or ci is None
-                or not callable(getattr(ci, "track", None))
+                or not callable(getattr(ci, "execute", None))
                 or not callable(leadership_guard)
             ):
                 raise TypeError(

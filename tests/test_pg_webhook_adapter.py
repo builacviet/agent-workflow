@@ -19,6 +19,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.composition import webhook_entrypoint
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
@@ -26,7 +30,6 @@ from agent_workflow.infrastructure.database.repositories.webhook_inbox_repositor
 )
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
-    PostgresUnavailableError,
 )
 from agent_workflow.storage.webhook_inbox import (
     InboxResult,
@@ -309,7 +312,7 @@ def test_invalid_input_is_rejected_before_connecting():
         (notification, ""),
         (notification, b"digest"),
     ]:
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidApplicationRequestError):
             use_case.execute(invalid, digest)
     factory.get_scoped_session.assert_not_called()
 
@@ -335,7 +338,7 @@ def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, deliver
 
         event.listen(engine, "commit", fail_commit)
         try:
-            with pytest.raises(PostgresUnavailableError) as exc:
+            with pytest.raises(PersistenceUnavailableError) as exc:
                 inbox.record(delivery, digest)
             assert str(exc.value) == "PostgreSQL webhook inbox operation failed"
             assert exc.value.__suppress_context__
@@ -358,7 +361,7 @@ def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, deliver
         event.listen(engine, "before_cursor_execute", fail_read, retval=True)
         try:
             with pytest.raises(
-                PostgresUnavailableError,
+                PersistenceUnavailableError,
                 match="^PostgreSQL webhook inbox operation failed$",
             ):
                 inbox.get(delivery.delivery_id)

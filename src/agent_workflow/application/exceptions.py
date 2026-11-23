@@ -5,6 +5,10 @@ class ApplicationError(RuntimeError):
     """A failure at the application boundary."""
 
 
+class InvalidApplicationRequestError(ApplicationError):
+    """Invalid caller input or application configuration."""
+
+
 class PersistenceError(ApplicationError):
     """Failure to access or interpret persisted workflow state."""
 

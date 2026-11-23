@@ -6,7 +6,7 @@ from pathlib import Path
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
-from agent_workflow.composition.postgres_worker import compose_postgres_worker
+from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.integrations.github_app_checks import ControllerAppToken
@@ -82,7 +82,7 @@ def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
     """Own exactly one factory; borrow its adapters only after trusted validation."""
     _validate(config, app_config)
     with PostgresFactory.open(app_config) as factory:
-        dependencies = compose_postgres_controller(factory).controller
+        dependencies = compose_postgres_controller(factory)
         service = WorkflowService(
             repository=dependencies.workflow, require_ci=app_config.ci_gate_required
         )

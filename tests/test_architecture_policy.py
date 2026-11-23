@@ -260,6 +260,43 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
     assert "sqlalchemy.orm" in imports(repo_path)
 
 
+def test_ci_reader_repository_keep_session_and_transaction_boundaries():
+    base = SOURCE / "agent_workflow" / "infrastructure" / "database" / "repositories"
+    reader_path = base / "ci_state_reader.py"
+    repository_path = base / "ci_state_repository.py"
+    reader_tree = ast.parse(reader_path.read_text(encoding="utf-8"))
+    repository_tree = ast.parse(repository_path.read_text(encoding="utf-8"))
+
+    for path, tree in (
+        (reader_path, reader_tree),
+        (repository_path, repository_tree),
+    ):
+        assert "PostgresFactory" not in {
+            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+        }, f"{path.relative_to(ROOT)} must receive a Session provider"
+        assert not any(
+            isinstance(node, ast.Attribute) and node.attr == "repository_session"
+            for node in ast.walk(tree)
+        ), f"{path.relative_to(ROOT)} must open a fresh scoped Session"
+
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "commit"
+        for node in ast.walk(reader_tree)
+    ), f"{reader_path.relative_to(ROOT)} must not commit"
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "commit"
+        for node in ast.walk(repository_tree)
+    ), f"{repository_path.relative_to(ROOT)} must use Session.begin()"
+    assert {
+        node.name for node in ast.walk(reader_tree) if isinstance(node, ast.FunctionDef)
+    } >= {"tracked", "previous_failure", "approved", "pending_events"}
+    assert {
+        node.name
+        for node in ast.walk(repository_tree)
+        if isinstance(node, ast.FunctionDef)
+    } >= {"track", "record", "mark_processed"}
+
+
 def test_webhook_dependency_assembly_is_separate_from_http_bootstrap():
     composition = SOURCE / "agent_workflow" / "composition"
     entrypoint = ast.parse(
@@ -365,12 +402,7 @@ src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.mcp.auth0_oauth.load_auth0_config|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.ci_controller.ControllerCiCoordinator|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerAppToken|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerChecksClient|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.storage.ci_state.ControllerCiState|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_once|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_watch|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.compose_ci_execution|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_dispatch_entrypoint.run_postgres_dispatch_once|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.runners.coder_runtime.validate_config|1
 src/agent_workflow/orchestration/controller.py|inline-import|operate|agent_workflow.runners.coder_runtime.CoderRuntime|1
@@ -1037,3 +1069,25 @@ def test_r2_ast_rejects_callback_task_di():
         AssertionError, match="inject IUnitOfWork and ITaskAuthorizationRepository"
     ):
         _task_di(ast.parse(source), TASK_USE_CASE)
+
+
+def test_ci_composition_does_not_expose_postgres_state_bundle():
+    """CI wiring injects focused operations, never a DB-specific state facade."""
+    paths = (
+        SOURCE / "agent_workflow" / "composition" / "ci_deps.py",
+        SOURCE / "agent_workflow" / "composition" / "postgres_controller.py",
+        SOURCE / "agent_workflow" / "composition" / "worker_deps.py",
+    )
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        classes = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        }
+        assert "PostgresCiStateDependencies" not in identifiers | classes
+        assert "CiStateAdapter" not in identifiers | classes
+    worker = ast.parse(paths[2].read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "ci_state"
+        for node in ast.walk(worker)
+    )

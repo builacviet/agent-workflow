@@ -10,8 +10,12 @@ from sqlalchemy import create_engine
 
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.postgres_leader_runner import run_controller_once
-from agent_workflow.composition.postgres_worker import compose_postgres_worker
+from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.postgres_leadership import (
+    LeadershipDomain,
+    PostgresLeadershipLock,
+)
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.runners import coder_runtime
 from agent_workflow.storage.postgres_connection import PostgresFactory
@@ -28,7 +32,7 @@ def wiring(monkeypatch, tmp_path):
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
     monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda self: None)
     factory = PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
-    dependencies = compose_postgres_controller(factory).controller
+    dependencies = compose_postgres_controller(factory)
     service = WorkflowService(repository=dependencies.workflow)
     return factory, dependencies, service
 
@@ -59,13 +63,23 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
 
     assert runtime.service.repository is dependencies.workflow
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
-    assert runtime.agent_runtime.ci is dependencies.ci_state
+    assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
     connect.assert_not_called()
     dispose.assert_not_called()
 
 
-@pytest.mark.parametrize("missing", ["workflow", "dispatch", "ci_state", "leadership"])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "workflow",
+        "dispatch",
+        "ci_tracking",
+        "ci_repository",
+        "ci_factory",
+        "leadership",
+    ],
+)
 def test_missing_or_wrong_controller_dependency_fails_closed(
     wiring, monkeypatch, missing
 ):
@@ -81,13 +95,28 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
             )
 
 
-@pytest.mark.parametrize("foreign", ["dispatch", "ci_state", "leadership"])
+@pytest.mark.parametrize("foreign", ["dispatch", "ci_factory", "leadership"])
 def test_mixed_factories_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
         PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
-    ).controller
+    )
     with pytest.raises(TypeError, match="share the open Controller factory"):
+        compose_postgres_worker(
+            {},
+            service,
+            replace(dependencies, **{foreign: getattr(other, foreign)}),
+            leadership_guard=forbidden,
+        )
+
+
+@pytest.mark.parametrize("foreign", ["ci_tracking", "ci_repository"])
+def test_mixed_ci_operations_are_rejected(wiring, foreign):
+    _, dependencies, service = wiring
+    other = compose_postgres_controller(
+        PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
+    )
+    with pytest.raises(TypeError, match="Worker requires"):
         compose_postgres_worker(
             {},
             service,
@@ -99,7 +128,7 @@ def test_mixed_factories_are_rejected(wiring, foreign):
 def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
     factory, dependencies, service = wiring
     other = compose_postgres_controller(factory)
-    unrelated_service = WorkflowService(repository=other.controller.workflow)
+    unrelated_service = WorkflowService(repository=other.workflow)
     with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
         compose_postgres_worker(
             {}, unrelated_service, dependencies, leadership_guard=forbidden
@@ -108,7 +137,10 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
         compose_postgres_worker(
             {},
             service,
-            replace(dependencies, leadership=other.ci_watcher.leadership),
+            replace(
+                dependencies,
+                leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
+            ),
             leadership_guard=forbidden,
         )
     factory.close()
@@ -129,7 +161,7 @@ def test_missing_or_invalid_injection_cannot_fall_back(wiring, monkeypatch):
 
     injected = {
         "dispatch": dependencies.dispatch,
-        "ci": dependencies.ci_state,
+        "ci": dependencies.ci_tracking,
         "leadership_guard": lambda: True,
     }
     for port in injected:
@@ -236,22 +268,21 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
         {}, service, dependencies, leadership_guard=lambda: None
     )
     session = Mock()
+    session.begin.return_value = nullcontext()
     session.get.side_effect = [
         SimpleNamespace(
             repository=REPOSITORY, current_head_sha=HEAD, status="READY_IN_REVIEW"
         ),
         None,
     ]
-    monkeypatch.setattr(
-        factory, "repository_session", lambda **kwargs: nullcontext(session)
-    )
+    monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
 
     if tracked_head == INPUT:
         with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
-            runtime.agent_runtime.ci.track("T", 7, tracked_head)
+            runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         session.add.assert_not_called()
     else:
-        runtime.agent_runtime.ci.track("T", 7, tracked_head)
+        runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         binding = session.add.call_args.args[0]
         assert (
             binding.task_id,

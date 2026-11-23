@@ -167,8 +167,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     config, monkeypatch, outcome, offline_factory
 ):
     factory = offline_factory
-    composition = compose_postgres_controller(factory)
-    deps = composition.controller
+    deps = compose_postgres_controller(factory)
     events = []
     held = True
     claim = {
@@ -210,7 +209,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(
         entry,
         "compose_postgres_controller",
-        lambda borrowed: composition if borrowed is factory else forbidden(),
+        lambda borrowed: deps if borrowed is factory else forbidden(),
     )
     monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
     monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
@@ -341,12 +340,9 @@ def test_pg_once_runs_native_dev_stages(
     }
 
     factory = offline_factory
-    composition = compose_postgres_controller(factory)
-    deps = composition.controller
+    deps = compose_postgres_controller(factory)
     monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
-    monkeypatch.setattr(
-        entry, "compose_postgres_controller", Mock(return_value=composition)
-    )
+    monkeypatch.setattr(entry, "compose_postgres_controller", Mock(return_value=deps))
     claim_task = Mock(return_value=claim)
     events = Mock()
     held = True
@@ -378,6 +374,7 @@ def test_pg_once_runs_native_dev_stages(
     )
 
     session = Mock()
+    session.begin.return_value = nullcontext()
     session.add.side_effect = events.track
 
     def get_row(model, task_id, *, with_for_update):
@@ -392,7 +389,7 @@ def test_pg_once_runs_native_dev_stages(
         return None
 
     session.get.side_effect = get_row
-    monkeypatch.setattr(factory, "repository_session", lambda **_: nullcontext(session))
+    monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
     for module in (coder_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")
