@@ -45,6 +45,39 @@
 
 A **MUST** is a review requirement with concrete evidence, not a claim that Ruff currently enforces every convention. Never expand the task to clean legacy code merely because a convention describes the preferred direction.
 
+## R2 module layer ownership and header contract
+
+For **new or materially changed R2 source modules** in the Owner-approved scope, the file's first module docstring MUST identify the responsible architectural layer. Use the same three fields with a short, accurate description; never insert a comment before a required `from __future__` statement in a way that invalidates Python syntax. A module docstring precedes any future imports:
+
+```python
+"""Layer: Interfaces/CLI
+Responsibility: Parse Controller modes and project sanitized terminal outcomes.
+Dependencies: Application contracts and injected operations only.
+"""
+
+from __future__ import annotations
+```
+
+Use exactly one `Layer:` value that fits the module: `Domain`, `Application`, `Interfaces/CLI`, `Interfaces/MCP`, `Interfaces/Webhook`, `Bootstrap`, `Composition`, `Infrastructure` or `Worker/Trusted`. The `Responsibility:` field names **what this file owns**; the `Dependencies:` field states the permitted incoming dependencies. Do not label a legacy module as R2-conformant without checking its real imports and runtime behavior. Apply headers incrementally to task-touched R2 source, not every legacy file or test in the repository.
+
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| **Domain** | Pure entities, values, domain rules and errors | Pydantic, SQLAlchemy, OS/env, transport, GitHub, Docker or CLI |
+| **Application** | Named Use Cases, input/output DTOs, ports, orchestration of business policy and transaction intent | SQLAlchemy/PG session implementation, transport presentation, Docker/GitHub clients, Bootstrap/Composition imports |
+| **Interfaces (Presentation)** | CLI/MCP/webhook transport parsing, mode routing, request validation, injected Use Case invocation, sanitized output/exit projection | Infrastructure construction, direct PostgreSQL/Worker imports, environment loading, DB ownership or business policy |
+| **Bootstrap** | Executable process entrypoint, startup/lifecycle, mode-appropriate dependency/provider injection into Interfaces | Business logic, persistence implementation, duplicate CLI dispatch/CI presentation |
+| **Composition** | Feature-specific `*_deps.py` wiring: construct implementations, factories, ports and Use Cases; lend scoped resources for the caller's lifetime | CLI argument parsing/printing; invoking an Interfaces handler or triggering an Application `execute()` in response to a CLI request; owning `if __name__ == "__main__"` executables |
+| **Infrastructure** | Implement Application ports for PostgreSQL, remote integration and runtime operations | Inbound operator mode selection and application business-policy decisions |
+| **Worker/Trusted** | Independently scoped trusted Prepare/Publish operations under their existing credentials/isolation contract | Controller Use Case ownership or access to workflow DB from untrusted stages |
+
+**Controller CLI entrypoint contract (new code):** the supported executable belongs to `bootstrap/controller_entrypoint.py` (or a thin package-level `__main__` forwarding to it). The controller router belongs to `interfaces/cli/controller_cli.py`; existing `ci_controller.py` and `dispatch_controller.py` remain the sole feature-specific CLI Presentations. Bootstrap binds providers from `composition/ci_deps.py`, `composition/dispatch_deps.py` and existing bounded adapters. A Composition module may import Interface *types/callables* for injection when necessary; the violation is Composition **running the inbound handler or its Use Case**, not every import pointing outward. Retain old public launch commands only as explicitly authorized temporary compatibility paths; never silently re-home SQLite `operate()` logic.
+
+**CLI mode isolation:** choose/inject the required provider without eagerly importing or initializing an unused Worker/Dispatch stack for CI-only commands. Common CLI file/JSON parsing belongs to the neutral Controller CLI, not one feature handler imported by another. Read `AppConfig` from the startup/composition boundary and inject validated configuration into the inbound adapter; existing calls from older Interfaces code are technical debt, **not** precedent to add more.
+
+**Filename semantics:** `bootstrap/*_entrypoint.py` = executable entry/lifecycle, `composition/*_deps.py` = DI only, `application/**/use_cases/*_use_case.py` (or the existing feature naming) = application behavior, `infrastructure/**/*_repository.py` = persistence implementation. Existing `composition/postgres_*_entrypoint.py` files may remain scoped providers until separately approved cleanup, but no **new** executable belongs there.
+
+**Review/verification:** inspect import direction, transitive mode-specific imports, who calls `execute()`, and whether the module header is truthful; test CLI invalid modes, CI-only import isolation, resource-close-before-success and no SQLite fallback. Architecture tests can ratchet syntactically enforceable rules, but headers and green CI are not substitutes for code review. Changes to `AGENTS.md`, import-policy/AST gates or shared public contracts remain protected and require Owner/TL approval. Do not refactor untouched legacy modules merely to adopt headers.
+
 ## R2 validation and helper ownership
 
 Applies to **new or materially changed R2 features within an approved task**. Reference patterns: [Owner's validation commit](https://github.com/builacviet/clean_arch_demo/commit/9828b2c6cf69d22ecd3b4ac81be2683f981f3fa1) and [helper/cross-domain commit](https://github.com/builacviet/clean_arch_demo/commit/c0e8674fa0c2a61aadd6236ff893c8975f7d5728). Adapt to Agent Workflow's `interfaces/`, PostgreSQL and existing security contracts; **do not copy demo features or force a new layer**.
