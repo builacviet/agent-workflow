@@ -117,7 +117,9 @@ def test_ineligible_task_blocks_before_worker_callback(
     else:
         assignment["task_id"] = assignment_task_id
 
-    with pytest.raises(BusinessRuleError, match="dispatch outside exact task allowlist"):
+    with pytest.raises(
+        BusinessRuleError, match="dispatch outside exact task allowlist"
+    ):
         use_case(ports).execute(task_ids)
 
     ports.dispatch.claim.assert_called_once_with(task_ids, 1800, track_pre_launch=True)
