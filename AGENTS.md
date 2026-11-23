@@ -39,6 +39,12 @@ Before handoff, Tech Lead performs bounded discovery of likely callers, tests, s
 - **Verified identity:** GitHub/Notion's **authenticated account or App actor** is the audit identity. A `role=TL`/ `role=Coder` label is explanatory, **never proof of a distinct bot identity or Owner approval**. Confirm actor before attributing actions. If using the Owner-connected connector, say so; do not impersonate a standalone Tech Lead bot.
 - **Separate agent integrations are a setup requirement, not granted here:** Codex GitHub App should use a least-privilege **installation identity** for branch/PR operations; distinct, appropriately scoped TL GitHub and Notion connections are needed for independently attributed TL actions. Notion Codex plugin identity must be checked. Never put App private keys, installation tokens or access tokens in tasks, comments, PRs or logs.
 
+## R2 layer contract — read only when relevant
+
+- New or significantly migrated **R2 Python source modules** within the approved scope begin with a truthful `Layer:`, `Responsibility:`, `Dependencies:` module docstring. No bulk headers for untouched legacy modules or tests.
+- **Composition** constructs/injects Use Cases and adapters (including Presentation adapters) but does not process an inbound request. **Interfaces/Presentation** receives injected dependencies and calls Use Cases. **Bootstrap** starts the process and may connect DI providers to entrypoints; it is **not** a mandatory hop for each request.
+- For tasks that create/move entrypoints or cross architecture boundaries, read **only** [the R2 layer/DI/header contract](docs/conventions/engineering-standards.md#r2-layer-di-and-file-header-contract), then inspect affected imports/callers/tests. Do **not** load the full R2 blueprint by default. Protected scope/Owner gates still apply.
+
 ## Code quality — read the relevant rules, not everything
 
 - Python 3.11+, type hints, clear names, bounded error handling; KISS/YAGNI/DRY where they improve actual correctness or maintainability. Reuse existing config (`AppConfig`), status enums/constants and GitHub integration boundaries; do not duplicate them casually.

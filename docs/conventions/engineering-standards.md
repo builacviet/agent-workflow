@@ -45,6 +45,35 @@
 
 A **MUST** is a review requirement with concrete evidence, not a claim that Ruff currently enforces every convention. Never expand the task to clean legacy code merely because a convention describes the preferred direction.
 
+## R2 layer, DI and file header contract
+
+**Read this section only for new/migrated R2 modules or changes to entrypoints, wiring or layer boundaries.** It defines the mandatory R2 convention. The older `orchestration/` and `composition/postgres_*_entrypoint.py` names describe unmigrated code, not a template for new features.
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| **Domain** | Pure entities, invariants, policies and errors | IO, ORM, transport, configuration |
+| **Application** | Use Cases, DTOs, ports and business/transaction intent | Concrete PostgreSQL/HTTP/Docker adapters or framework handlers |
+| **Infrastructure** | Implement ports: repositories, DB UoW, network/runtime adapters | Business eligibility or inbound request routing |
+| **Composition / Dependencies** | Construct/inject Use Cases, infrastructure providers and optionally Presentation adapters; manage scoped dependencies | Parsing an inbound request, calling a handler, or triggering an inbound `UseCase.execute()` |
+| **Interfaces / Presentation** | Parse/validate transport request, obtain injected Use Case, call `execute()`, map result/error | Creating infrastructure/DB sessions or deciding business policy |
+| **Bootstrap** | Start/stop the process, register entrypoints and wire startup providers when needed | Business flow or being a mandatory middle layer for each request |
+| **Worker / Trusted** | Isolated trusted Prepare/Publish actions | Owning Controller business policy or untrusted access to workflow DB |
+
+**DI contract:** In FastAPI, `get_register_user_use_case(session=Depends(get_db_session))` is a Composition provider: it **returns** a wired Use Case, and `register_user(..., use_case=Depends(get_register_user_use_case))` in Presentation calls `use_case.execute(...)`. FastAPI resolves `Depends` per request; Bootstrap need only start/register the application. Composition **may construct** a Presentation adapter but **must not invoke its request handler**. For CLI, Bootstrap can start the CLI with factory/context-manager providers; CLI Presentation selects modes and calls the injected Use Case. Do not introduce redundant facade/DI layers just to mimic FastAPI.
+
+**Controller/CLI conventions:** new executable launchers belong in `bootstrap/*_entrypoint.py`; feature-specific dependency assembly in `composition/*_deps.py` (legacy `postgres_*_entrypoint.py` factories can remain until separately scoped). Neutral CLI parsing/config-file helpers stay under `interfaces/cli/`, not in a sibling feature-specific handler. CI-only modes must not eagerly import/initialize Dispatch/Worker/SQLite implementation. Load validated `AppConfig` at startup/DI boundaries for **new** code and inject it; old Interface env reads are separately tracked debt, not a mandate to refactor unrelated files.
+
+**File header:** every **new or materially migrated R2 Python source module** within the task's scope starts with a module docstring containing `Layer:`, `Responsibility:`, `Dependencies:` before imports (after optional shebang/encoding). Use `Domain`, `Application`, `Infrastructure`, `Composition`, `Bootstrap`, `Interfaces/CLI`, `Interfaces/MCP`, `Interfaces/Webhook` or `Worker/Trusted`. Example:
+
+```python
+"""Layer: Composition
+Responsibility: Build a scoped RegisterUserUseCase.
+Dependencies: Application contracts and Infrastructure adapters.
+"""
+```
+
+Headers describe actual ownership and **do not grant scope, suppress checks or prove correctness**. Do not add headers to unrelated legacy modules, tests or generated files. On review, inspect who constructs/injects vs. who calls `execute()`, imports and mode-specific initialization; use focused negative tests. Consult the [R2 blueprint](../architecture/r2-clean-architecture-blueprint.md) **only** when a task changes the target architecture; do not preload the full blueprint for routine coding.
+
 ## R2 validation and helper ownership
 
 Applies to **new or materially changed R2 features within an approved task**. Reference patterns: [Owner's validation commit](https://github.com/builacviet/clean_arch_demo/commit/9828b2c6cf69d22ecd3b4ac81be2683f981f3fa1) and [helper/cross-domain commit](https://github.com/builacviet/clean_arch_demo/commit/c0e8674fa0c2a61aadd6236ff893c8975f7d5728). Adapt to Agent Workflow's `interfaces/`, PostgreSQL and existing security contracts; **do not copy demo features or force a new layer**.

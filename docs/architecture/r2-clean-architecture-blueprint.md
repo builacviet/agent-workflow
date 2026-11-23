@@ -12,7 +12,8 @@ Make workflow business behavior discoverable by **feature and use case**, as in 
 - `application` = named use cases, typed input/output DTOs and task-oriented ports (`typing.Protocol`). It owns transaction **intent** and authorization decisions, not concrete DB sessions, HTTP, Git, Docker or framework exceptions. Model validation can happen in interface DTOs; domain invariant checks remain pure.
 - `infrastructure` = PostgreSQL repositories, ORM models, sync/async SessionFactory, UoW implementation, GitHub/network/engine adapters, configuration and observability. It implements application ports.
 - `interfaces` = inbound MCP, webhook and CLI handlers: authenticate, validate transport payload, invoke use cases, map errors/responses. No SQL or business decisions in handlers.
-- `composition` = **dependency assembly only**, named `database.py`/`task_deps.py`/`review_deps.py`/`dispatch_deps.py`/`runtime_deps.py`/`health_deps.py`; builds factory/UoW/repository/use-case graph with a controlled lifetime. No feature behavior, policy duplication or transaction commits here.
+- `composition` = **dependency assembly only**, named `database.py`/`task_deps.py`/`review_deps.py`/`dispatch_deps.py`/`runtime_deps.py`/`health_deps.py`; builds factory/UoW/repository/use-case graph with a controlled lifetime. No feature behavior, policy duplication, transaction commits or invocation of inbound CLI handlers/use-case `execute()` here.
+- `bootstrap` = process startup, registration and shutdown; may connect DI providers to Interfaces, but **per-request dependencies may flow directly from Composition to Presentation** (for example, via FastAPI `Depends`). It is not a compulsory hop for each request.
 - `workers/trusted_git` = separate trusted Prepare/Publish executable and GitHub App authority. Split by responsibility, **not** a second nested Domain/Application stack. Its sole credential boundary remains independent of credential-free Code/Test containers and workflow DB.
 
 **PostgreSQL-only R2 investment:** Legacy SQLite source remains in the as-built repository, but **is not an R2 feature, refactor, unit-test or 90% coverage target**. Do not write new SQLite repositories, compatibility facades, migration shims or tests. Inventory and retire remaining active SQLite entrypoints under a separately authorized bounded cleanup/cutover; retain only essential safety/operational checks until that path is actually retired. All new Domain/Application/Repository/UoW work is PostgreSQL-oriented. Remove dead SQLite code early when its consumers are safely replaced, rather than preserving it until the end of R2.
@@ -77,6 +78,8 @@ agent-workflow/
 │   │   ├── ci_deps.py
 │   │   ├── runtime_deps.py
 │   │   └── health_deps.py
+│   ├── bootstrap/
+│   │   └── controller_entrypoint.py        # Executable process startup; not in composition/
 │   └── workers/
 │       └── trusted_git/
 │           ├── main.py                   # Minimal CLI entrypoint
@@ -100,6 +103,10 @@ agent-workflow/
 ```
 
 The braces group *candidate* files, not a request to add empty placeholders. Existing source, `tests/test_r2_00_characterization.py`, and critical **PostgreSQL/security** tests remain as the behavior baseline until their replacements are verified. SQLite-only tests are **retirement inventory**, not targets for new tests, coverage repair or one-for-one porting; delete them alongside the approved removal of their obsolete code after checking active consumers. Do not rename imports, `src/`, `mcp` or the worker executable across the codebase in a single commit.
+
+### Source-module ownership
+
+For the single mandatory R2 DI/layer/file-header convention, see [Engineering Standards](../conventions/engineering-standards.md#r2-layer-di-and-file-header-contract). This blueprint describes the **target**, not a mandatory full-document read for each Coder task.
 
 ### Feature ownership / readable entrypoints
 
