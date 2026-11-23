@@ -151,6 +151,34 @@ def test_pg_validation_never_inspects_sqlite_database(config):
     entry._validate(config, AppConfig(pg_runtime_dsn=DSN))
 
 
+def test_entrypoint_rejects_uncomposed_repository_before_leadership(
+    config, monkeypatch, offline_factory
+):
+    dependencies = compose_postgres_controller(offline_factory)
+    acquire = Mock()
+    claim = Mock()
+    monkeypatch.setattr(dependencies.leadership, "try_acquire", acquire)
+    monkeypatch.setattr(dependencies.dispatch, "claim", claim)
+    monkeypatch.setattr(PostgresFactory, "open", lambda _: offline_factory)
+    monkeypatch.setattr(
+        entry,
+        "compose_postgres_controller",
+        lambda factory: dependencies if factory is offline_factory else forbidden(),
+    )
+    monkeypatch.setattr(
+        entry,
+        "WorkflowService",
+        lambda **_: SimpleNamespace(repository=object()),
+    )
+
+    with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
+        entry.run_postgres_dispatch_once(config, AppConfig(pg_runtime_dsn=DSN))
+
+    acquire.assert_not_called()
+    claim.assert_not_called()
+    assert offline_factory._closed
+
+
 @pytest.mark.parametrize(
     "outcome",
     [

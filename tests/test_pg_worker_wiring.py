@@ -8,8 +8,8 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy import create_engine
 
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
-from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.postgres_leadership import (
@@ -249,7 +249,12 @@ def test_loss_during_engine_admission_leaves_slot_active(
         runtime.execute(claim, context)
 
     with pytest.raises(PermissionError, match="leadership lost"):
-        run_controller_once(dependencies, service, {"T"}, execute)
+        RunDispatchPassUseCase(
+            dependencies.leadership,
+            dependencies.dispatch,
+            service,
+            execute,
+        ).execute({"T"})
     dependencies.dispatch.claim.assert_called_once_with(
         {"T"}, 1800, track_pre_launch=True
     )

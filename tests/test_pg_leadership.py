@@ -9,10 +9,7 @@ import pytest
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, make_url
 
-from agent_workflow.composition.postgres_controller import (
-    ControllerDependencies,
-)
-from agent_workflow.composition.postgres_leader_runner import run_controller_once
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -234,22 +231,13 @@ def _controller_process(mode, channel):
                     if channel.recv() == "crash":
                         os._exit(23)
             else:
-                workflow = object()
                 dispatch = Mock()
                 dispatch.claim.return_value = None
-                assignment = Mock(repository=workflow)
+                assignment = Mock()
                 execute = Mock()
-                dependencies = ControllerDependencies(
-                    workflow=workflow,
-                    dispatch=dispatch,
-                    ci_tracking=Mock(),
-                    ci_repository=Mock(),
-                    ci_factory=Mock(),
-                    leadership=lock,
-                )
-                acquired = run_controller_once(
-                    dependencies, assignment, {"PG03-C-test"}, execute
-                )
+                acquired = RunDispatchPassUseCase(
+                    lock, dispatch, assignment, execute
+                ).execute({"PG03-C-test"})
                 channel.send(
                     (acquired, backend, dispatch.claim.call_count, execute.call_count)
                 )
