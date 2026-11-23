@@ -120,7 +120,7 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         ["--ci-once", "--reconciled"],
     ],
 )
-def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags):
+def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags, capsys):
     config_file = tmp_path / "controller.json"
     config_file.write_text("{}")
     monkeypatch.setenv(
@@ -130,13 +130,13 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags):
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
+    with pytest.raises(SystemExit) as error:
+        controller.main()
     if "--ci-once" in flags or "--ci-watch" in flags:
-        with pytest.raises(SystemExit) as error:
-            controller.main()
         assert error.value.code == 2
     else:
-        with pytest.raises(WorkflowError, match="PostgreSQL supports only"):
-            controller.main()
+        assert error.value.code == 1
+        assert "PostgreSQL supports only" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])

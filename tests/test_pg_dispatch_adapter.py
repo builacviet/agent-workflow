@@ -402,7 +402,9 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
     from test_agent_runtime import FakeHost
 
+    from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
     from agent_workflow.composition import postgres_dispatch_entrypoint as entry
+    from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
     from agent_workflow.runners import coder_runtime
 
     _, _, observer, task_id = setup
@@ -410,11 +412,11 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
     # Admission settings are covered offline with inert credential fixtures.
     # This PG test targets the real factory/guard/adapters and fake Worker seam.
-    monkeypatch.setattr(entry, "_validate", lambda *_: None)
+    monkeypatch.setattr(entry, "_validate_worker_config", lambda _: None)
     opened = []
     original_open = PostgresFactory.open
-    original_compose = entry.compose_postgres_worker
-    original_controller = entry.compose_postgres_controller
+    original_compose = deps_wiring.compose_postgres_worker
+    original_controller = deps_wiring.compose_postgres_controller
     calls = []
     pins = set()
     dispatch_ids = []
@@ -505,8 +507,8 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         return runtime
 
     monkeypatch.setattr(entry.PostgresFactory, "open", open_factory)
-    monkeypatch.setattr(entry, "compose_postgres_controller", compose_controller)
-    monkeypatch.setattr(entry, "compose_postgres_worker", compose_worker)
+    monkeypatch.setattr(deps_wiring, "compose_postgres_controller", compose_controller)
+    monkeypatch.setattr(deps_wiring, "compose_postgres_worker", compose_worker)
     monkeypatch.setattr(
         coder_runtime, "docker_command", lambda *_: pytest.fail("real Docker forbidden")
     )
@@ -514,12 +516,18 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         coder_runtime, "run_container", lambda *_: pytest.fail("real Worker forbidden")
     )
     config = {"tasks": {task_id: {}}}
+
+    def run_dispatch():
+        return dispatch_cli.run_dispatch_pass(
+            config, app, compose=entry.compose_dispatch_execution
+        ).worker_completed
+
     try:
         if fault:
             with pytest.raises((RuntimeError, WorkflowError, PermissionError)):
-                entry.run_postgres_dispatch_once(config, app)
+                run_dispatch()
         else:
-            assert entry.run_postgres_dispatch_once(config, app)
+            assert run_dispatch()
         assert len(opened) == 1 and opened[0]._closed
         assert len(dispatch_ids) == 1
         with observer.transaction() as conn:
@@ -561,7 +569,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         assert ("clear" in calls) == (fault in {None, "cleanup"})
         # A fresh owner and factory must never replay the synthetic publication,
         # even when the first owner crashed after the handoff or cleanup failed.
-        assert not entry.run_postgres_dispatch_once(config, app)
+        assert not run_dispatch()
         assert len(dispatch_ids) == 1
         assert calls.count("publish") == 1
         assert all(factory._closed for factory in opened)
