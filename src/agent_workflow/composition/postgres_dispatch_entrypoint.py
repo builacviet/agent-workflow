@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
-from agent_workflow.composition.postgres_leader_runner import run_controller_once
+from agent_workflow.composition.postgres_leader_runner import compose_dispatch_pass
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
@@ -107,11 +107,9 @@ def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
                 raise WorkflowError("missing dispatched Worker for terminal cleanup")
             runtime.release_engine(dispatch_id)
 
-        return run_controller_once(
-            dependencies,
-            service,
-            set(config["tasks"]),
-            execute,
-            config.get("timeout_seconds", 1800),
-            on_finished=finished,
+        task_ids = set(config["tasks"])
+        timeout = config.get("timeout_seconds", 1800)
+        dispatch_pass = compose_dispatch_pass(
+            dependencies, service, execute, on_finished=finished
         )
+        return dispatch_pass.execute(task_ids, timeout)

@@ -159,6 +159,7 @@ def test_pg_validation_never_inspects_sqlite_database(config):
         "contended",
         "wrong_head",
         "wrong_task",
+        "wrong_assignment_task",
         "worker_error",
         "cleanup_error",
     ],
@@ -188,6 +189,8 @@ def test_single_factory_lazy_worker_and_terminal_order(
         context["base_sha"] = HEAD
     if outcome == "wrong_task":
         claim["task_id"] = context["task_id"] = "OTHER"
+    if outcome == "wrong_assignment_task":
+        context["task_id"] = "OTHER"
     monkeypatch.setattr(deps.leadership, "try_acquire", lambda: outcome != "contended")
     monkeypatch.setattr(deps.leadership, "is_held", lambda: held)
 
@@ -241,7 +244,13 @@ def test_single_factory_lazy_worker_and_terminal_order(
     worker = Mock(side_effect=compose)
     monkeypatch.setattr(entry, "compose_postgres_worker", worker)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
-    if outcome in {"wrong_head", "wrong_task", "worker_error", "cleanup_error"}:
+    if outcome in {
+        "wrong_head",
+        "wrong_task",
+        "wrong_assignment_task",
+        "worker_error",
+        "cleanup_error",
+    }:
         with pytest.raises((WorkflowError, RuntimeError)):
             entry.run_postgres_dispatch_once(config, AppConfig(pg_runtime_dsn=DSN))
     else:
@@ -254,10 +263,20 @@ def test_single_factory_lazy_worker_and_terminal_order(
     assert events[-1] == "release"
     if outcome == "success":
         assert events == ["compose_worker", "worker", "finish", "clear", "release"]
-    if outcome in {"empty", "contended", "wrong_head", "wrong_task"}:
+    if outcome in {
+        "empty",
+        "contended",
+        "wrong_head",
+        "wrong_task",
+        "wrong_assignment_task",
+    }:
         worker.assert_not_called()
+    if outcome in {"wrong_head", "wrong_task", "wrong_assignment_task"}:
+        assert events == ["block", "release"]
+    if outcome == "worker_error":
+        assert events == ["compose_worker", "worker", "block", "release"]
     if outcome == "cleanup_error":
-        assert "block" not in events
+        assert events == ["compose_worker", "worker", "finish", "clear", "release"]
     if outcome != "contended":
         claim_mock.assert_called_once_with({"T"}, 1800, track_pre_launch=True)
 
