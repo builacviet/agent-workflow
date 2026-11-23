@@ -12,6 +12,7 @@ import pytest
 from agent_workflow.infrastructure.logging.json_formatter import (
     JsonFormatter,
     admin_log_scope,
+    ci_log_scope,
 )
 from agent_workflow.observability.correlation import (
     correlation_scope,
@@ -148,3 +149,32 @@ def test_overlapping_threads_keep_json_handler_until_both_have_exited(capsys):
     assert [
         (logger.handlers, logger.level, logger.propagate) for logger in loggers
     ] == original
+
+
+def test_ci_scope_emits_only_allowlisted_fields_and_restores_logger(capsys):
+    logger = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
+    original = list(logger.handlers), logger.level, logger.propagate
+    with correlation_scope(correlation_id="ci-correlation"):
+        with ci_log_scope(), ci_log_scope():
+            logger.error(
+                "ci_cli_failure",
+                extra={
+                    "mode": "watch",
+                    "reason": "permission_failure",
+                    "dsn": PRIVATE_DATA,
+                    "pem_path": PRIVATE_DATA,
+                    "sql_parameters": [PRIVATE_DATA],
+                },
+            )
+
+    (line,) = capsys.readouterr().err.splitlines()
+    payload = json.loads(line)
+    assert payload["logger"] == logger.name
+    assert payload["event"] == "ci_cli_failure"
+    assert payload["message"] == "CI CLI operation ended without success"
+    assert payload["mode"] == "watch"
+    assert payload["reason"] == "permission_failure"
+    assert payload["correlation_id"] == "ci-correlation"
+    assert PRIVATE_DATA not in line
+    assert "dsn" not in payload and "pem_path" not in payload
+    assert (logger.handlers, logger.level, logger.propagate) == original
