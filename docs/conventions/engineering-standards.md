@@ -45,38 +45,34 @@
 
 A **MUST** is a review requirement with concrete evidence, not a claim that Ruff currently enforces every convention. Never expand the task to clean legacy code merely because a convention describes the preferred direction.
 
-## R2 module layer ownership and header contract
+## R2 layer, DI and file header contract
 
-For **new or materially changed R2 source modules** in the Owner-approved scope, the file's first module docstring MUST identify the responsible architectural layer. Use the same three fields with a short, accurate description; never insert a comment before a required `from __future__` statement in a way that invalidates Python syntax. A module docstring precedes any future imports:
+**Read this section only for new/migrated R2 modules or changes to entrypoints, wiring or layer boundaries.** It defines the mandatory R2 convention. The older `orchestration/` and `composition/postgres_*_entrypoint.py` names describe unmigrated code, not a template for new features.
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| **Domain** | Pure entities, invariants, policies and errors | IO, ORM, transport, configuration |
+| **Application** | Use Cases, DTOs, ports and business/transaction intent | Concrete PostgreSQL/HTTP/Docker adapters or framework handlers |
+| **Infrastructure** | Implement ports: repositories, DB UoW, network/runtime adapters | Business eligibility or inbound request routing |
+| **Composition / Dependencies** | Construct/inject Use Cases, infrastructure providers and optionally Presentation adapters; manage scoped dependencies | Parsing an inbound request, calling a handler, or triggering an inbound `UseCase.execute()` |
+| **Interfaces / Presentation** | Parse/validate transport request, obtain injected Use Case, call `execute()`, map result/error | Creating infrastructure/DB sessions or deciding business policy |
+| **Bootstrap** | Start/stop the process, register entrypoints and wire startup providers when needed | Business flow or being a mandatory middle layer for each request |
+| **Worker / Trusted** | Isolated trusted Prepare/Publish actions | Owning Controller business policy or untrusted access to workflow DB |
+
+**DI contract:** In FastAPI, `get_register_user_use_case(session=Depends(get_db_session))` is a Composition provider: it **returns** a wired Use Case, and `register_user(..., use_case=Depends(get_register_user_use_case))` in Presentation calls `use_case.execute(...)`. FastAPI resolves `Depends` per request; Bootstrap need only start/register the application. Composition **may construct** a Presentation adapter but **must not invoke its request handler**. For CLI, Bootstrap can start the CLI with factory/context-manager providers; CLI Presentation selects modes and calls the injected Use Case. Do not introduce redundant facade/DI layers just to mimic FastAPI.
+
+**Controller/CLI conventions:** new executable launchers belong in `bootstrap/*_entrypoint.py`; feature-specific dependency assembly in `composition/*_deps.py` (legacy `postgres_*_entrypoint.py` factories can remain until separately scoped). Neutral CLI parsing/config-file helpers stay under `interfaces/cli/`, not in a sibling feature-specific handler. CI-only modes must not eagerly import/initialize Dispatch/Worker/SQLite implementation. Load validated `AppConfig` at startup/DI boundaries for **new** code and inject it; old Interface env reads are separately tracked debt, not a mandate to refactor unrelated files.
+
+**File header:** every **new or materially migrated R2 Python source module** within the task's scope starts with a module docstring containing `Layer:`, `Responsibility:`, `Dependencies:` before imports (after optional shebang/encoding). Use `Domain`, `Application`, `Infrastructure`, `Composition`, `Bootstrap`, `Interfaces/CLI`, `Interfaces/MCP`, `Interfaces/Webhook` or `Worker/Trusted`. Example:
 
 ```python
-"""Layer: Interfaces/CLI
-Responsibility: Parse Controller modes and project sanitized terminal outcomes.
-Dependencies: Application contracts and injected operations only.
+"""Layer: Composition
+Responsibility: Build a scoped RegisterUserUseCase.
+Dependencies: Application contracts and Infrastructure adapters.
 """
-
-from __future__ import annotations
 ```
 
-Use exactly one `Layer:` value that fits the module: `Domain`, `Application`, `Interfaces/CLI`, `Interfaces/MCP`, `Interfaces/Webhook`, `Bootstrap`, `Composition`, `Infrastructure` or `Worker/Trusted`. The `Responsibility:` field names **what this file owns**; the `Dependencies:` field states the permitted incoming dependencies. Do not label a legacy module as R2-conformant without checking its real imports and runtime behavior. Apply headers incrementally to task-touched R2 source, not every legacy file or test in the repository.
-
-| Layer | Owns | Must not own |
-| --- | --- | --- |
-| **Domain** | Pure entities, values, domain rules and errors | Pydantic, SQLAlchemy, OS/env, transport, GitHub, Docker or CLI |
-| **Application** | Named Use Cases, input/output DTOs, ports, orchestration of business policy and transaction intent | SQLAlchemy/PG session implementation, transport presentation, Docker/GitHub clients, Bootstrap/Composition imports |
-| **Interfaces (Presentation)** | CLI/MCP/webhook transport parsing, mode routing, request validation, injected Use Case invocation, sanitized output/exit projection | Infrastructure construction, direct PostgreSQL/Worker imports, environment loading, DB ownership or business policy |
-| **Bootstrap** | Executable process entrypoint, startup/lifecycle, mode-appropriate dependency/provider injection into Interfaces | Business logic, persistence implementation, duplicate CLI dispatch/CI presentation |
-| **Composition** | Feature-specific `*_deps.py` wiring: construct implementations, factories, ports and Use Cases; lend scoped resources for the caller's lifetime | CLI argument parsing/printing; invoking an Interfaces handler or triggering an Application `execute()` in response to a CLI request; owning `if __name__ == "__main__"` executables |
-| **Infrastructure** | Implement Application ports for PostgreSQL, remote integration and runtime operations | Inbound operator mode selection and application business-policy decisions |
-| **Worker/Trusted** | Independently scoped trusted Prepare/Publish operations under their existing credentials/isolation contract | Controller Use Case ownership or access to workflow DB from untrusted stages |
-
-**Controller CLI entrypoint contract (new code):** the supported executable belongs to `bootstrap/controller_entrypoint.py` (or a thin package-level `__main__` forwarding to it). The controller router belongs to `interfaces/cli/controller_cli.py`; existing `ci_controller.py` and `dispatch_controller.py` remain the sole feature-specific CLI Presentations. Bootstrap binds providers from `composition/ci_deps.py`, `composition/dispatch_deps.py` and existing bounded adapters. A Composition module may import Interface *types/callables* for injection when necessary; the violation is Composition **running the inbound handler or its Use Case**, not every import pointing outward. Retain old public launch commands only as explicitly authorized temporary compatibility paths; never silently re-home SQLite `operate()` logic.
-
-**CLI mode isolation:** choose/inject the required provider without eagerly importing or initializing an unused Worker/Dispatch stack for CI-only commands. Common CLI file/JSON parsing belongs to the neutral Controller CLI, not one feature handler imported by another. Read `AppConfig` from the startup/composition boundary and inject validated configuration into the inbound adapter; existing calls from older Interfaces code are technical debt, **not** precedent to add more.
-
-**Filename semantics:** `bootstrap/*_entrypoint.py` = executable entry/lifecycle, `composition/*_deps.py` = DI only, `application/**/use_cases/*_use_case.py` (or the existing feature naming) = application behavior, `infrastructure/**/*_repository.py` = persistence implementation. Existing `composition/postgres_*_entrypoint.py` files may remain scoped providers until separately approved cleanup, but no **new** executable belongs there.
-
-**Review/verification:** inspect import direction, transitive mode-specific imports, who calls `execute()`, and whether the module header is truthful; test CLI invalid modes, CI-only import isolation, resource-close-before-success and no SQLite fallback. Architecture tests can ratchet syntactically enforceable rules, but headers and green CI are not substitutes for code review. Changes to `AGENTS.md`, import-policy/AST gates or shared public contracts remain protected and require Owner/TL approval. Do not refactor untouched legacy modules merely to adopt headers.
+Headers describe actual ownership and **do not grant scope, suppress checks or prove correctness**. Do not add headers to unrelated legacy modules, tests or generated files. On review, inspect who constructs/injects vs. who calls `execute()`, imports and mode-specific initialization; use focused negative tests. Consult the [R2 blueprint](../architecture/r2-clean-architecture-blueprint.md) **only** when a task changes the target architecture; do not preload the full blueprint for routine coding.
 
 ## R2 validation and helper ownership
 
