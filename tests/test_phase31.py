@@ -562,7 +562,7 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state, tmp_path):
     from agent_workflow.runners import sandbox
 
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
-    controller_runtime = runtime.CoderRuntime({}, state)
+    controller_runtime = runtime.LegacySqliteCoderRuntime({}, state)
     controller_runtime.sandbox.record_engine(
         "a" * 32, "unix:///fixture.sock", "fixture-daemon-a"
     )

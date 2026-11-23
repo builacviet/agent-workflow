@@ -17,6 +17,7 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.logging.json_formatter import ci_log_scope
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
+from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 
@@ -152,7 +153,7 @@ def operate(config: dict, args: argparse.Namespace) -> None:
         config["database"], require_ci=AppConfig.from_env().ci_gate_required
     )
     ledger = DispatchLedger(service)
-    runtime = CoderRuntime(config, service)
+    runtime: CoderRuntime = LegacySqliteCoderRuntime(config, service)
     if args.acknowledge:
         if not args.reconciled:
             raise WorkflowError(

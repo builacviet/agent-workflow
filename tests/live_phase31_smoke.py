@@ -17,7 +17,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agent_workflow.domain.service import WorkflowService  # noqa: E402
 from agent_workflow.integrations.github import WorkflowError  # noqa: E402
-from agent_workflow.runners.coder_runtime import CoderRuntime, safe_path  # noqa: E402
+from agent_workflow.runners.coder_runtime import (  # noqa: E402
+    LegacySqliteCoderRuntime,
+    safe_path,
+)
 from agent_workflow.workers.trusted_git.repository import git  # noqa: E402
 
 
@@ -56,7 +59,7 @@ def main() -> None:
         for name in names:
             (Path(directory) / name).chmod(0o666)
     profile = ROOT / "docker/coder-seccomp.json"
-    runtime = CoderRuntime(
+    runtime = LegacySqliteCoderRuntime(
         {
             "image": args.image,
             "seccomp_profile": str(profile),

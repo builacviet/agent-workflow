@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition.postgres_controller import (
+    ControllerCiSessionProvider,
     ControllerDependencies,
 )
 from agent_workflow.domain.service import WorkflowService
@@ -64,14 +65,20 @@ def compose_postgres_worker(
         )
 
     factory = workflow.factory
+    ci_scope = ci_repository._session_scope
     if (
         not isinstance(factory, PostgresFactory)
         or factory._closed
         or dispatch.factory is not factory
         or ci_factory is not factory
+        or ci_repository._session is not None
+        or type(ci_scope) is not ControllerCiSessionProvider
+        or ci_scope.factory is not factory
         or leadership._factory is not factory
     ):
         raise TypeError("Worker dependencies must share the open Controller factory")
+    if leadership._retired:
+        raise PermissionError("Worker requires active Controller leadership")
 
     def guard() -> bool:
         # The runner guard raises on loss. Also verify the borrowed lock itself

@@ -1,6 +1,9 @@
 """Prepare PostgreSQL Controller dispatch dependencies without running them."""
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+
+from sqlalchemy.orm import Session
 
 from agent_workflow.application.ci.ports import ICiWriteRepository
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
@@ -17,6 +20,16 @@ from agent_workflow.storage.postgres_connection import (
 )
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+@dataclass(frozen=True)
+class ControllerCiSessionProvider:
+    """Lend CI a deferred session scope from this Controller's factory."""
+
+    factory: PostgresFactory
+
+    def __call__(self) -> AbstractContextManager[Session]:
+        return self.factory.get_scoped_session()
 
 
 @dataclass(frozen=True)
@@ -40,7 +53,7 @@ def compose_postgres_controller(factory: PostgresFactory) -> ControllerDependenc
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_repository = SqlAlchemyCiStateRepository(lambda: factory.get_scoped_session())
+    ci_repository = SqlAlchemyCiStateRepository(ControllerCiSessionProvider(factory))
     return ControllerDependencies(
         workflow=PostgresWorkflowRepository(factory),
         dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
