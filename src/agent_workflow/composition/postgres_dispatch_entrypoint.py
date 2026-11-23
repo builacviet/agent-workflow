@@ -101,11 +101,6 @@ def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
         ) -> str:
             nonlocal runtime
             guard()
-            if (
-                claim["task_id"] not in config["tasks"]
-                or context.get("task_id") != claim["task_id"]
-            ):
-                raise WorkflowError("dispatch outside exact task allowlist")
             runtime = compose_postgres_worker(
                 config, service, dependencies, leadership_guard=guard
             )
