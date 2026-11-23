@@ -53,7 +53,7 @@ class RunDispatchPassUseCase:
         def guard() -> None:
             if leadership.is_held() is not True:
                 raise PermissionError(
-                    "PostgreSQL leadership lost; reconcile in-flight work"
+                    "Dispatch leadership lost; reconcile in-flight work"
                 )
 
         try:
