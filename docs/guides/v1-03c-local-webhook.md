@@ -39,7 +39,10 @@ See [.runtime configuration inventory](../../.runtime/README.md) for the active 
 
 ## Local Compose and CI-only process
 
-These historical Compose commands are retained for reference. A PostgreSQL smoke test requires a separately approved, disposable PostgreSQL environment.
+These commands describe the historical root Compose stack, which still includes
+legacy SQLite configuration. They do not establish a complete PostgreSQL
+deployment or verify live cutover. A PostgreSQL smoke test requires a separately
+approved, disposable PostgreSQL environment.
 
     docker compose -f compose.yaml config --quiet
     docker compose -f compose.yaml up -d --build mcp webhook router
@@ -49,7 +52,11 @@ Start CI-only consumption in a trusted host terminal (no Codex worker is dispatc
     python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-once
     python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-watch
 
-Run exactly one of the above commands, not both concurrently. The watcher scans local inbox only; it calls GitHub API on new events and bounded startup recovery, not global periodic CI polling.
+Run exactly one of the commands above. Both modes read the durable webhook inbox
+from PostgreSQL through `PG_RUNTIME_DSN`. At startup they can recheck a bounded
+set of tracked PRs. After startup, watch mode checks PostgreSQL for pending
+notifications and queries GitHub when pending work needs reconciliation. A pass
+with an empty inbox after startup makes no GitHub requests.
 
 Only after local processes have passed their checks, stop any older tunnel using the same reserved hostname and start ngrok:
 

@@ -1,15 +1,22 @@
-"""Route explicit PostgreSQL Controller commands to their inbound adapters."""
+"""Layer: Interfaces/CLI
+Responsibility: Validate Controller CLI input and route each supported mode.
+Dependencies: Shared config reader, CI and Dispatch adapters, and injected providers.
+"""
+
+from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from enum import Enum, auto
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
-from agent_workflow.app_config import AppConfig
 from agent_workflow.interfaces.cli import ci_controller, dispatch_controller
 from agent_workflow.interfaces.cli.controller_config import read_controller_config
+
+if TYPE_CHECKING:
+    from agent_workflow.app_config import AppConfig
 
 
 class _Mode(Enum):
@@ -28,9 +35,12 @@ def run_controller_cli(
     *,
     compose_ci: ci_controller.ComposeCi,
     compose_dispatch: dispatch_controller.ComposeDispatch,
+    load_app_config: Callable[[], AppConfig],
     log_scope: Callable[[], AbstractContextManager[None]],
 ) -> None:
-    parser = _ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = _ArgumentParser(
+        description="Run PostgreSQL dispatch or reconcile CI.", allow_abbrev=False
+    )
     parser.add_argument("config", type=Path)
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument(
@@ -80,7 +90,7 @@ def run_controller_cli(
         dispatch_once=False,
         acknowledge=None,
         reconciled=False,
-        prepare=lambda: (prepare(), AppConfig.from_env()),
+        prepare=lambda: (prepare(), load_app_config()),
         compose=compose_ci,
         log_scope=log_scope,
     )

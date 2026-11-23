@@ -6,7 +6,7 @@ import subprocess
 import sys
 import textwrap
 from argparse import Namespace
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,6 +17,7 @@ from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
+from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
 from agent_workflow.orchestration import controller
 
 
@@ -115,6 +116,37 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
+
+
+def test_pg_ci_cli_uses_injected_app_config(monkeypatch, tmp_path, capsys):
+    config = tmp_path / "controller-ci.json"
+    config.write_text("{}")
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/unused"
+    )
+    monkeypatch.setattr(sys, "argv", ["controller", str(config), "--ci-once"])
+    monkeypatch.setattr(
+        AppConfig, "from_env", Mock(side_effect=AssertionError("read process settings"))
+    )
+    settings = AppConfig(pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/ci")
+    load_app_config = Mock(return_value=settings)
+    reconcile = Mock(return_value=ci_cli.CiRunResponse(0, 0))
+    compose_ci = Mock(return_value=nullcontext(reconcile))
+    compose_dispatch = Mock(side_effect=AssertionError("dispatch selected in CI mode"))
+
+    run_controller_cli(
+        compose_ci=compose_ci,
+        compose_dispatch=compose_dispatch,
+        load_app_config=load_app_config,
+        log_scope=nullcontext,
+    )
+
+    AppConfig.from_env.assert_not_called()
+    load_app_config.assert_called_once_with()
+    compose_ci.assert_called_once_with({}, settings)
+    compose_dispatch.assert_not_called()
+    reconcile.assert_called_once_with(ci_cli.CiRunRequest(startup=True))
+    assert capsys.readouterr().out == "CI reconciliation: 0 tracked observations\n"
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])

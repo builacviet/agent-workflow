@@ -1,4 +1,7 @@
-"""Read the controller configuration shared by the CLI modes."""
+"""Layer: Interfaces/CLI
+Responsibility: Read the JSON config file shared by the Controller modes.
+Dependencies: Python standard library JSON and filesystem paths.
+"""
 
 import json
 from pathlib import Path
