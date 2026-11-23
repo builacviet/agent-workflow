@@ -7,8 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_workflow.domain.service import WorkflowService
 from agent_workflow.runners.agent_runtime import AgentRuntime
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
 
 CLAIM = {"dispatch_id": "a" * 32, "input_sha": "b" * 40}
 CONTEXT = {"task_id": "TASK"}
@@ -226,9 +227,9 @@ def test_state_port_exception_propagates_without_republish(monkeypatch, failed_p
     assert calls.count("stop") == 4
 
 
-def test_legacy_facade_wires_sqlite_by_default(monkeypatch, tmp_path):
+def test_explicit_legacy_facade_wires_sqlite(monkeypatch, tmp_path):
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
-    runtime = CoderRuntime({}, None)
+    runtime = LegacySqliteCoderRuntime({}, WorkflowService(tmp_path / "legacy.db"))
     assert isinstance(runtime.agent_runtime, AgentRuntime)
     assert runtime.agent_runtime.dispatch.__class__.__name__ == "DispatchLedger"
     assert runtime.agent_runtime.ci.__class__.__name__ == "_SqliteCiTracking"

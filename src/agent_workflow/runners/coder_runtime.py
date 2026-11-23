@@ -317,49 +317,63 @@ class _SqliteCiTracking:
 
 
 class CoderRuntime:
+    """Trusted Worker host with explicitly injected execution state."""
+
     def __init__(
         self,
         config: dict,
         service: WorkflowService,
         *,
+        dispatch: DispatchEvidence,
+        ci: CiTracking,
+        leadership_guard: Callable[[], bool],
         plugins: Iterable[AgentRuntimePlugin] = (),
-        dispatch: DispatchEvidence | None = None,
-        ci: CiTracking | None = None,
-        leadership_guard: Callable[[], bool] | None = None,
     ) -> None:
-        app_config = AppConfig.from_env()
-        injected = (
-            dispatch is not None or ci is not None or leadership_guard is not None
+        if (
+            not isinstance(service, WorkflowService)
+            or not callable(getattr(service.repository, "transaction", None))
+            or callable(getattr(service.repository, "raw_transaction", None))
+            or isinstance(dispatch, DispatchLedger)
+            or not callable(getattr(dispatch, "is_pre_launch", None))
+            or not callable(getattr(dispatch, "retire_pre_launch", None))
+            or not callable(getattr(dispatch, "record_runtime_evidence", None))
+            or isinstance(ci, _SqliteCiTracking)
+            or not callable(getattr(ci, "execute", None))
+            or not callable(leadership_guard)
+        ):
+            raise TypeError(
+                "Worker requires injected workflow, dispatch evidence, CI tracking "
+                "and leadership"
+            )
+        self._initialize(
+            config,
+            service,
+            plugins,
+            AppConfig.from_env(),
+            dispatch,
+            ci,
+            leadership_guard,
         )
-        if injected:
-            if (
-                service is None
-                or dispatch is None
-                or not callable(getattr(dispatch, "is_pre_launch", None))
-                or not callable(getattr(dispatch, "retire_pre_launch", None))
-                or not callable(getattr(dispatch, "record_runtime_evidence", None))
-                or ci is None
-                or not callable(getattr(ci, "execute", None))
-                or not callable(leadership_guard)
-            ):
-                raise TypeError(
-                    "Worker requires dispatch evidence, CI tracking and leadership"
-                )
-        else:
-            if app_config.pg_runtime_dsn is not None or (
-                isinstance(service, WorkflowService)
-                and not callable(getattr(service.repository, "raw_transaction", None))
-            ):
-                raise TypeError("PostgreSQL Worker state must be injected")
-            self._check_legacy_fences(config, service)
-            dispatch = DispatchLedger(service)
-            ci = _SqliteCiTracking(service)
 
+    def _initialize(
+        self,
+        config: dict,
+        service: WorkflowService,
+        plugins: Iterable[AgentRuntimePlugin],
+        app_config: AppConfig,
+        dispatch: DispatchEvidence,
+        ci: CiTracking,
+        leadership_guard: Callable[[], bool] | None,
+    ) -> None:
         self.config, self.service = config, service
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
         self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
         self.agent_runtime = AgentRuntime(
-            self, dispatch, ci, leadership_guard, require_ci_tracking=injected
+            self,
+            dispatch,
+            ci,
+            leadership_guard,
+            require_ci_tracking=leadership_guard is not None,
         )
 
     @staticmethod
@@ -734,4 +748,33 @@ class CoderRuntime:
             result["head_sha"],
             task["handoff_path"],
             test_summary + "; worker PR: " + result["pr_url"],
+        )
+
+
+class LegacySqliteCoderRuntime(CoderRuntime):
+    """Explicit compatibility entry point for the legacy SQLite Controller."""
+
+    def __init__(
+        self,
+        config: dict,
+        service: WorkflowService,
+        *,
+        plugins: Iterable[AgentRuntimePlugin] = (),
+    ) -> None:
+        app_config = AppConfig.from_env()
+        if (
+            app_config.pg_runtime_dsn is not None
+            or not isinstance(service, WorkflowService)
+            or not callable(getattr(service.repository, "raw_transaction", None))
+        ):
+            raise TypeError("Legacy SQLite Worker requires a SQLite workflow service")
+        self._check_legacy_fences(config, service)
+        self._initialize(
+            config,
+            service,
+            plugins,
+            app_config,
+            DispatchLedger(service),
+            _SqliteCiTracking(service),
+            None,
         )

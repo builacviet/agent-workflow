@@ -1,5 +1,6 @@
 """Offline Worker composition and admission tests for the PostgreSQL runtime."""
 
+import sqlite3
 from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.composition import worker_deps
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
@@ -41,12 +43,22 @@ def forbidden(*args, **kwargs):
     pytest.fail("unexpected external operation or legacy SQLite path")
 
 
+@pytest.fixture
+def forbid_worker_effects(monkeypatch):
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
+    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
+    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
+    monkeypatch.setattr(coder_runtime, "docker_command", forbidden)
+    monkeypatch.setattr(coder_runtime, "run_container", forbidden)
+
+
 def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     wiring, monkeypatch
 ):
     factory, dependencies, service = wiring
-    monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
-    monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
+    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
+    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime.CoderRuntime, "_check_legacy_fences", forbidden)
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
@@ -81,10 +93,10 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     ],
 )
 def test_missing_or_wrong_controller_dependency_fails_closed(
-    wiring, monkeypatch, missing
+    wiring, forbid_worker_effects, monkeypatch, missing
 ):
     _, dependencies, service = wiring
-    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
+    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     for invalid in (None, object()):
         with pytest.raises(TypeError, match="Worker requires"):
             compose_postgres_worker(
@@ -95,17 +107,23 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
             )
 
 
-@pytest.mark.parametrize("foreign", ["dispatch", "ci_factory", "leadership"])
-def test_mixed_factories_are_rejected(wiring, foreign):
+@pytest.mark.parametrize(
+    "foreign",
+    [("dispatch",), ("ci_factory",), ("leadership",), ("ci_tracking", "ci_repository")],
+)
+def test_mixed_factories_are_rejected(
+    wiring, forbid_worker_effects, monkeypatch, foreign
+):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
         PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
     )
+    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     with pytest.raises(TypeError, match="share the open Controller factory"):
         compose_postgres_worker(
             {},
             service,
-            replace(dependencies, **{foreign: getattr(other, foreign)}),
+            replace(dependencies, **{name: getattr(other, name) for name in foreign}),
             leadership_guard=forbidden,
         )
 
@@ -148,28 +166,90 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
         compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
 
 
-def test_missing_or_invalid_injection_cannot_fall_back(wiring, monkeypatch):
+def test_released_lock_cannot_construct_worker(
+    wiring, forbid_worker_effects, monkeypatch
+):
     _, dependencies, service = wiring
-    monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
-    monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
+    dependencies.leadership.release()
+    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    with pytest.raises(PermissionError, match="active Controller leadership"):
+        compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
+
+
+def test_missing_or_invalid_controller_guard_cannot_construct_worker(
+    wiring, forbid_worker_effects, monkeypatch
+):
+    _, dependencies, service = wiring
+    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     with pytest.raises(TypeError, match="leadership_guard"):
         compose_postgres_worker({}, service, dependencies)
-    with pytest.raises(TypeError, match="Controller guard"):
-        compose_postgres_worker({}, service, dependencies, leadership_guard=None)
-    with pytest.raises(TypeError, match="must be injected"):
-        coder_runtime.CoderRuntime({}, service)
+    for invalid in (None, object()):
+        with pytest.raises(TypeError, match="Controller guard"):
+            compose_postgres_worker({}, service, dependencies, leadership_guard=invalid)
 
+
+def test_missing_or_invalid_injection_cannot_fall_back(
+    wiring, forbid_worker_effects, monkeypatch, tmp_path
+):
+    _, dependencies, service = wiring
+    database = tmp_path / "misleading.sqlite"
+    config = {"database": str(database)}
+    monkeypatch.setattr(coder_runtime.AppConfig, "from_env", forbidden)
+    with pytest.raises(TypeError, match="required keyword-only arguments"):
+        coder_runtime.CoderRuntime(config, service)
     injected = {
         "dispatch": dependencies.dispatch,
         "ci": dependencies.ci_tracking,
         "leadership_guard": lambda: True,
     }
     for port in injected:
+        with pytest.raises(TypeError, match=port):
+            coder_runtime.CoderRuntime(
+                config,
+                service,
+                **{key: value for key, value in injected.items() if key != port},
+            )
         for invalid in (None, object()):
-            with pytest.raises(
-                TypeError, match="dispatch evidence, CI tracking and leadership"
-            ):
-                coder_runtime.CoderRuntime({}, service, **(injected | {port: invalid}))
+            with pytest.raises(TypeError, match="Worker requires injected workflow"):
+                coder_runtime.CoderRuntime(
+                    config, service, **(injected | {port: invalid})
+                )
+    with pytest.raises(TypeError, match="Worker requires injected workflow"):
+        coder_runtime.CoderRuntime(config, service, **dict.fromkeys(injected))
+    assert not database.exists()
+
+
+def test_sqlite_state_cannot_be_injected_into_worker(wiring, monkeypatch, tmp_path):
+    _, deps, service = wiring
+    legacy_service = WorkflowService(tmp_path / "legacy.sqlite")
+    ledger = coder_runtime.DispatchLedger(legacy_service)
+    ci = coder_runtime._SqliteCiTracking(legacy_service)
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
+    monkeypatch.setattr(coder_runtime.AppConfig, "from_env", forbidden)
+    for workflow, dispatch, ci_tracking in (
+        (legacy_service, deps.dispatch, deps.ci_tracking),
+        (service, ledger, deps.ci_tracking),
+        (service, deps.dispatch, ci),
+    ):
+        with pytest.raises(TypeError, match="Worker requires injected workflow"):
+            coder_runtime.CoderRuntime(
+                {},
+                workflow,
+                dispatch=dispatch,
+                ci=ci_tracking,
+                leadership_guard=forbidden,
+            )
+
+
+def test_explicit_legacy_entry_rejects_pg_service_with_no_dsn(
+    wiring, forbid_worker_effects
+):
+    _, _, service = wiring
+    with pytest.raises(TypeError, match="SQLite workflow service"):
+        coder_runtime.LegacySqliteCoderRuntime(
+            {"database": "deceptive.sqlite"}, service
+        )
 
 
 @pytest.mark.parametrize("guard_result", [None, False])

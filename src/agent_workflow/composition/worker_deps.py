@@ -1,10 +1,13 @@
 """Compose a trusted Worker runtime from already assembled dependencies."""
 
 from collections.abc import Callable, Iterable
+from inspect import getclosurevars
+from types import FunctionType
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
+    compose_postgres_controller,
 )
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
@@ -19,6 +22,26 @@ from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+def _uses_controller_ci_factory(
+    repository: SqlAlchemyCiStateRepository, factory: PostgresFactory
+) -> bool:
+    # The Controller supplies a deferred lambda. Verify its factory binding
+    # without calling it or opening a session during composition.
+    scope = repository._session_scope
+    if (
+        repository._session is not None
+        or not isinstance(scope, FunctionType)
+        or scope.__module__ != compose_postgres_controller.__module__
+        or scope.__qualname__
+        != f"{compose_postgres_controller.__qualname__}.<locals>.<lambda>"
+    ):
+        return False
+    try:
+        return getclosurevars(scope).nonlocals.get("factory") is factory
+    except ValueError:
+        return False
 
 
 def compose_postgres_worker(
@@ -69,9 +92,12 @@ def compose_postgres_worker(
         or factory._closed
         or dispatch.factory is not factory
         or ci_factory is not factory
+        or not _uses_controller_ci_factory(ci_repository, factory)
         or leadership._factory is not factory
     ):
         raise TypeError("Worker dependencies must share the open Controller factory")
+    if leadership._retired:
+        raise PermissionError("Worker requires active Controller leadership")
 
     def guard() -> bool:
         # The runner guard raises on loss. Also verify the borrowed lock itself

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sqlite3
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -84,15 +85,53 @@ def test_pg_once_cli_routes_without_sqlite(config, tmp_path, monkeypatch):
     assert runner.call_args.args[1].pg_runtime_dsn == DSN
 
 
+def test_legacy_operate_explicitly_selects_sqlite(config, tmp_path, monkeypatch):
+    monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
+    path = tmp_path / "legacy.sqlite"
+    run_once = Mock()
+    monkeypatch.setattr(controller, "run_once", run_once)
+    controller.operate(
+        config | {"database": str(path)},
+        SimpleNamespace(once=True, acknowledge=None),
+    )
+    run_once.assert_called_once()
+    service, ledger, _, execute, _ = run_once.call_args.args
+    runtime = execute.__self__
+    assert isinstance(runtime, coder_runtime.LegacySqliteCoderRuntime)
+    assert runtime.service is ledger.service is service
+    assert runtime.agent_runtime.dispatch.service is service
+    assert runtime.agent_runtime.ci.service is service
+    assert path.is_file()
+
+
+def test_pg_once_cli_with_empty_dsn_never_calls_legacy(config, tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    sqlite_path = tmp_path / "misleading.sqlite"
+    path.write_text(json.dumps(config | {"database": str(sqlite_path)}))
+    monkeypatch.setenv("PG_RUNTIME_DSN", "")
+    monkeypatch.setattr(sys, "argv", ["controller", str(path), "--once"])
+    monkeypatch.setattr(controller, "process_lock", forbidden)
+    monkeypatch.setattr(controller, "operate", forbidden)
+    monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
+    with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
+        controller.main()
+    assert not sqlite_path.exists()
+
+
 @pytest.mark.parametrize("dsn", [None, "", "postgresql://bad"])
-def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, dsn):
+def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, tmp_path, dsn):
+    monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
     monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
     monkeypatch.setattr(entry, "compose_postgres_worker", forbidden)
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
+    sqlite_path = tmp_path / "misleading.sqlite"
     app = AppConfig()
     # Bypass model validation to ensure the entrypoint itself rejects it.
     app = app.model_copy(update={"pg_runtime_dsn": dsn})
     with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
-        entry.run_postgres_dispatch_once(config, app)
+        entry.run_postgres_dispatch_once(config | {"database": str(sqlite_path)}, app)
+    assert not sqlite_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -249,8 +288,8 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "compose_postgres_controller",
         lambda borrowed: deps if borrowed is factory else forbidden(),
     )
-    monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
-    monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
+    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
+    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
 
     def compose(cfg, service, borrowed, *, leadership_guard):
@@ -453,8 +492,8 @@ def test_pg_once_runs_native_dev_stages(
     for module in (coder_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")
-    monkeypatch.setattr(coder_runtime, "DispatchLedger", forbidden)
-    monkeypatch.setattr(coder_runtime, "_SqliteCiTracking", forbidden)
+    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
+    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(trusted_worker, "ROOT", stage)
     monkeypatch.setattr(trusted_worker, "GitHubApp", forbidden)
     verifier = Mock()

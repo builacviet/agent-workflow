@@ -8,22 +8,29 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import time
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from agent_workflow import budget
+from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox, sandbox_watchdog
-from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy, SandboxRunResult
-
+from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
+from agent_workflow.runners.sandbox import (
+    SandboxManager,
+    SandboxPolicy,
+    SandboxRunResult,
+)
 
 _FIXTURE_PIN = "sha256:" + "b" * 64
-_ENGINE_INFO = b'"fixture-daemon-a" "linux" true true true true ["name=seccomp,profile=builtin"]'
+_ENGINE_INFO = (
+    b'"fixture-daemon-a" "linux" true true true true ["name=seccomp,profile=builtin"]'
+)
 
 
 _FIXTURE_HOST = "unix:///fixture-original.sock"
@@ -38,11 +45,15 @@ def offline_docker_endpoint(monkeypatch, request):
 
 
 def _image_metadata(image_id):
-    return json.dumps([{
-        "Id": image_id,
-        "Os": "linux",
-        "Config": {},
-    }]).encode()
+    return json.dumps(
+        [
+            {
+                "Id": image_id,
+                "Os": "linux",
+                "Config": {},
+            }
+        ]
+    ).encode()
 
 
 @pytest.mark.parametrize(
@@ -85,11 +96,15 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
 
 def test_declared_image_volumes_fail_closed(monkeypatch):
     def docker(args):
-        return json.dumps([{
-            "Id": "sha256:" + "b" * 64,
-            "Os": "linux",
-            "Config": {"Volumes": {"/data": {}}},
-        }]).encode()
+        return json.dumps(
+            [
+                {
+                    "Id": "sha256:" + "b" * 64,
+                    "Os": "linux",
+                    "Config": {"Volumes": {"/data": {}}},
+                }
+            ]
+        ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(WorkflowError, match="without declared volumes"):
@@ -132,18 +147,24 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
                 return identifier.encode()
             case "container" if args[1] == "inspect":
                 assert args[-1] == identifier
-                image_id = "sha256:" + "c" * 64 if outcome == "image-mismatch" else _FIXTURE_PIN
+                image_id = (
+                    "sha256:" + "c" * 64
+                    if outcome == "image-mismatch"
+                    else _FIXTURE_PIN
+                )
                 return " ".join(
                     json.dumps(value)
                     for value in (identifier, "/" + owned, image_id, dispatch)
                 ).encode()
             case "container":
                 if owned:
-                    return json.dumps({
-                        "ID": identifier,
-                        "Names": owned,
-                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
-                    }).encode()
+                    return json.dumps(
+                        {
+                            "ID": identifier,
+                            "Names": owned,
+                            "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                        }
+                    ).encode()
                 return b""
             case "rm":
                 assert args == ["rm", "-f", identifier]
@@ -208,7 +229,9 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         assert (tmp_path / "fences" / f"{dispatch}.scope").exists()
         return
     else:
-        with pytest.raises(WorkflowError, match="container image differs from approved pin"):
+        with pytest.raises(
+            WorkflowError, match="container image differs from approved pin"
+        ):
             run()
 
     expected = ["image", "create", "container", "container", "rm", "container"]
@@ -245,7 +268,9 @@ def test_retagged_image_does_not_create_container(monkeypatch, tmp_path):
         return _image_metadata("sha256:" + "c" * 64)
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="image reference differs from approved pin"):
+    with pytest.raises(
+        WorkflowError, match="image reference differs from approved pin"
+    ):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
             dispatch_id="a" * 32,
@@ -279,11 +304,13 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
             case "container":
                 assert args[1] == "ls"
                 if present:
-                    return json.dumps({
-                        "ID": identifier,
-                        "Names": requested_name,
-                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
-                    }).encode()
+                    return json.dumps(
+                        {
+                            "ID": identifier,
+                            "Names": requested_name,
+                            "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                        }
+                    ).encode()
                 return b""
             case "rm":
                 assert args == ["rm", "-f", identifier]
@@ -323,17 +350,23 @@ def test_cleanup_rejects_unowned_id(monkeypatch, tmp_path):
 
     def docker(args):
         calls.append(args)
-        return json.dumps({
-            "ID": "b" * 64,
-            "Names": "unrelated",
-            "Labels": "",
-        }).encode()
+        return json.dumps(
+            {
+                "ID": "b" * 64,
+                "Names": "unrelated",
+                "Labels": "",
+            }
+        ).encode()
 
     manager = SandboxManager(tmp_path / "fences")
     dispatch = "a" * 32
     manager._record_scope(
-        manager._scope_path(dispatch), dispatch, "unused",
-        "fixture-daemon-a", time.time(), _FIXTURE_HOST,
+        manager._scope_path(dispatch),
+        dispatch,
+        "unused",
+        "fixture-daemon-a",
+        time.time(),
+        _FIXTURE_HOST,
     )
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(sandbox, "_docker", docker)
@@ -478,8 +511,14 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
     name = f"my-wfc-sandbox-{dispatch}-test-{uuid4().hex}"
     fixture = subprocess.run(
         [
-            "docker", "create", "--pull=never", "--network=none",
-            "--name", name, image, "true",
+            "docker",
+            "create",
+            "--pull=never",
+            "--network=none",
+            "--name",
+            name,
+            image,
+            "true",
         ],
         check=True,
         capture_output=True,
@@ -497,7 +536,12 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
         assert (workspace / "started").is_file(), "test workload never started"
         ids = subprocess.run(
             [
-                "docker", "container", "ls", "-aq", "--no-trunc", "--filter",
+                "docker",
+                "container",
+                "ls",
+                "-aq",
+                "--no-trunc",
+                "--filter",
                 f"name=^/my-wfc-sandbox-{dispatch}-",
             ],
             check=True,
@@ -522,18 +566,23 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
         )
 
 
-
 def test_image_with_unapproved_secret_env_is_rejected(monkeypatch):
     def docker(args):
-        return json.dumps([{
-            "Id": _FIXTURE_PIN, "Os": "linux",
-            "Config": {"Env": ["PATH=/usr/bin", "OPENAI_API_KEY=synthetic-canary"]}
-        }]).encode()
+        return json.dumps(
+            [
+                {
+                    "Id": _FIXTURE_PIN,
+                    "Os": "linux",
+                    "Config": {
+                        "Env": ["PATH=/usr/bin", "OPENAI_API_KEY=synthetic-canary"]
+                    },
+                }
+            ]
+        ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(WorkflowError, match="local Linux image"):
         sandbox._local_image("fixture:secret")
-
 
 
 def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
@@ -542,17 +591,22 @@ def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
     scope = manager._scope_path(dispatch)
     name = f"my-wfc-sandbox-{dispatch}-code-" + "b" * 32
     identifier = "c" * 64
-    manager._record_scope(scope, dispatch, name, "daemon-A-123", 1000000., _FIXTURE_HOST)
+    manager._record_scope(
+        scope, dispatch, name, "daemon-A-123", 1000000.0, _FIXTURE_HOST
+    )
     manager._update_scope(scope, "CREATED")
     engine = {"id": "daemon-B-456", "owned": True, "removed": False}
 
     def docker(args):
         if args[:2] == ["container", "ls"]:
             if engine["id"] == "daemon-A-123" and engine["owned"]:
-                return json.dumps({
-                    "ID": identifier, "Names": name,
-                    "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
-                }).encode()
+                return json.dumps(
+                    {
+                        "ID": identifier,
+                        "Names": name,
+                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                    }
+                ).encode()
             return b""
         if args[:2] == ["rm", "-f"]:
             assert engine["id"] == "daemon-A-123"
@@ -577,7 +631,9 @@ def test_prepared_not_submitted_can_be_reconciled(monkeypatch, tmp_path):
     fence = manager._fence_path(dispatch)
     scope = manager._scope_path(dispatch)
     name = f"my-wfc-sandbox-{dispatch}-code-" + "b" * 32
-    manager._record_scope(scope, dispatch, name, "daemon-A-123", 1000000., _FIXTURE_HOST)
+    manager._record_scope(
+        scope, dispatch, name, "daemon-A-123", 1000000.0, _FIXTURE_HOST
+    )
     manager._record_create(fence, name)
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "daemon-A-123")
     monkeypatch.setattr(sandbox, "_docker", lambda args: b"")
@@ -585,8 +641,9 @@ def test_prepared_not_submitted_can_be_reconciled(monkeypatch, tmp_path):
     assert not fence.exists() and not scope.exists()
 
 
-
-def test_watchdog_recovers_from_daemon_error_after_controller_death(live_sandbox, tmp_path):
+def test_watchdog_recovers_from_daemon_error_after_controller_death(
+    live_sandbox, tmp_path
+):
     """Kill the launching process and inject one daemon failure in the detached watchdog."""
     import sys
     import time
@@ -614,7 +671,8 @@ manager.run(
     fault = tmp_path / "watchdog-fault-observed"
     hook = tmp_path / "watchdog-hook"
     hook.mkdir()
-    (hook / "sitecustomize.py").write_text(f"""
+    (hook / "sitecustomize.py").write_text(
+        f"""
 import os
 import sys
 from pathlib import Path
@@ -636,14 +694,20 @@ if "agent_workflow.runners.sandbox_watchdog" in sys.orig_argv:
         return original(args)
 
     sandbox._docker = injected
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(hook), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(hook), env.get("PYTHONPATH")))
+    )
     env["WFC_SYNTHETIC_CREDENTIAL"] = "synthetic-canary"
     env["HTTPS_PROXY"] = "http://fixture:synthetic-canary@proxy.invalid"
     child = subprocess.Popen(
         [sys.executable, "-c", code, str(fences), dispatch, str(workspace), image, pin],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
     )
     try:
         started = workspace / "child-started"
@@ -659,9 +723,19 @@ if "agent_workflow.runners.sandbox_watchdog" in sys.orig_argv:
         deadline = time.monotonic() + 13
         while time.monotonic() < deadline:
             found = subprocess.run(
-                ["docker", "container", "ls", "-aq", "--no-trunc", "--filter",
-                 f"label=org.agent-workflow.sandbox.dispatch={dispatch}"],
-                check=True, capture_output=True, text=True, timeout=10,
+                [
+                    "docker",
+                    "container",
+                    "ls",
+                    "-aq",
+                    "--no-trunc",
+                    "--filter",
+                    f"label=org.agent-workflow.sandbox.dispatch={dispatch}",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
             ).stdout.strip()
             if not found:
                 break
@@ -697,14 +771,19 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
             monkeypatch.setenv("DOCKER_HOST", _OTHER_HOST)
             return identifier.encode()
         if args[:2] == ["container", "inspect"]:
-            return " ".join(map(json.dumps, (identifier, "/" + owned, _FIXTURE_PIN, dispatch))).encode()
+            return " ".join(
+                map(json.dumps, (identifier, "/" + owned, _FIXTURE_PIN, dispatch))
+            ).encode()
         if args[:2] == ["container", "ls"]:
             if owned is None:
                 return b""
-            return json.dumps({
-                "ID": identifier, "Names": owned,
-                "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
-            }).encode()
+            return json.dumps(
+                {
+                    "ID": identifier,
+                    "Names": owned,
+                    "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                }
+            ).encode()
         if args == ["rm", "-f", identifier]:
             owned = None
             return b""
@@ -712,12 +791,20 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
-    monkeypatch.setattr(coder_runtime, "run_container", lambda *args: pytest.fail("attached after switch"))
+    monkeypatch.setattr(
+        coder_runtime,
+        "run_container",
+        lambda *args: pytest.fail("attached after switch"),
+    )
     manager = SandboxManager(tmp_path / "fences")
     with pytest.raises(WorkflowError, match="endpoint changed during execution"):
         manager.run(
-            SandboxPolicy(), dispatch_id=dispatch, workspace=tmp_path,
-            image="fixture", approved_image_id=_FIXTURE_PIN, command=("code",),
+            SandboxPolicy(),
+            dispatch_id=dispatch,
+            workspace=tmp_path,
+            image="fixture",
+            approved_image_id=_FIXTURE_PIN,
+            command=("code",),
         )
     assert "rm" in calls and owned is None
     assert not manager._scope_path(dispatch).exists()
@@ -730,7 +817,9 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
     name = f"my-wfc-sandbox-{dispatch}-code-" + "b" * 32
     manager = SandboxManager(tmp_path / "fences")
     scope = manager._scope_path(dispatch)
-    manager._record_scope(scope, dispatch, name, "fixture-daemon-a", time.time() - 1, _FIXTURE_HOST)
+    manager._record_scope(
+        scope, dispatch, name, "fixture-daemon-a", time.time() - 1, _FIXTURE_HOST
+    )
     manager._update_scope(scope, "CREATED")
     monkeypatch.setenv("DOCKER_HOST", _OTHER_HOST)
     monkeypatch.setattr(sandbox_watchdog.time, "sleep", lambda _: None)
@@ -742,17 +831,26 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
         assert sandbox._DOCKER_HOST.get() == _FIXTURE_HOST
         if args[0] == "info":
             info_calls += 1
-            if info_calls > 1 and (failure == "persistent" or (failure == "info" and info_calls == 2)):
+            if info_calls > 1 and (
+                failure == "persistent" or (failure == "info" and info_calls == 2)
+            ):
                 raise WorkflowError("synthetic daemon outage")
             return _ENGINE_INFO
         if args[:2] == ["container", "ls"]:
             inventory_calls += 1
             if failure == "inventory" and inventory_calls == 1:
                 raise WorkflowError("synthetic inventory failure")
-            return json.dumps({
-                "ID": identifier, "Names": name,
-                "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
-            }).encode() if owned else b""
+            return (
+                json.dumps(
+                    {
+                        "ID": identifier,
+                        "Names": name,
+                        "Labels": f"org.agent-workflow.sandbox.dispatch={dispatch}",
+                    }
+                ).encode()
+                if owned
+                else b""
+            )
         if args == ["rm", "-f", identifier]:
             owned = False
             return b""
@@ -765,11 +863,16 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
     if failure == "persistent":
         assert info_calls == 4 and owned and not stamp.exists()
     else:
-        assert not owned and stamp.read_text(encoding="ascii") == "deadline-cleanup-confirmed"
+        assert (
+            not owned
+            and stamp.read_text(encoding="ascii") == "deadline-cleanup-confirmed"
+        )
 
 
 @pytest.mark.parametrize("outcome", ["not-launched", "rejected", "unknown", "timeout"])
-def test_create_fence_clears_only_on_definitive_rejection(monkeypatch, tmp_path, outcome):
+def test_create_fence_clears_only_on_definitive_rejection(
+    monkeypatch, tmp_path, outcome
+):
     dispatch = "a" * 32
     manager = SandboxManager(tmp_path / "fences")
 
@@ -780,7 +883,8 @@ def test_create_fence_clears_only_on_definitive_rejection(monkeypatch, tmp_path,
             raise subprocess.TimeoutExpired(args, 1)
         stderr = (
             b"Error response from daemon: No such image: " + _FIXTURE_PIN.encode()
-            if outcome == "rejected" else b"synthetic uncertain connection loss"
+            if outcome == "rejected"
+            else b"synthetic uncertain connection loss"
         )
         raise subprocess.CalledProcessError(1, args, stderr=stderr)
 
@@ -800,8 +904,12 @@ def test_create_fence_clears_only_on_definitive_rejection(monkeypatch, tmp_path,
     expected = sandbox.DockerCreateRejected if terminal else WorkflowError
     with pytest.raises(expected) as error:
         manager.run(
-            SandboxPolicy(), dispatch_id=dispatch, workspace=tmp_path,
-            image="fixture", approved_image_id=_FIXTURE_PIN, command=("code",),
+            SandboxPolicy(),
+            dispatch_id=dispatch,
+            workspace=tmp_path,
+            image="fixture",
+            approved_image_id=_FIXTURE_PIN,
+            command=("code",),
         )
     if not terminal:
         assert "create remains uncertain" in str(error.value)
@@ -809,11 +917,14 @@ def test_create_fence_clears_only_on_definitive_rejection(monkeypatch, tmp_path,
     assert manager._scope_path(dispatch).exists() is not terminal
 
 
-@pytest.mark.parametrize("env", [
-    (("OPENAI_API_KEY", "opaque-canary"),),
-    (("MODEL", "https://fixture:synthetic-canary@proxy.invalid"),),
-    (("Https_Proxy", "http://proxy.invalid"),),
-])
+@pytest.mark.parametrize(
+    "env",
+    [
+        (("OPENAI_API_KEY", "opaque-canary"),),
+        (("MODEL", "https://fixture:synthetic-canary@proxy.invalid"),),
+        (("Https_Proxy", "http://proxy.invalid"),),
+    ],
+)
 def test_direct_sandbox_env_rejects_secrets_and_proxy_overrides(env):
     with pytest.raises(ValueError, match="invalid sandbox environment"):
         sandbox._environment(env)
@@ -827,93 +938,96 @@ def test_approved_image_env_name_cannot_carry_proxy_credentials(monkeypatch):
         sandbox._local_image("fixture")
 
 
-def test_live_sandbox_suppresses_docker_proxy_defaults(live_sandbox, tmp_path, monkeypatch):
+def test_live_sandbox_suppresses_docker_proxy_defaults(
+    live_sandbox, tmp_path, monkeypatch
+):
     run, _, _, _, _ = live_sandbox
     host = sandbox._selected_host()
     config = tmp_path / "proxy-config"
     config.mkdir()
-    (config / "config.json").write_text(json.dumps({"proxies": {"default": {
-        "httpProxy": "http://fixture:synthetic-canary@proxy.invalid",
-        "httpsProxy": "http://fixture:synthetic-canary@proxy.invalid",
-        "noProxy": "synthetic-canary.invalid",
-    }}}), encoding="utf-8")
+    (config / "config.json").write_text(
+        json.dumps(
+            {
+                "proxies": {
+                    "default": {
+                        "httpProxy": "http://fixture:synthetic-canary@proxy.invalid",
+                        "httpsProxy": "http://fixture:synthetic-canary@proxy.invalid",
+                        "noProxy": "synthetic-canary.invalid",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
     monkeypatch.setenv("DOCKER_HOST", host)
     monkeypatch.setenv("DOCKER_CONFIG", str(config))
-    assert run(
-        "import os, sys; assert all(os.environ.get(k) == '' for k in sys.argv[1:]); print('ok')",
-        *sandbox._PROXY_NAMES,
-    ).strip() == b"ok"
+    assert (
+        run(
+            "import os, sys; assert all(os.environ.get(k) == '' for k in sys.argv[1:]); print('ok')",
+            *sandbox._PROXY_NAMES,
+        ).strip()
+        == b"ok"
+    )
 
 
-def test_runtime_state_is_independent_of_database_and_survives_restart(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from agent_workflow.runners.coder_runtime import CoderRuntime
-
+def test_runtime_state_is_independent_of_database_and_survives_restart(
+    monkeypatch, tmp_path
+):
     state = tmp_path / "sandbox-state"
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(state))
-    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(tmp_path / "db.sqlite")))
-    first = CoderRuntime({}, service)
+    service = WorkflowService(tmp_path / "db.sqlite")
+    first = LegacySqliteCoderRuntime({}, service)
     assert first.sandbox._fence_dir == state
     dispatch = "a" * 32
     first.sandbox.record_engine(dispatch, "unix:///fixture.sock", "fixture-daemon-a")
     dsn = "postgresql://user:secret-password@localhost/database"
-    second = CoderRuntime({"database": dsn}, service)
+    second = LegacySqliteCoderRuntime({"database": dsn}, service)
     assert second.sandbox._fence_dir == state
     assert second.sandbox.has_launch_records(dispatch)
     assert second.sandbox.recovery_engine(dispatch) == (
-        "unix:///fixture.sock", "fixture-daemon-a"
+        "unix:///fixture.sock",
+        "fixture-daemon-a",
     )
     assert "secret-password" not in str(second.sandbox._fence_dir)
 
 
 def test_runtime_refuses_to_abandon_legacy_fences(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from agent_workflow.runners.coder_runtime import CoderRuntime
-    from agent_workflow.integrations.github import WorkflowError
-
     database = tmp_path / "state.sqlite"
     legacy = tmp_path / "state.sqlite.sandbox-fences"
     legacy.mkdir()
     (legacy / "pending.scope").write_text("pending", encoding="ascii")
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    service = WorkflowService(database)
     with pytest.raises(WorkflowError, match="operator recovery"):
-        CoderRuntime({}, service)
+        LegacySqliteCoderRuntime({}, service)
     assert (legacy / "pending.scope").read_text() == "pending"
 
 
-def test_runtime_without_state_uses_stable_default(monkeypatch):
-    from agent_workflow.runners.coder_runtime import CoderRuntime
-
+def test_runtime_without_state_override_uses_stable_default(monkeypatch, tmp_path):
     monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
-    runtime = CoderRuntime({}, None)
-    assert runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
+    runtime = LegacySqliteCoderRuntime({}, WorkflowService(tmp_path / "legacy.db"))
+    assert (
+        runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
+    )
 
 
 def test_dsn_override_cannot_hide_repository_legacy_fences(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from agent_workflow.runners.coder_runtime import CoderRuntime
-
     database = tmp_path / "state.sqlite"
     legacy = tmp_path / "state.sqlite.sandbox-fences"
     legacy.mkdir()
     record = legacy / "pending.scope"
     record.write_text("pending", encoding="ascii")
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    service = WorkflowService(database)
     dsn = "postgresql://user:secret-password@localhost/database"
     with pytest.raises(WorkflowError, match="operator recovery") as error:
-        CoderRuntime({"database": dsn}, service)
+        LegacySqliteCoderRuntime({"database": dsn}, service)
     assert "secret-password" not in str(error.value)
     assert record.read_text(encoding="ascii") == "pending"
 
 
-
 def test_runtime_rejects_dangling_legacy_fence_link(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from agent_workflow.runners.coder_runtime import CoderRuntime
-
     database = tmp_path / "state.sqlite"
     legacy = tmp_path / "state.sqlite.sandbox-fences"
     try:
@@ -921,7 +1035,7 @@ def test_runtime_rejects_dangling_legacy_fence_link(monkeypatch, tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("symlink creation unavailable")
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = SimpleNamespace(repository=SimpleNamespace(db_path=str(database)))
+    service = WorkflowService(database)
     with pytest.raises(WorkflowError, match="operator recovery"):
-        CoderRuntime({}, service)
+        LegacySqliteCoderRuntime({}, service)
     assert legacy.is_symlink()

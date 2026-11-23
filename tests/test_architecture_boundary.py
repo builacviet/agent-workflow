@@ -15,7 +15,7 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.orchestration.controller import operate, run_once
 from agent_workflow.runners import coder_runtime, sandbox
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.runners.coder_runtime import CoderRuntime, LegacySqliteCoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 
@@ -151,7 +151,7 @@ def test_controller_only_launches_phases_and_receives_result(
     effort = (
         "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
     )
-    runtime = CoderRuntime(
+    runtime = LegacySqliteCoderRuntime(
         {
             "tasks": {"TEST": task},
             "app_id": 1,
@@ -319,7 +319,7 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     recovery_dispatch, monkeypatch, pin_written
 ):
     config, service, ledger = recovery_dispatch
-    runtime = CoderRuntime(config, service)
+    runtime = LegacySqliteCoderRuntime(config, service)
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
     monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
     original = sandbox.SandboxManager.record_engine
@@ -364,7 +364,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     config, service, ledger = recovery_dispatch
     dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
     ledger.block(dispatch_id)
-    runtime = CoderRuntime(config, service)
+    runtime = LegacySqliteCoderRuntime(config, service)
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
     path.parent.mkdir()
     path.touch()
@@ -385,7 +385,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     ledger = DispatchLedger(service)
-    runtime = CoderRuntime(config, service)
+    runtime = LegacySqliteCoderRuntime(config, service)
     dispatch_id = None
     name = None
     visible = False
@@ -631,7 +631,7 @@ def test_controller_compose_parses_without_starting_services():
 
 def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
     service = WorkflowService(tmp_path / "test.db", require_ci=False)
-    runtime = CoderRuntime({"image": "fixture"}, service)
+    runtime = LegacySqliteCoderRuntime({"image": "fixture"}, service)
     dispatch = "a" * 32
     host = "unix:///fixture.sock"
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)

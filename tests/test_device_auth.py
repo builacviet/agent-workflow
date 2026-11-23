@@ -9,7 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.domain.service import WorkflowService
+from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
 
 
 def test_worker_entrypoint_uses_trusted_git_module():
@@ -48,7 +49,7 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
-    runtime = CoderRuntime(config, None)
+    runtime = LegacySqliteCoderRuntime(config, WorkflowService(config["database"]))
     claim = {
         "dispatch_id": "a" * 32,
         "input_sha": "b" * 40,
