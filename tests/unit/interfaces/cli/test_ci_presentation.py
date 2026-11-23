@@ -240,6 +240,37 @@ def test_terminal_boundary_does_not_report_success_when_composition_close_fails(
     assert "close-secret" not in captured.err
 
 
+def test_terminal_boundary_reports_one_shot_success_after_composition_closes(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    events = []
+
+    @contextmanager
+    def compose(config, app_config):
+        events.append("opened")
+        yield Mock(return_value=ci_controller.CiRunResponse(1, 0))
+        events.append("closed")
+
+    monkeypatch.setattr(
+        ci_controller, "_print_ci_once", lambda _result: events.append("reported")
+    )
+    ci_controller.run_ci_command(
+        ci_once=True,
+        ci_watch=False,
+        dispatch_once=False,
+        acknowledge=None,
+        reconciled=False,
+        prepare=lambda: ({}, AppConfig.from_env()),
+        compose=compose,
+        log_scope=ci_log_scope,
+    )
+
+    assert events == ["opened", "closed", "reported"]
+
+
 def test_terminal_boundary_rejects_invalid_configuration_safely(
     tmp_path, monkeypatch, capsys
 ):
