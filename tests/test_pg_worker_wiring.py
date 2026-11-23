@@ -3,6 +3,7 @@
 import sqlite3
 from contextlib import nullcontext
 from dataclasses import replace
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -11,7 +12,10 @@ from sqlalchemy import create_engine
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition import worker_deps
-from agent_workflow.composition.postgres_controller import compose_postgres_controller
+from agent_workflow.composition.postgres_controller import (
+    ControllerCiSessionProvider,
+    compose_postgres_controller,
+)
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.postgres_leadership import (
@@ -57,6 +61,7 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     wiring, monkeypatch
 ):
     factory, dependencies, service = wiring
+    monkeypatch.setattr(factory, "get_scoped_session", forbidden)
     monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime.CoderRuntime, "_check_legacy_fences", forbidden)
@@ -77,8 +82,28 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
+    assert dependencies.ci_repository._session_scope.factory is factory
     connect.assert_not_called()
     dispose.assert_not_called()
+
+
+def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
+    factory, _, _ = wiring
+    session_scope = nullcontext()
+    open_scope = Mock(return_value=session_scope)
+    deferred = partial(open_scope, factory)
+    monkeypatch.setattr(factory, "get_scoped_session", deferred)
+    dependencies = compose_postgres_controller(factory)
+    service = WorkflowService(repository=dependencies.workflow)
+
+    runtime = compose_postgres_worker(
+        {}, service, dependencies, leadership_guard=forbidden
+    )
+
+    assert runtime.agent_runtime.ci is dependencies.ci_tracking
+    open_scope.assert_not_called()
+    assert dependencies.ci_repository._session_scope() is session_scope
+    open_scope.assert_called_once_with(factory)
 
 
 @pytest.mark.parametrize(
@@ -114,10 +139,13 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
 def test_mixed_factories_are_rejected(
     wiring, forbid_worker_effects, monkeypatch, foreign
 ):
-    _, dependencies, service = wiring
-    other = compose_postgres_controller(
-        PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
+    factory, dependencies, service = wiring
+    other_factory = PostgresFactory(
+        create_engine("postgresql+psycopg://", creator=forbidden)
     )
+    monkeypatch.setattr(factory, "get_scoped_session", forbidden)
+    monkeypatch.setattr(other_factory, "get_scoped_session", forbidden)
+    other = compose_postgres_controller(other_factory)
     monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     with pytest.raises(TypeError, match="share the open Controller factory"):
         compose_postgres_worker(
@@ -126,6 +154,33 @@ def test_mixed_factories_are_rejected(
             replace(dependencies, **{name: getattr(other, name) for name in foreign}),
             leadership_guard=forbidden,
         )
+
+
+@pytest.mark.parametrize(
+    "binding", ["foreign_factory", "unbound_callable", "session_bound"]
+)
+def test_actual_ci_provider_and_session_binding_are_checked(
+    wiring, forbid_worker_effects, monkeypatch, binding
+):
+    factory, dependencies, service = wiring
+    monkeypatch.setattr(factory, "get_scoped_session", forbidden)
+    repository = dependencies.ci_repository
+    if binding == "foreign_factory":
+        other_factory = PostgresFactory(
+            create_engine("postgresql+psycopg://", creator=forbidden)
+        )
+        monkeypatch.setattr(other_factory, "get_scoped_session", forbidden)
+        monkeypatch.setattr(
+            repository, "_session_scope", ControllerCiSessionProvider(other_factory)
+        )
+    elif binding == "unbound_callable":
+        monkeypatch.setattr(repository, "_session_scope", forbidden)
+    else:
+        monkeypatch.setattr(repository, "_session", object())
+    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+
+    with pytest.raises(TypeError, match="share the open Controller factory"):
+        compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
 
 
 @pytest.mark.parametrize("foreign", ["ci_tracking", "ci_repository"])
