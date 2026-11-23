@@ -1,5 +1,6 @@
 """Reconcile CI inbound events without trusting webhook verdicts."""
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
@@ -28,6 +29,17 @@ def reconciliation():
     reader.previous_failure.return_value = False
     checks = Mock(installation_id=17)
     recorder, acknowledger, leadership = Mock(), Mock(), Mock()
+    scope_events = []
+
+    @contextmanager
+    def acquired_scope():
+        scope_events.append("enter")
+        try:
+            yield
+        finally:
+            scope_events.append("exit")
+
+    leadership.acquired_scope.side_effect = acquired_scope
     effects = Mock()
     effects.attach_mock(leadership.require_owner, "require_owner")
     effects.attach_mock(recorder.execute, "record")
@@ -41,7 +53,14 @@ def reconciliation():
         installation_id=17,
     )
     return SimpleNamespace(
-        reader=reader, checks=checks, effects=effects, use_case=use_case
+        reader=reader,
+        checks=checks,
+        recorder=recorder,
+        acknowledger=acknowledger,
+        effects=effects,
+        use_case=use_case,
+        leadership=leadership,
+        scope_events=scope_events,
     )
 
 
@@ -60,6 +79,37 @@ def test_invalid_signed_notification_rejects_without_acking(reconciliation):
     with pytest.raises(WorkflowError, match="incompatible notification"):
         reconciliation.use_case.execute()
     assert reconciliation.effects.mock_calls == []
+    assert reconciliation.scope_events == ["enter", "exit"]
+
+
+@pytest.mark.parametrize("operation", ["record", "acknowledge"])
+def test_write_exception_propagates_and_releases_pass_scope(
+    monkeypatch, reconciliation, operation
+):
+    evidence = Mock(verdict="SUCCESS")
+    monkeypatch.setattr(reconcile_ci, "verify_ci", Mock(return_value=evidence))
+    target = (
+        reconciliation.recorder.execute
+        if operation == "record"
+        else reconciliation.acknowledger.execute
+    )
+    target.side_effect = RuntimeError(f"{operation} failed")
+
+    with pytest.raises(RuntimeError, match=f"{operation} failed"):
+        reconciliation.use_case.execute()
+
+    target.assert_called_once()
+    assert reconciliation.scope_events == ["enter", "exit"]
+
+
+def test_each_execute_call_acquires_a_fresh_pass_scope(reconciliation):
+    reconciliation.reader.pending_events.return_value = []
+    reconciliation.reader.tracked.return_value = ()
+
+    assert reconciliation.use_case.execute() == ()
+    assert reconciliation.use_case.execute(startup=True) == ()
+
+    assert reconciliation.scope_events == ["enter", "exit", "enter", "exit"]
 
 
 def test_no_pending_event_does_not_poll_checks(reconciliation):
@@ -68,6 +118,7 @@ def test_no_pending_event_does_not_poll_checks(reconciliation):
     reconciliation.checks.get_pull_request.assert_not_called()
     reconciliation.checks.list_check_runs.assert_not_called()
     assert reconciliation.effects.mock_calls == []
+    assert reconciliation.scope_events == ["enter", "exit"]
 
 
 def test_github_unavailable_records_blocked_and_retains_pending_event(reconciliation):
@@ -81,6 +132,7 @@ def test_github_unavailable_records_blocked_and_retains_pending_event(reconcilia
         call.record(result[0]),
         call.require_owner(),
     ]
+    assert reconciliation.scope_events == ["enter", "exit"]
 
 
 def test_leadership_loss_is_never_recorded_as_github_api_unavailable(reconciliation):
@@ -92,6 +144,7 @@ def test_leadership_loss_is_never_recorded_as_github_api_unavailable(reconciliat
         reconciliation.use_case.execute()
 
     assert reconciliation.effects.mock_calls == []
+    assert reconciliation.scope_events == ["enter", "exit"]
 
 
 @pytest.mark.parametrize("verdict", ["SUCCESS", "FAILURE"])
@@ -110,6 +163,7 @@ def test_terminal_reconciliation_calls_both_use_cases_under_ownership(
         call.acknowledge(DELIVERY),
         call.require_owner(),
     ]
+    assert reconciliation.scope_events == ["enter", "exit"]
 
 
 @pytest.mark.parametrize(
@@ -140,3 +194,4 @@ def test_ownership_loss_stops_at_the_failing_write_boundary(
             call.require_owner(),
         ][:last_call]
     )
+    assert reconciliation.scope_events == ["enter", "exit"]

@@ -12,7 +12,6 @@ from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseC
 from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
-from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
 from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
     GuardedCiReader,
@@ -44,12 +43,12 @@ def create_ci_state_adapters(
     return SqlAlchemyCiStateReader(provider), SqlAlchemyCiStateRepository(provider)
 
 
-def create_ci_pass_use_case(
+def create_ci_reconcile_use_case(
     factory: PostgresFactory,
     checks: ICiChecksReader,
     *,
     installation_id: int,
-) -> RunCiPassUseCase:
+) -> ReconcileCiUseCase:
     """Assemble guarded CI Application graph once at bootstrap."""
     reader, repository = create_ci_state_adapters(factory)
     leadership = PostgresCiLeadershipScope(factory)
@@ -61,4 +60,4 @@ def create_ci_pass_use_case(
         leadership=leadership,
         installation_id=installation_id,
     )
-    return RunCiPassUseCase(reconciler, leadership)
+    return reconciler

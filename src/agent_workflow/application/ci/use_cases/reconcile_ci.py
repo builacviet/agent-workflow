@@ -85,28 +85,29 @@ class ReconcileCiUseCase:
         Startup can recheck tracked work even after a crash before inbox wake.
         No periodic GitHub polling is used when the inbox is empty.
         """
-        notifications = self.reader.pending_events()
-        if not notifications and not startup:
-            return ()
-        for event in notifications:
-            if (
-                event.repository != REPOSITORY
-                or event.installation_id != self.installation_id
-                or (event.event, event.action)
-                not in {
-                    ("pull_request", "synchronize"),
-                    ("workflow_run", "completed"),
-                }
-            ):
-                raise BusinessRuleError("CI inbox has incompatible notification")
-        observations = self.observe_all()
-        # BLOCKED means CI evidence is not terminal, even when GitHub was
-        # reachable. Keep the signed wake-up until a fresh observation decides
-        # SUCCESS or FAILURE; checks may appear after the webhook arrives.
-        if any(e.verdict == "BLOCKED" for e in observations):
+        with self.leadership.acquired_scope():
+            notifications = self.reader.pending_events()
+            if not notifications and not startup:
+                return ()
+            for event in notifications:
+                if (
+                    event.repository != REPOSITORY
+                    or event.installation_id != self.installation_id
+                    or (event.event, event.action)
+                    not in {
+                        ("pull_request", "synchronize"),
+                        ("workflow_run", "completed"),
+                    }
+                ):
+                    raise BusinessRuleError("CI inbox has incompatible notification")
+            observations = self.observe_all()
+            # BLOCKED means CI evidence is not terminal, even when GitHub was
+            # reachable. Keep the signed wake-up until a fresh observation decides
+            # SUCCESS or FAILURE; checks may appear after the webhook arrives.
+            if any(e.verdict == "BLOCKED" for e in observations):
+                return observations
+            for notification in notifications:
+                self.leadership.require_owner()
+                self.acknowledger.execute(notification.delivery_id)
+                self.leadership.require_owner()
             return observations
-        for notification in notifications:
-            self.leadership.require_owner()
-            self.acknowledger.execute(notification.delivery_id)
-            self.leadership.require_owner()
-        return observations

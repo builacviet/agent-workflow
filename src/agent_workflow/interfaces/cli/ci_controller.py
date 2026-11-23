@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
+from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,14 +34,14 @@ sleep = time.sleep
 class CiController:
     """Inbound adapter: request DTO → injected Application UC → response DTO."""
 
-    def __init__(self, use_case: RunCiPassUseCase) -> None:
+    def __init__(self, use_case: ReconcileCiUseCase) -> None:
         self._use_case = use_case
 
     def reconcile(self, request: CiRunRequest) -> CiRunResponse:
         result = self._use_case.execute(startup=request.startup)
         return CiRunResponse(
-            observed_count=result.observed_count,
-            blocked_count=result.blocked_count,
+            observed_count=len(result),
+            blocked_count=sum(evidence.verdict == "BLOCKED" for evidence in result),
         )
 
 
