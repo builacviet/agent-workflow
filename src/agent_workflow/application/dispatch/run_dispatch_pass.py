@@ -11,7 +11,7 @@ from agent_workflow.application.dispatch.ports import (
 )
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
@@ -79,12 +79,12 @@ class RunDispatchPassUseCase:
                         or (context["current_head_sha"] or context["base_sha"])
                         != claim["input_sha"]
                     ):
-                        raise WorkflowError("assignment changed after dispatch")
+                        raise BusinessRuleError("assignment changed after dispatch")
                     if (
                         claim["task_id"] not in task_ids
                         or context.get("task_id") != claim["task_id"]
                     ):
-                        raise WorkflowError("dispatch outside exact task allowlist")
+                        raise BusinessRuleError("dispatch outside exact task allowlist")
                     sha = _fenced(guard, self._execute_worker, claim, context, guard)
                     _fenced(guard, self._dispatch.finish, claim["dispatch_id"], sha)
             except BaseException:
@@ -98,7 +98,7 @@ class RunDispatchPassUseCase:
                 try:
                     _fenced(guard, self._on_finished, claim["dispatch_id"])
                 except Exception:
-                    raise WorkflowError(
+                    raise BusinessRuleError(
                         "terminal dispatch cleanup unconfirmed; reconcile engine pin"
                     ) from None
             return True
