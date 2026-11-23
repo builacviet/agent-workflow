@@ -153,6 +153,47 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     assert error.value.code == 2
 
 
+@pytest.mark.parametrize(
+    ("app_id", "pem_name"),
+    [(0, "controller.pem"), (1, "controller-private.key")],
+)
+def test_invalid_controller_app_config_exits_two_without_database_or_sqlite(
+    monkeypatch, tmp_path, capsys, app_id, pem_name
+):
+    config_file = tmp_path / "controller.json"
+    private_pem_path = tmp_path / pem_name
+    config_file.write_text(
+        json.dumps(
+            {
+                "controller_github_app": {
+                    "app_id": app_id,
+                    "installation_id": 17,
+                    "pem": str(private_pem_path),
+                }
+            }
+        )
+    )
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--ci-once"])
+    monkeypatch.setattr(
+        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
+    )
+    monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
+    open_database = Mock(side_effect=AssertionError("database must not open"))
+    monkeypatch.setattr(postgres_ci_entrypoint.PostgresFactory, "open", open_database)
+
+    with pytest.raises(SystemExit) as error:
+        controller.main()
+
+    stderr = capsys.readouterr().err
+    assert error.value.code == 2
+    assert str(private_pem_path) not in stderr
+    assert "app_id" not in stderr
+    open_database.assert_not_called()
+
+
 def _watch_setup(monkeypatch):
     factory = Mock()
     factory.__enter__ = Mock(return_value=factory)

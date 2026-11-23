@@ -160,7 +160,7 @@ def test_ci_scope_emits_only_allowlisted_fields_and_restores_logger(capsys):
                 "ci_cli_failure",
                 extra={
                     "mode": "watch",
-                    "reason": "leadership_lost",
+                    "reason": "permission_failure",
                     "dsn": PRIVATE_DATA,
                     "pem_path": PRIVATE_DATA,
                     "sql_parameters": [PRIVATE_DATA],
@@ -173,7 +173,7 @@ def test_ci_scope_emits_only_allowlisted_fields_and_restores_logger(capsys):
     assert payload["event"] == "ci_cli_failure"
     assert payload["message"] == "CI CLI operation ended without success"
     assert payload["mode"] == "watch"
-    assert payload["reason"] == "leadership_lost"
+    assert payload["reason"] == "permission_failure"
     assert payload["correlation_id"] == "ci-correlation"
     assert PRIVATE_DATA not in line
     assert "dsn" not in payload and "pem_path" not in payload

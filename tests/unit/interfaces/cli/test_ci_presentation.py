@@ -13,6 +13,7 @@ from agent_workflow.application.exceptions import (
     ApplicationError,
     CorruptedPersistenceDataError,
     InvalidApplicationRequestError,
+    PersistenceError,
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.exceptions import DomainError
@@ -102,6 +103,7 @@ def test_controller_maps_completed_evidence_to_typed_response(verdicts, expected
             "persistence_unavailable",
         ),
         (TimeoutError("sql parameters secret"), 75, "timeout"),
+        (ValueError("runtime value; dsn=secret"), 1, "unexpected_failure"),
         (
             CorruptedPersistenceDataError("postgresql://secret"),
             1,
@@ -110,12 +112,22 @@ def test_controller_maps_completed_evidence_to_typed_response(verdicts, expected
         (
             ApplicationError("leadership denied; dsn=secret"),
             1,
-            "leadership_unavailable",
+            "application_failure",
+        ),
+        (
+            PersistenceError("ordinary persistence contract failure"),
+            1,
+            "application_failure",
         ),
         (
             PermissionError("leadership lost; pem=/secret"),
             1,
-            "leadership_lost",
+            "permission_failure",
+        ),
+        (
+            PermissionError("file access denied; pem=/secret"),
+            1,
+            "permission_failure",
         ),
         (
             OSError("https://user:secret@example.invalid"),
@@ -302,3 +314,38 @@ def test_terminal_boundary_rejects_invalid_configuration_safely(
     stderr = capsys.readouterr().err
     assert "super-secret" not in stderr
     compose.assert_not_called()
+
+
+def test_terminal_boundary_maps_compose_entry_valueerror_as_configuration(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+
+    class InvalidComposition:
+        def __enter__(self):
+            raise ValueError("pem=/private/controller.key")
+
+        def __exit__(self, *_args):
+            pytest.fail("failed composition entry must not be exited")
+
+    def compose(_config, _app_config):
+        return InvalidComposition()
+
+    with pytest.raises(SystemExit) as error:
+        ci_controller.run_ci_command(
+            ci_once=True,
+            ci_watch=False,
+            dispatch_once=False,
+            acknowledge=None,
+            reconciled=False,
+            prepare=lambda: ({}, AppConfig.from_env()),
+            compose=compose,
+            log_scope=ci_log_scope,
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == 2
+    assert "controller.key" not in captured.err
+    assert "pem=" not in captured.err

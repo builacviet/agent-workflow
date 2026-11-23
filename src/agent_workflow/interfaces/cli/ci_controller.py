@@ -10,7 +10,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
@@ -163,7 +163,16 @@ def run_ci_command(
                 )
 
             try:
-                with compose(config, app_config) as reconcile:
+                with ExitStack() as resources:
+                    try:
+                        reconcile = resources.enter_context(compose(config, app_config))
+                    except ValueError:
+                        _finish_error(
+                            mode,
+                            "invalid_configuration",
+                            "Controller CI configuration is invalid.",
+                            2,
+                        )
                     if ci_once:
                         result = _execute_ci_once(reconcile)
                     else:
@@ -211,17 +220,17 @@ def run_ci_command(
             except PermissionError:
                 _finish_error(
                     mode,
-                    "leadership_lost",
-                    "CI leadership was lost; reconcile in-flight work.",
+                    "permission_failure",
+                    "CI operation encountered a permission or ownership failure; "
+                    "stop and reconcile in-flight work.",
                     1,
                 )
             except ApplicationError:
-                # The current CI ApplicationError is the leadership contention
-                # contract. Do not inspect its message to select this outcome.
                 _finish_error(
                     mode,
-                    "leadership_unavailable",
-                    "CI leadership is unavailable.",
+                    "application_failure",
+                    "CI operation failed at an application boundary; inspect "
+                    "service and leadership state.",
                     1,
                 )
             except OSError:
