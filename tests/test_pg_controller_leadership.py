@@ -19,6 +19,7 @@ CLAIM = {
     "deadline": 9999999999.0,
 }
 ASSIGNMENT = {
+    "task_id": "T",
     "completed_review_rounds": 0,
     "status": "AWAITING_HANDOFF",
     "current_head_sha": None,

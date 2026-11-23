@@ -188,6 +188,7 @@ def test_entrypoint_rejects_uncomposed_repository_before_leadership(
         "wrong_head",
         "wrong_task",
         "wrong_assignment_task",
+        "leadership_lost_after_assignment",
         "worker_error",
         "cleanup_error",
     ],
@@ -232,9 +233,15 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(deps.dispatch, "claim", claim_mock)
     monkeypatch.setattr(deps.dispatch, "finish", lambda *args: events.append("finish"))
     monkeypatch.setattr(deps.dispatch, "block", lambda *args: events.append("block"))
-    monkeypatch.setattr(
-        entry.WorkflowService, "get_coder_assignment", lambda *_: context
-    )
+
+    def get_assignment(_service, task_id):
+        nonlocal held
+        assert held and task_id == claim["task_id"]
+        if outcome == "leadership_lost_after_assignment":
+            held = False
+        return context
+
+    monkeypatch.setattr(entry.WorkflowService, "get_coder_assignment", get_assignment)
     opened = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", opened)
     monkeypatch.setattr(
@@ -272,7 +279,10 @@ def test_single_factory_lazy_worker_and_terminal_order(
     worker = Mock(side_effect=compose)
     monkeypatch.setattr(entry, "compose_postgres_worker", worker)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
-    if outcome in {
+    if outcome == "leadership_lost_after_assignment":
+        with pytest.raises(PermissionError, match="reconcile in-flight work"):
+            entry.run_postgres_dispatch_once(config, AppConfig(pg_runtime_dsn=DSN))
+    elif outcome in {
         "wrong_head",
         "wrong_task",
         "wrong_assignment_task",
@@ -297,10 +307,13 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "wrong_head",
         "wrong_task",
         "wrong_assignment_task",
+        "leadership_lost_after_assignment",
     }:
         worker.assert_not_called()
     if outcome in {"wrong_head", "wrong_task", "wrong_assignment_task"}:
         assert events == ["block", "release"]
+    if outcome == "leadership_lost_after_assignment":
+        assert events == ["release"]
     if outcome == "worker_error":
         assert events == ["compose_worker", "worker", "block", "release"]
     if outcome == "cleanup_error":

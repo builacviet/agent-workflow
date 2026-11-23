@@ -80,6 +80,11 @@ class RunDispatchPassUseCase:
                         != claim["input_sha"]
                     ):
                         raise WorkflowError("assignment changed after dispatch")
+                    if (
+                        claim["task_id"] not in task_ids
+                        or context.get("task_id") != claim["task_id"]
+                    ):
+                        raise WorkflowError("dispatch outside exact task allowlist")
                     sha = _fenced(guard, self._execute_worker, claim, context, guard)
                     _fenced(guard, self._dispatch.finish, claim["dispatch_id"], sha)
             except BaseException:

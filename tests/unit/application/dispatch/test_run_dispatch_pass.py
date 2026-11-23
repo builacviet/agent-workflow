@@ -103,6 +103,32 @@ def test_stale_assignment_blocks_without_worker_or_cleanup(ports, field, value):
     ports.leadership.release.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    ("task_ids", "assignment_task_id"),
+    [({"t", "T-other"}, "T"), ({"T"}, "OTHER"), ({"T"}, None)],
+    ids=["outside-exact-allowlist", "mismatched-assignment", "missing-assignment-task"],
+)
+def test_ineligible_task_blocks_before_worker_callback(
+    ports, task_ids, assignment_task_id
+):
+    assignment = ports.assignment.get_coder_assignment.return_value
+    if assignment_task_id is None:
+        del assignment["task_id"]
+    else:
+        assignment["task_id"] = assignment_task_id
+
+    with pytest.raises(WorkflowError, match="dispatch outside exact task allowlist"):
+        use_case(ports).execute(task_ids)
+
+    ports.dispatch.claim.assert_called_once_with(task_ids, 1800, track_pre_launch=True)
+    ports.assignment.get_coder_assignment.assert_called_once_with("T")
+    ports.worker.assert_not_called()
+    ports.dispatch.finish.assert_not_called()
+    ports.cleanup.assert_not_called()
+    ports.dispatch.block.assert_called_once_with("pass")
+    ports.leadership.release.assert_called_once()
+
+
 def test_expired_claim_stops_before_assignment_and_releases_budget(ports):
     ports.dispatch.claim.return_value["deadline"] = 0.0
 
