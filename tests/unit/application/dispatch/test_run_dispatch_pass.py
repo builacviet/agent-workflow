@@ -4,7 +4,7 @@ import pytest
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import operation_timeout
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -93,7 +93,7 @@ def test_success_fences_each_effect_and_cleans_up_before_release(ports):
 def test_stale_assignment_blocks_without_worker_or_cleanup(ports, field, value):
     ports.assignment.get_coder_assignment.return_value[field] = value
 
-    with pytest.raises(WorkflowError, match="assignment changed"):
+    with pytest.raises(BusinessRuleError, match="assignment changed"):
         use_case(ports).execute({"T"})
 
     ports.worker.assert_not_called()
@@ -117,7 +117,7 @@ def test_ineligible_task_blocks_before_worker_callback(
     else:
         assignment["task_id"] = assignment_task_id
 
-    with pytest.raises(WorkflowError, match="dispatch outside exact task allowlist"):
+    with pytest.raises(BusinessRuleError, match="dispatch outside exact task allowlist"):
         use_case(ports).execute(task_ids)
 
     ports.dispatch.claim.assert_called_once_with(task_ids, 1800, track_pre_launch=True)
@@ -202,7 +202,7 @@ def test_cleanup_fence_never_rewrites_committed_finish(ports, lost_before_cleanu
         ports.leadership.is_held.side_effect = [True, not lost_before_cleanup, False]
 
     ports.dispatch.finish.side_effect = finish
-    with pytest.raises(WorkflowError, match="reconcile engine pin"):
+    with pytest.raises(BusinessRuleError, match="reconcile engine pin"):
         use_case(ports).execute({"T"})
 
     ports.dispatch.finish.assert_called_once_with("pass", HEAD)
