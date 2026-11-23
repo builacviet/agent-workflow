@@ -2,7 +2,9 @@
 
 import json
 import runpy
+import subprocess
 import sys
+import textwrap
 from argparse import Namespace
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -100,7 +102,7 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     def launch():
         if pg_only:
             runpy.run_module(
-                "agent_workflow.composition.controller_entrypoint", run_name="__main__"
+                "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
             )
         else:
             controller.main()
@@ -113,6 +115,76 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
+
+
+@pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
+def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
+    monkeypatch, tmp_path, mode
+):
+    config = tmp_path / "controller-ci.json"
+    config.write_text("{}")
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
+    # Other tests import the legacy Controller, so use a fresh interpreter.
+    script = textwrap.dedent("""
+        import runpy
+        import sys
+        from contextlib import contextmanager
+        from functools import partial
+        from importlib.abc import MetaPathFinder
+
+        blocked = {
+            "agent_workflow.composition.postgres_dispatch_entrypoint",
+            "agent_workflow.composition.postgres_dispatch_deps",
+            "agent_workflow.runners.coder_runtime",
+            "agent_workflow.runners.sandbox",
+            "agent_workflow.storage.dispatch_repository",
+        }
+
+        class BlockDispatchImports(MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname in blocked:
+                    raise AssertionError(f"CI tried to load {fullname}")
+
+        assert not blocked.intersection(sys.modules)
+        sys.meta_path.insert(0, BlockDispatchImports())
+
+        from agent_workflow.composition import postgres_ci_entrypoint
+        from agent_workflow.interfaces.cli import ci_controller
+
+        requests = []
+
+        def reconcile(request):
+            requests.append(request)
+            return ci_controller.CiRunResponse(observed_count=0, blocked_count=0)
+
+        @contextmanager
+        def compose(config, app_config):
+            assert config == {}
+            yield reconcile
+
+        postgres_ci_entrypoint.compose_ci_execution = compose
+        ci_controller.run_ci_watch = partial(
+            ci_controller.run_ci_watch, stop=lambda: bool(requests)
+        )
+        runpy.run_module(
+            "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
+        )
+        assert requests == [ci_controller.CiRunRequest(startup=True)]
+        assert not blocked.intersection(sys.modules)
+    """)
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(config), mode],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

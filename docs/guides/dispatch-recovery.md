@@ -7,7 +7,7 @@ Start with [AGENTS rules](../../AGENTS.md) and the authorized incident/task. Thi
 ## PostgreSQL Controller and retirement gate
 
 The PostgreSQL-only development command is
-`python -m agent_workflow.composition.controller_entrypoint CONFIG --once`.
+`python -m agent_workflow.bootstrap.controller_entrypoint CONFIG --once`.
 It requires an explicit `PG_RUNTIME_DSN` and a config without a SQLite `database`
 field. The same entry point offers `--ci-once` and `--ci-watch` for CI only.
 The legacy module names remain available. SQLite acknowledgement requires the

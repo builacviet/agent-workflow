@@ -20,6 +20,7 @@ from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
 from agent_workflow.composition import postgres_dispatch_entrypoint as entry
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.orchestration import controller
 from agent_workflow.runners import coder_runtime, sandbox
@@ -28,7 +29,7 @@ from agent_workflow.storage.postgres_models import CITask, Task
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
-PG_CONTROLLER = "agent_workflow.composition.controller_entrypoint"
+PG_CONTROLLER = "agent_workflow.bootstrap.controller_entrypoint"
 INPUT = "b" * 40
 HEAD = "c" * 40
 
@@ -126,7 +127,7 @@ def test_pg_only_cli_rejects_unsupported_flags_before_config(
     monkeypatch, capsys, flags
 ):
     monkeypatch.setattr(sys, "argv", ["controller", "config.json", *flags])
-    monkeypatch.setattr(dispatch_cli, "read_controller_config", forbidden)
+    monkeypatch.setattr(controller_cli, "read_controller_config", forbidden)
     monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
     monkeypatch.setattr(postgres_ci_entrypoint, "compose_ci_execution", forbidden)
 

@@ -46,8 +46,8 @@ These historical Compose commands are retained for reference. A PostgreSQL smoke
 
 Start CI-only consumption in a trusted host terminal (no Codex worker is dispatched):
 
-    python -m agent_workflow.composition.controller_entrypoint .runtime/controller-ci.json --ci-once
-    python -m agent_workflow.composition.controller_entrypoint .runtime/controller-ci.json --ci-watch
+    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-once
+    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-watch
 
 Run exactly one of the above commands, not both concurrently. The watcher scans local inbox only; it calls GitHub API on new events and bounded startup recovery, not global periodic CI polling.
 

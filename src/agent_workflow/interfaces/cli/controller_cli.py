@@ -9,6 +9,7 @@ from typing import NoReturn
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.interfaces.cli import ci_controller, dispatch_controller
+from agent_workflow.interfaces.cli.controller_config import read_controller_config
 
 
 class _Mode(Enum):
@@ -58,7 +59,7 @@ def run_controller_cli(
     config_path: Path = args.config
 
     def prepare() -> object:
-        config = dispatch_controller.read_controller_config(config_path)
+        config = read_controller_config(config_path)
         if isinstance(config, dict) and "database" in config:
             raise ValueError("SQLite database settings are unsupported")
         return config
