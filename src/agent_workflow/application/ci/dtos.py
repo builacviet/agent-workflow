@@ -8,6 +8,15 @@ from agent_workflow.domain.workflow_identity import validate_sha
 
 
 @dataclass(frozen=True, slots=True)
+class CiTrackedTaskSnapshot:
+    task_id: str
+    pr_number: int
+    head_sha: str
+    verdict: str
+    repair_heads: int
+
+
+@dataclass(frozen=True, slots=True)
 class CiRequest:
     task_id: str
     repository: str

@@ -38,11 +38,11 @@ class ReconcileCiUseCase:
         observed = []
         for tracked in self.state.tracked():
             request = CiRequest(
-                task_id=tracked["task_id"],
+                task_id=tracked.task_id,
                 repository=REPOSITORY,
                 installation_id=self.installation_id,
-                pr_number=tracked["pr_number"],
-                expected_head_sha=tracked["head_sha"],
+                pr_number=tracked.pr_number,
+                expected_head_sha=tracked.head_sha,
                 check_name=self.check_name,
             )
             evidence = verify_ci(
@@ -90,7 +90,3 @@ class ReconcileCiUseCase:
         for notification in notifications:
             self.state.mark_processed(notification.delivery_id)
         return observations
-
-    def reconcile_once(self, *, startup: bool = False) -> tuple[CiEvidence, ...]:
-        """Compatibility for existing Controller callers; execute is canonical."""
-        return self.execute(startup=startup)

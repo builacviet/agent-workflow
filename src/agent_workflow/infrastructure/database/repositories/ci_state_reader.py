@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
@@ -73,7 +74,7 @@ class SqlAlchemyCiStateReader:
                     if transaction.is_active:
                         transaction.rollback()
 
-    def tracked(self, limit: int = 32) -> list[dict]:
+    def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]:
         if type(limit) is not int or not 1 <= limit <= 32:
             raise ValueError("bounded CI task scan required")
         try:
@@ -89,10 +90,19 @@ class SqlAlchemyCiStateReader:
                     .order_by(CITask.task_id)
                     .limit(limit + 1)
                 ).all()
-                result = [
-                    _TrackedTaskDTO.model_validate(binding).model_dump()
-                    for binding in bindings
-                ]
+                validated = (
+                    _TrackedTaskDTO.model_validate(binding) for binding in bindings
+                )
+                result = tuple(
+                    CiTrackedTaskSnapshot(
+                        task_id=task.task_id,
+                        pr_number=task.pr_number,
+                        head_sha=task.head_sha,
+                        verdict=task.verdict,
+                        repair_heads=task.repair_heads,
+                    )
+                    for task in validated
+                )
                 if len(result) > limit:
                     raise WorkflowError("too many in-flight CI tasks")
                 return result

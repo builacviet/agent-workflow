@@ -56,8 +56,8 @@ def create_ci_pass_use_case(
     reconciler = ReconcileCiUseCase(
         GuardedCiState(
             reader=reader,
-            recorder=RecordCiEvidenceUseCase(repository),
-            acknowledger=AcknowledgeCiEventUseCase(repository),
+            record_evidence=RecordCiEvidenceUseCase(repository).execute,
+            acknowledge_event=AcknowledgeCiEventUseCase(repository).execute,
             require_owner=leadership.require_owner,
         ),
         GuardedCiChecks(checks, leadership.require_owner),

@@ -9,6 +9,7 @@ import pytest
 from test_pg_controller_leadership import Leader
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import ci_deps
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
@@ -31,13 +32,7 @@ def _ci_inputs():
     reader.pending_events.return_value = [
         WebhookNotification(DELIVERY, "workflow_run", "completed", REPO, 17, 31, SHA)
     ]
-    reader.tracked.return_value = [
-        {
-            "task_id": "T",
-            "pr_number": 31,
-            "head_sha": SHA,
-        }
-    ]
+    reader.tracked.return_value = (CiTrackedTaskSnapshot("T", 31, SHA, "BLOCKED", 0),)
     reader.previous_failure.return_value = False
     checks = Mock()
     checks.installation_id = 17

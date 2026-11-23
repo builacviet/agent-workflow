@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.workflow_identity import WorkflowError
@@ -53,9 +54,9 @@ def test_github_unavailable_records_blocked_and_retains_pending_event():
     )
     state = Mock()
     state.pending_events.return_value = [event]
-    state.tracked.return_value = [
-        {"task_id": "task-1", "pr_number": 21, "head_sha": HEAD}
-    ]
+    state.tracked.return_value = (
+        CiTrackedTaskSnapshot("task-1", 21, HEAD, "BLOCKED", 0),
+    )
     state.previous_failure.return_value = False
     checks = Mock(installation_id=17)
     checks.get_pull_request.side_effect = OSError("offline")
@@ -79,9 +80,9 @@ def test_leadership_loss_is_never_recorded_as_github_api_unavailable():
     )
     state = Mock()
     state.pending_events.return_value = [event]
-    state.tracked.return_value = [
-        {"task_id": "task-1", "pr_number": 21, "head_sha": HEAD}
-    ]
+    state.tracked.return_value = (
+        CiTrackedTaskSnapshot("task-1", 21, HEAD, "BLOCKED", 0),
+    )
     state.previous_failure.return_value = False
     checks = Mock(installation_id=17)
     checks.get_pull_request.side_effect = PermissionError("leadership lost")

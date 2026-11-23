@@ -402,10 +402,6 @@ src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.mcp.auth0_oauth.load_auth0_config|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.ci_controller.ControllerCiCoordinator|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerAppToken|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerChecksClient|1
-src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.storage.ci_state.ControllerCiState|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.compose_ci_execution|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_dispatch_entrypoint.run_postgres_dispatch_once|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.runners.coder_runtime.validate_config|1

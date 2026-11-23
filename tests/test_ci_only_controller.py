@@ -17,24 +17,25 @@ from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.orchestration import controller
 
 
-def test_ci_only_mode_never_loads_coder_runtime(monkeypatch):
-    calls = []
+@pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
+def test_ci_mode_requires_postgres_before_any_fallback(monkeypatch, tmp_path, mode):
+    config_file = tmp_path / "controller.json"
+    config_file.write_text("{}")
+    monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
+    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     monkeypatch.setattr(
-        controller,
-        "_ci_operator",
-        lambda config, *, watch: calls.append((config, watch)),
+        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
-    controller.operate({"database": "unused"}, Namespace(ci_once=True, ci_watch=False))
-    assert calls == [({"database": "unused"}, False)]
+    monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
+
+    with pytest.raises(ValueError, match="PG_RUNTIME_DSN is required"):
+        controller.main()
 
 
-def test_ci_watch_mode_is_separate_from_dev_dispatch(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        controller, "_ci_operator", lambda config, *, watch: calls.append(watch)
-    )
-    controller.operate({"database": "unused"}, Namespace(ci_once=False, ci_watch=True))
-    assert calls == [True]
+@pytest.mark.parametrize("flag", ["ci_once", "ci_watch"])
+def test_legacy_operate_refuses_ci_only_modes(flag):
+    with pytest.raises(WorkflowError, match="require the PostgreSQL CLI entrypoint"):
+        controller.operate({"database": "unused"}, Namespace(**{flag: True}))
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
@@ -120,11 +121,12 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags):
         controller.main()
 
 
-def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path):
+@pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
+def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     config_file = tmp_path / "controller.json"
     config_file.write_text("{}")
     monkeypatch.setenv("PG_RUNTIME_DSN", "")
-    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--ci-once"])
+    monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )

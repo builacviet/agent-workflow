@@ -2,13 +2,8 @@
 
 from collections.abc import Callable, Mapping
 
+from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.ci.ports import ICiChecksReader, ICiStateReader
-from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
-    AcknowledgeCiEventUseCase,
-)
-from agent_workflow.application.ci.use_cases.record_ci_evidence import (
-    RecordCiEvidenceUseCase,
-)
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 
 
@@ -17,13 +12,13 @@ class GuardedCiState:
         self,
         *,
         reader: ICiStateReader,
-        recorder: RecordCiEvidenceUseCase,
-        acknowledger: AcknowledgeCiEventUseCase,
+        record_evidence: Callable[[CiEvidence], None],
+        acknowledge_event: Callable[[str], None],
         require_owner: Callable[[], None],
     ) -> None:
         self._reader = reader
-        self._recorder = recorder
-        self._acknowledger = acknowledger
+        self._record_evidence = record_evidence
+        self._acknowledge_event = acknowledge_event
         self._require_owner = require_owner
 
     def _call(self, operation: Callable, *args: object):
@@ -35,17 +30,17 @@ class GuardedCiState:
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
         return self._call(self._reader.pending_events, limit)
 
-    def tracked(self, limit: int = 32) -> list[dict]:
+    def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]:
         return self._call(self._reader.tracked, limit)
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         return self._call(self._reader.previous_failure, task_id, head_sha)
 
     def record(self, evidence: CiEvidence) -> None:
-        self._call(self._recorder.execute, evidence)
+        self._call(self._record_evidence, evidence)
 
     def mark_processed(self, delivery_id: str) -> None:
-        self._call(self._acknowledger.execute, delivery_id)
+        self._call(self._acknowledge_event, delivery_id)
 
 
 class GuardedCiChecks:

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from typing import Protocol
 
+from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.ci_tracking import (
     CiApprovalSnapshot,
@@ -37,7 +38,7 @@ class ICiApprovalReader(Protocol):
 class ICiStateReader(ICiApprovalReader, Protocol):
     """CI read projections used by the Controller-facing inbound adapter."""
 
-    def tracked(self, limit: int = 32) -> list[dict]: ...
+    def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]: ...
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool: ...
 
@@ -63,7 +64,7 @@ class ICiChecksReader(Protocol):
 class ICiReconciliationState(Protocol):
     """Narrow operations required to reconcile pending signed wake-up events."""
 
-    def tracked(self, limit: int = 32) -> list[dict]: ...
+    def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]: ...
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool: ...
 
