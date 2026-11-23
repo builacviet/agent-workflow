@@ -406,8 +406,7 @@ src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_
 src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerAppToken|1
 src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.integrations.github_app_checks.ControllerChecksClient|1
 src/agent_workflow/orchestration/controller.py|inline-import|_ci_operator|agent_workflow.storage.ci_state.ControllerCiState|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_once|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.run_postgres_ci_watch|1
+src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.compose_ci_execution|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_dispatch_entrypoint.run_postgres_dispatch_once|1
 src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.runners.coder_runtime.validate_config|1
 src/agent_workflow/orchestration/controller.py|inline-import|operate|agent_workflow.runners.coder_runtime.CoderRuntime|1

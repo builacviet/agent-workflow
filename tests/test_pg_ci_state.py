@@ -28,10 +28,7 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
 from agent_workflow.composition.ci_deps import create_ci_state_adapters
-from agent_workflow.composition.postgres_ci_entrypoint import (
-    run_postgres_ci_once,
-    run_postgres_ci_watch,
-)
+from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
@@ -51,6 +48,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
 from agent_workflow.integrations.ci_controller import ControllerCiCoordinator
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.interfaces.cli.ci_controller import run_ci_once, run_ci_watch
 from agent_workflow.storage.postgres_ci_state import PostgresControllerCiState
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
@@ -67,6 +65,13 @@ from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotificatio
 
 PR = 21
 INSTALLATION = 17
+CONTROLLER_CONFIG = {
+    "controller_github_app": {
+        "app_id": 1,
+        "installation_id": INSTALLATION,
+        "pem": "controller.pem",
+    }
+}
 COMPLETED = "2026-11-10T00:00:00Z"
 OBSERVED = "2026-11-10T00:01:00Z"
 
@@ -577,17 +582,10 @@ def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
 
     with PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller:
         assert controller.try_acquire()
-        run_postgres_ci_once(
-            {
-                "controller_github_app": {
-                    "app_id": 1,
-                    "installation_id": INSTALLATION,
-                    "pem": "controller.pem",
-                }
-            },
-            config,
-            checks=checks,
-        )
+        with compose_ci_execution(
+            CONTROLLER_CONFIG, config, checks=checks
+        ) as reconcile:
+            run_ci_once(reconcile)
         assert controller.is_held()
         with PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as successor:
             assert successor.try_acquire()
@@ -607,19 +605,8 @@ def test_pg_ci_watch_two_passes_ack_once(setup):
     checks = FakeChecks(head=HEAD)
     sleeps = []
 
-    run_postgres_ci_watch(
-        {
-            "controller_github_app": {
-                "app_id": 1,
-                "installation_id": INSTALLATION,
-                "pem": "controller.pem",
-            }
-        },
-        config,
-        checks=checks,
-        sleep=sleeps.append,
-        stop=lambda: len(sleeps) == 2,
-    )
+    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile:
+        run_ci_watch(reconcile, sleep=sleeps.append, stop=lambda: len(sleeps) == 2)
 
     assert sleeps == [2, 2]
     assert checks.calls > 0
@@ -638,18 +625,12 @@ def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
     leader = PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER)
     assert leader.try_acquire()
     try:
-        with pytest.raises(ApplicationError, match="leadership unavailable"):
-            run_postgres_ci_watch(
-                {
-                    "controller_github_app": {
-                        "app_id": 1,
-                        "installation_id": INSTALLATION,
-                        "pem": "controller.pem",
-                    }
-                },
-                config,
-                checks=checks,
-                sleep=lambda _: pytest.fail("denied leader must not retry"),
+        with (
+            pytest.raises(ApplicationError, match="leadership unavailable"),
+            compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile,
+        ):
+            run_ci_watch(
+                reconcile, sleep=lambda _: pytest.fail("denied leader must not retry")
             )
     finally:
         leader.release()
@@ -718,23 +699,19 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
         return list_check_runs(repository, sha)
 
     checks.list_check_runs = Mock(side_effect=blocked_request)
+
+    def run_pass():
+        with compose_ci_execution(
+            CONTROLLER_CONFIG, config, checks=checks
+        ) as reconcile:
+            run_ci_once(reconcile)
+
     with (
         PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller,
         PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as contender,
     ):
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                run_postgres_ci_once,
-                {
-                    "controller_github_app": {
-                        "app_id": 1,
-                        "installation_id": INSTALLATION,
-                        "pem": "controller.pem",
-                    }
-                },
-                config,
-                checks=checks,
-            )
+            future = pool.submit(run_pass)
             try:
                 assert entered.wait(10)
                 assert controller.try_acquire()

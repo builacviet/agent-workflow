@@ -1,6 +1,6 @@
 """Own PostgreSQL CI reconciliation and its Controller-only credentials."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -35,27 +35,6 @@ def compose_ci_execution(
         )
         controller = ci_cli.CiController(use_case)
         yield controller.reconcile
-
-
-def run_postgres_ci_once(
-    config: dict, app_config: AppConfig, *, checks: ICiChecksReader | None = None
-) -> None:
-    """Compatibility entrypoint; CI operator output belongs to Interfaces."""
-    with compose_ci_execution(config, app_config, checks=checks) as reconcile:
-        ci_cli.run_ci_once(reconcile)
-
-
-def run_postgres_ci_watch(
-    config: dict,
-    app_config: AppConfig,
-    *,
-    checks: ICiChecksReader | None = None,
-    sleep: Callable[[float], None] = ci_cli.sleep,
-    stop: Callable[[], bool] | None = None,
-) -> None:
-    """Compatibility entrypoint; polling and shutdown belong to Interfaces."""
-    with compose_ci_execution(config, app_config, checks=checks) as reconcile:
-        ci_cli.run_ci_watch(reconcile, sleep=sleep, stop=stop)
 
 
 def _controller_checks(
