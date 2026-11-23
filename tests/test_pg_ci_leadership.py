@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
-from unittest.mock import DEFAULT, MagicMock, Mock
+from unittest.mock import DEFAULT, MagicMock, Mock, call
 
 import pytest
 from test_pg_controller_leadership import Leader
@@ -16,6 +16,10 @@ from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_executi
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot
 from agent_workflow.infrastructure.ci import leadership_scope
+from agent_workflow.infrastructure.ci.guarded_adapters import (
+    GuardedCiChecks,
+    GuardedCiReader,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
 )
@@ -73,6 +77,41 @@ _PASS_EFFECTS = [
     "record",
     "ack",
 ]
+
+
+@pytest.mark.parametrize(
+    ("operation", "args"),
+    [
+        ("pending_events", (20,)),
+        ("tracked", (32,)),
+        ("previous_failure", ("T", SHA)),
+        ("get_pull_request", (REPO, 31)),
+        ("list_check_runs", (REPO, SHA)),
+    ],
+)
+def test_guarded_read_checks_ownership_before_and_after_io(operation, args):
+    backend = Mock(installation_id=17)
+    calls = Mock()
+    read = getattr(backend, operation)
+    calls.attach_mock(read, "read")
+    reader = (
+        GuardedCiChecks(backend, calls.require_owner)
+        if operation in {"get_pull_request", "list_check_runs"}
+        else GuardedCiReader(reader=backend, require_owner=calls.require_owner)
+    )
+
+    assert getattr(reader, operation)(*args) is read.return_value
+    assert calls.mock_calls == [
+        call.require_owner(),
+        call.read(*args),
+        call.require_owner(),
+    ]
+
+    calls.reset_mock()
+    calls.require_owner.side_effect = PermissionError("leadership lost")
+    with pytest.raises(PermissionError, match="leadership lost"):
+        getattr(reader, operation)(*args)
+    assert calls.mock_calls == [call.require_owner()]
 
 
 @pytest.fixture
@@ -145,7 +184,7 @@ def production_watcher(monkeypatch):
         tx.load_for_record.return_value = CiRecordSnapshot(REPO, SHA, 31, SHA, False)
         tx.inbox_delivery_exists.return_value = True
         yield tx
-        # Model effects at commit, before the guarded adapter's ownership post-check.
+        # Model effects at commit, before the Application ownership post-check.
         if tx.record.called:
             record(*tx.record.call_args.args)
         if tx.mark_processed.called:

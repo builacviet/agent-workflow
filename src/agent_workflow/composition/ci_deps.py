@@ -15,7 +15,7 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 from agent_workflow.application.ci.use_cases.run_ci_pass import RunCiPassUseCase
 from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
-    GuardedCiState,
+    GuardedCiReader,
 )
 from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
@@ -54,13 +54,11 @@ def create_ci_pass_use_case(
     reader, repository = create_ci_state_adapters(factory)
     leadership = PostgresCiLeadershipScope(factory)
     reconciler = ReconcileCiUseCase(
-        GuardedCiState(
-            reader=reader,
-            record_evidence=RecordCiEvidenceUseCase(repository).execute,
-            acknowledge_event=AcknowledgeCiEventUseCase(repository).execute,
-            require_owner=leadership.require_owner,
-        ),
+        GuardedCiReader(reader=reader, require_owner=leadership.require_owner),
         GuardedCiChecks(checks, leadership.require_owner),
+        recorder=RecordCiEvidenceUseCase(repository),
+        acknowledger=AcknowledgeCiEventUseCase(repository),
+        leadership=leadership,
         installation_id=installation_id,
     )
     return RunCiPassUseCase(reconciler, leadership)

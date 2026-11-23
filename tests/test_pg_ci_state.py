@@ -975,8 +975,27 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
     assert reader.tracked()[0].verdict == "BLOCKED"
 
     # The retry commits before returning and is visible through another Session.
-    record(evidence(task_id))
-    assert approved(task_id, HEAD)
-    acknowledge(notification.delivery_id)
+    commits.clear()
+
+    def assert_write_settings(connection):
+        settings = connection.execute(
+            text(
+                "SELECT current_setting('transaction_isolation'), "
+                "current_setting('lock_timeout'), "
+                "current_setting('statement_timeout'), "
+                "current_setting('synchronous_commit')"
+            )
+        ).one()
+        assert settings == ("read committed", "5s", "5s", "on")
+
+    event.listen(engine, "commit", assert_write_settings)
+    try:
+        record(evidence(task_id))
+        assert commits == ["commit"]
+        assert approved(task_id, HEAD)
+        acknowledge(notification.delivery_id)
+        assert commits == ["commit", "commit"]
+    finally:
+        event.remove(engine, "commit", assert_write_settings)
     assert reader.pending_events() == []
     assert len({id(session) for session in sessions}) == len(sessions)

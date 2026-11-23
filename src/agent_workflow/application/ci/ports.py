@@ -35,8 +35,8 @@ class ICiApprovalReader(Protocol):
     def approved(self, task_id: str, head_sha: str) -> CiApprovalSnapshot | None: ...
 
 
-class ICiStateReader(ICiApprovalReader, Protocol):
-    """CI read projections used by the Controller-facing inbound adapter."""
+class ICiReconciliationReader(Protocol):
+    """Read projections needed to reconcile pending CI notifications."""
 
     def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]: ...
 
@@ -45,10 +45,16 @@ class ICiStateReader(ICiApprovalReader, Protocol):
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]: ...
 
 
+class ICiStateReader(ICiApprovalReader, ICiReconciliationReader, Protocol):
+    """CI read projections for approval and reconciliation."""
+
+
 class ICiLeadershipScope(Protocol):
     """Run a single CI pass under a freshly acquired ownership lifetime."""
 
     def acquired_scope(self) -> AbstractContextManager[None]: ...
+
+    def require_owner(self) -> None: ...
 
 
 class ICiChecksReader(Protocol):
@@ -59,17 +65,3 @@ class ICiChecksReader(Protocol):
     def get_pull_request(self, repository: str, number: int) -> Mapping: ...
 
     def list_check_runs(self, repository: str, sha: str) -> Mapping: ...
-
-
-class ICiReconciliationState(Protocol):
-    """Narrow operations required to reconcile pending signed wake-up events."""
-
-    def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]: ...
-
-    def previous_failure(self, task_id: str, head_sha: str) -> bool: ...
-
-    def record(self, evidence: CiEvidence) -> None: ...
-
-    def pending_events(self, limit: int = 20) -> list[WebhookNotification]: ...
-
-    def mark_processed(self, delivery_id: str) -> None: ...

@@ -3,22 +3,18 @@
 from collections.abc import Callable, Mapping
 
 from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
-from agent_workflow.application.ci.ports import ICiChecksReader, ICiStateReader
-from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
+from agent_workflow.application.ci.ports import ICiChecksReader, ICiReconciliationReader
+from agent_workflow.domain.ci_evidence import WebhookNotification
 
 
-class GuardedCiState:
+class GuardedCiReader:
     def __init__(
         self,
         *,
-        reader: ICiStateReader,
-        record_evidence: Callable[[CiEvidence], None],
-        acknowledge_event: Callable[[str], None],
+        reader: ICiReconciliationReader,
         require_owner: Callable[[], None],
     ) -> None:
         self._reader = reader
-        self._record_evidence = record_evidence
-        self._acknowledge_event = acknowledge_event
         self._require_owner = require_owner
 
     def _call(self, operation: Callable, *args: object):
@@ -35,12 +31,6 @@ class GuardedCiState:
 
     def previous_failure(self, task_id: str, head_sha: str) -> bool:
         return self._call(self._reader.previous_failure, task_id, head_sha)
-
-    def record(self, evidence: CiEvidence) -> None:
-        self._call(self._record_evidence, evidence)
-
-    def mark_processed(self, delivery_id: str) -> None:
-        self._call(self._acknowledge_event, delivery_id)
 
 
 class GuardedCiChecks:

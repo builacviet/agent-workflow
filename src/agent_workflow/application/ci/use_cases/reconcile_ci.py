@@ -3,7 +3,17 @@
 from __future__ import annotations
 
 from agent_workflow.application.ci.dtos import CiRequest
-from agent_workflow.application.ci.ports import ICiChecksReader, ICiReconciliationState
+from agent_workflow.application.ci.ports import (
+    ICiChecksReader,
+    ICiLeadershipScope,
+    ICiReconciliationReader,
+)
+from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
+    AcknowledgeCiEventUseCase,
+)
+from agent_workflow.application.ci.use_cases.record_ci_evidence import (
+    RecordCiEvidenceUseCase,
+)
 from agent_workflow.application.ci.verification import verify_ci
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.domain.ci_evidence import CiEvidence
@@ -14,9 +24,12 @@ from agent_workflow.domain.workflow_identity import REPOSITORY
 class ReconcileCiUseCase:
     def __init__(
         self,
-        state: ICiReconciliationState,
+        reader: ICiReconciliationReader,
         checks: ICiChecksReader,
         *,
+        recorder: RecordCiEvidenceUseCase,
+        acknowledger: AcknowledgeCiEventUseCase,
+        leadership: ICiLeadershipScope,
         installation_id: int,
         check_name: str = "Python tests",
     ):
@@ -28,15 +41,18 @@ class ReconcileCiUseCase:
             )
         if check_name != "Python tests":
             raise InvalidApplicationRequestError("only approved V1 check may pass CI")
-        self.state = state
+        self.reader = reader
         self.checks = checks
+        self.recorder = recorder
+        self.acknowledger = acknowledger
+        self.leadership = leadership
         self.installation_id = installation_id
         self.check_name = check_name
 
     def observe_all(self) -> tuple[CiEvidence, ...]:
         """Reconcile only tracked, ready tasks; bounded to 32 per invocation."""
         observed = []
-        for tracked in self.state.tracked():
+        for tracked in self.reader.tracked():
             request = CiRequest(
                 task_id=tracked.task_id,
                 repository=REPOSITORY,
@@ -51,12 +67,14 @@ class ReconcileCiUseCase:
                 allowed_repository=REPOSITORY,
                 allowed_check_names=frozenset({self.check_name}),
                 failure_history_complete=True,
-                previous_failure_for_sha=self.state.previous_failure(
+                previous_failure_for_sha=self.reader.previous_failure(
                     request.task_id,
                     request.expected_head_sha,
                 ),
             )
-            self.state.record(evidence)
+            self.leadership.require_owner()
+            self.recorder.execute(evidence)
+            self.leadership.require_owner()
             observed.append(evidence)
         return tuple(observed)
 
@@ -67,7 +85,7 @@ class ReconcileCiUseCase:
         Startup can recheck tracked work even after a crash before inbox wake.
         No periodic GitHub polling is used when the inbox is empty.
         """
-        notifications = self.state.pending_events()
+        notifications = self.reader.pending_events()
         if not notifications and not startup:
             return ()
         for event in notifications:
@@ -88,5 +106,7 @@ class ReconcileCiUseCase:
         if any(e.verdict == "BLOCKED" for e in observations):
             return observations
         for notification in notifications:
-            self.state.mark_processed(notification.delivery_id)
+            self.leadership.require_owner()
+            self.acknowledger.execute(notification.delivery_id)
+            self.leadership.require_owner()
         return observations
