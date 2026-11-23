@@ -4,6 +4,28 @@
 
 Start with [AGENTS rules](../../AGENTS.md) and the authorized incident/task. This guide routes an agent to the source/test evidence for a specific timeout/disconnect scenario. Do **not** read all historical documentation. **CURRENT has no Controller→Worker network RPC:** the Controller starts Docker CLI processes and passes worker input through stdin; a "disconnect" here may be Docker CLI↔daemon uncertainty or Worker↔GitHub HTTPS request loss, **not** an implemented Executor IPC failure.
 
+## PostgreSQL Controller and retirement gate
+
+The PostgreSQL-only development command is
+`python -m agent_workflow.composition.controller_entrypoint CONFIG --once`.
+It requires an explicit `PG_RUNTIME_DSN` and a config without a SQLite `database`
+field. The same entry point offers `--ci-once` and `--ci-watch` for CI only.
+The legacy module names remain available. SQLite acknowledgement requires the
+legacy SQLite configuration and the existing operator authority described below.
+
+The [PostgreSQL dispatch pass](../../src/agent_workflow/application/dispatch/run_dispatch_pass.py)
+can leave the active slot held after leadership loss or leave an engine pin
+after dispatch reaches `DONE` but terminal cleanup fails. The
+[PostgreSQL ledger](../../src/agent_workflow/storage/postgres_dispatch.py)
+has an `acknowledge()` adapter method exercised in disposable tests. The
+PostgreSQL CLI exposes no operator acknowledgement or recovery command.
+SQLite rollback requires a separately verified operator procedure. If a
+PostgreSQL incident or rollback depends on unverified recovery steps, preserve
+the dispatch, engine, task and remote publication evidence and escalate to
+the Owner and Tech Lead. The legacy retirement gate remains
+`BLOCKED_LEGACY_CUTOVER_PROOF` until they verify zero active legacy callers
+and PostgreSQL recovery and rollback readiness.
+
 ## Minimal call path: where to inspect
 
 | Checkpoint | CURRENT source and symbols | Focused existing tests |

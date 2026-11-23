@@ -13,6 +13,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 
+from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.application.exceptions import (
     ApplicationError,
@@ -40,6 +41,7 @@ class CiRunResponse:
 
 
 CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
+ComposeCi = Callable[[dict, AppConfig], AbstractContextManager[CiRunOperation]]
 sleep = time.sleep
 _LOGGER = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
 
@@ -113,8 +115,8 @@ def run_ci_command(
     dispatch_once: bool,
     acknowledge: str | None,
     reconciled: bool,
-    prepare: Callable[[], tuple[dict, object]],
-    compose: Callable[[dict, object], AbstractContextManager[CiRunOperation]],
+    prepare: Callable[[], tuple[object, AppConfig]],
+    compose: ComposeCi,
     log_scope: Callable[[], AbstractContextManager[None]],
 ) -> None:
     """Run a terminal CI command and translate failures at the CLI boundary.

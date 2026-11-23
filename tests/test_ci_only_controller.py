@@ -1,6 +1,7 @@
 """V1-03C: CI-only entry point cannot dispatch agents or require worker PEM."""
 
 import json
+import runpy
 import sys
 from argparse import Namespace
 from contextlib import contextmanager
@@ -48,8 +49,9 @@ def test_legacy_operate_refuses_ci_only_modes(flag):
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
 @pytest.mark.parametrize("failure", [None, PermissionError("leadership lost")])
+@pytest.mark.parametrize("pg_only", [False, True])
 def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
-    monkeypatch, tmp_path, mode, failure
+    monkeypatch, tmp_path, mode, failure, pg_only
 ):
     config_file = tmp_path / "controller.json"
     config = {"controller_github_app": {}}
@@ -95,11 +97,19 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         ci_cli, "run_ci_watch", lambda operation: run_handler("watch", operation)
     )
 
+    def launch():
+        if pg_only:
+            runpy.run_module(
+                "agent_workflow.composition.controller_entrypoint", run_name="__main__"
+            )
+        else:
+            controller.main()
+
     if failure is None:
-        controller.main()
+        launch()
     else:
         with pytest.raises(SystemExit) as error:
-            controller.main()
+            launch()
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
