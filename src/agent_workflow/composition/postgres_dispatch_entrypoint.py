@@ -1,19 +1,13 @@
-"""Explicit one-shot PostgreSQL dispatch with caller-owned state and leadership."""
+"""Own the validated, one-shot PostgreSQL Dispatch dependency scope."""
 
-from collections.abc import Callable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
 
-from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.application.dispatch.ports import (
-    CoderAssignment,
-    DispatchClaim,
-    IDispatchRepository,
-)
+from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.composition.postgres_controller import compose_postgres_controller
-from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.composition.postgres_dispatch_deps import create_dispatch_use_case
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.integrations.github_app_checks import ControllerAppToken
 from agent_workflow.runners.coder_runtime import validate_config
@@ -22,22 +16,19 @@ from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
 
-def _validate(config: dict, app_config: AppConfig) -> None:
+@contextmanager
+def compose_dispatch_execution(
+    config: dict, app_config: AppConfig
+) -> Iterator[RunDispatchPassUseCase]:
+    """Preflight the trusted adapters and lend one factory to the use case."""
+    _validate_worker_config(config)
+    with PostgresFactory.open(app_config) as factory:
+        yield create_dispatch_use_case(config, app_config, factory)
+
+
+def _validate_worker_config(config: dict) -> None:
     """Validate local settings only: no database, Docker or GitHub requests."""
-    validate_pg_runtime_dsn(app_config.pg_runtime_dsn)
     try:
-        tasks = config.get("tasks")
-        if (
-            not isinstance(tasks, dict)
-            or not tasks
-            or any(
-                not isinstance(key, str)
-                or not key.strip()
-                or not isinstance(task, dict)
-                for key, task in tasks.items()
-            )
-        ):
-            raise WorkflowError("explicit task mapping required")
         validate_config(config, require_database=False)
         # This entrypoint installs only the existing trusted Codex plugin.
         # Reject unsupported selection before opening any database resources.
@@ -70,7 +61,7 @@ def _validate(config: dict, app_config: AppConfig) -> None:
         ):
             raise WorkflowError("separate Controller and Worker credentials required")
         roots = [Path(config["scratch"]).resolve()] + [
-            Path(task["worktree"]).resolve() for task in tasks.values()
+            Path(task["worktree"]).resolve() for task in config["tasks"].values()
         ]
         if any(
             pem.is_relative_to(root)
@@ -79,50 +70,6 @@ def _validate(config: dict, app_config: AppConfig) -> None:
         ):
             raise WorkflowError("App credentials must remain outside Worker paths")
     except (KeyError, TypeError, ValueError, OSError, WorkflowError):
-        raise WorkflowError(
+        raise InvalidApplicationRequestError(
             "invalid PostgreSQL dispatch Worker configuration"
         ) from None
-
-
-def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
-    """Own exactly one factory; borrow its adapters only after trusted validation."""
-    _validate(config, app_config)
-    with PostgresFactory.open(app_config) as factory:
-        dependencies = compose_postgres_controller(factory)
-        service = WorkflowService(
-            repository=dependencies.workflow, require_ci=app_config.ci_gate_required
-        )
-        runtime = None
-
-        def execute(
-            claim: DispatchClaim,
-            context: CoderAssignment,
-            guard: Callable[[], None],
-        ) -> str:
-            nonlocal runtime
-            guard()
-            runtime = compose_postgres_worker(
-                config, service, dependencies, leadership_guard=guard
-            )
-            guard()
-            return runtime.execute(claim, context)
-
-        def finished(dispatch_id: str) -> None:
-            if runtime is None:
-                raise WorkflowError("missing dispatched Worker for terminal cleanup")
-            runtime.release_engine(dispatch_id)
-
-        task_ids = set(config["tasks"])
-        timeout = config.get("timeout_seconds", 1800)
-        if service.repository is not dependencies.workflow:
-            raise TypeError(
-                "Controller assignment must use the composed PostgreSQL workflow"
-            )
-        dispatch_pass = RunDispatchPassUseCase(
-            dependencies.leadership,
-            cast(IDispatchRepository, dependencies.dispatch),
-            service,
-            execute,
-            on_finished=finished,
-        )
-        return dispatch_pass.execute(task_ids, timeout)

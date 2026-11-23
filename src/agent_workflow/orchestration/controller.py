@@ -17,6 +17,7 @@ from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.logging.json_formatter import ci_log_scope
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
+from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 
@@ -90,7 +91,7 @@ def process_lock(path: Path):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
-    parser.add_argument("--once", action="store_true")
+    dispatch_cli.add_dispatch_argument(parser)
     parser.add_argument("--acknowledge", metavar="DISPATCH_ID")
     parser.add_argument("--reconciled", action="store_true")
     ci_cli.add_ci_arguments(parser)
@@ -116,26 +117,26 @@ def main() -> None:
             log_scope=ci_log_scope,
         )
         return
-    config = json.loads(
-        args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
-    )
-    if "PG_RUNTIME_DSN" in os.environ:
-        app_config = AppConfig.from_env()
-        if (
-            sum((args.once, args.ci_once, args.ci_watch)) != 1
-            or args.acknowledge is not None
-            or args.reconciled
-        ):
-            raise WorkflowError(
-                "PostgreSQL supports only explicit --once, --ci-once or --ci-watch"
-            )
-        if args.once:
-            from agent_workflow.composition.postgres_dispatch_entrypoint import (
-                run_postgres_dispatch_once,
-            )
+    postgres = "PG_RUNTIME_DSN" in os.environ
+    config = None if postgres else dispatch_cli.read_controller_config(args.config)
+    # With no PostgreSQL selection, legacy one-shot callers supply a database.
+    if postgres or (
+        args.once and (not isinstance(config, dict) or "database" not in config)
+    ):
+        from agent_workflow.composition.postgres_dispatch_entrypoint import (
+            compose_dispatch_execution,
+        )
 
-            run_postgres_dispatch_once(config, app_config)
-            return
+        dispatch_cli.run_dispatch_command(
+            once=args.once,
+            acknowledge=args.acknowledge,
+            reconciled=args.reconciled,
+            prepare=lambda: (
+                dispatch_cli.read_controller_config(args.config) if postgres else config
+            ),
+            compose=compose_dispatch_execution,
+        )
+        return
     from agent_workflow.runners.coder_runtime import validate_config
 
     validate_config(config)
