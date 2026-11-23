@@ -16,7 +16,6 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
-from agent_workflow.composition import postgres_leader_runner
 from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
@@ -117,9 +116,8 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
     scoped_session.assert_called_once_with()
 
 
-def test_dispatch_composition_does_not_expose_obsolete_watcher_path():
+def test_controller_composition_does_not_expose_obsolete_watcher_path():
     assert not hasattr(composition, "PostgresCiWatcherDependencies")
-    assert not hasattr(postgres_leader_runner, "run_ci_watcher_once")
 
 
 def test_invalid_or_closed_factory_fails_without_fallback():

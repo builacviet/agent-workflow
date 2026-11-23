@@ -13,11 +13,11 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import HEAD, NEXT, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
-from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -117,7 +117,12 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
             ci_factory=Mock(),
             leadership=leadership,
         )
-        return run_controller_once(dependencies, service, {task_id}, simulated_publish)
+        return RunDispatchPassUseCase(
+            dependencies.leadership,
+            dependencies.dispatch,
+            service,
+            simulated_publish,
+        ).execute({task_id})
 
     assert not next_owner_attempt()
     assert ledger.is_pre_launch(claim["dispatch_id"])

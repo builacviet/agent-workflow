@@ -4,10 +4,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
-from agent_workflow.composition.postgres_leader_runner import run_controller_once
 from agent_workflow.integrations.github import WorkflowError
 
 SHA = "a" * 40
@@ -66,7 +66,10 @@ def fixture(acquired=True):
 
 def test_denied_and_acquisition_error_do_no_work_and_release():
     deps, assignment, execute = fixture(False)
-    assert not run_controller_once(deps, assignment, {"T"}, execute)
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
+    assert not dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_not_called()
     assignment.get_coder_assignment.assert_not_called()
     execute.assert_not_called()
@@ -74,31 +77,28 @@ def test_denied_and_acquisition_error_do_no_work_and_release():
 
     deps, assignment, execute = fixture()
     deps.leadership.try_acquire = Mock(side_effect=RuntimeError("database unavailable"))
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
     with pytest.raises(RuntimeError):
-        run_controller_once(deps, assignment, {"T"}, execute)
+        dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_not_called()
     execute.assert_not_called()
     assert deps.leadership.release_calls == 1
 
 
-def test_non_postgres_assignment_is_rejected_before_acquisition():
-    deps, assignment, execute = fixture()
-    assignment.repository = object()
-    with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
-        run_controller_once(deps, assignment, {"T"}, execute)
-    assert deps.leadership.acquire_calls == 0
-    deps.dispatch.claim.assert_not_called()
-
-
 def test_positive_iteration_and_retired_instance_cannot_retry():
     deps, assignment, execute = fixture()
-    assert run_controller_once(deps, assignment, {"T"}, execute)
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
+    assert dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_called_once_with({"T"}, 1800, track_pre_launch=True)
     assignment.get_coder_assignment.assert_called_once_with("T")
     deps.dispatch.finish.assert_called_once_with("dispatch", SHA)
     deps.dispatch.block.assert_not_called()
     assert deps.leadership.release_calls == 1
-    assert not run_controller_once(deps, assignment, {"T"}, execute)
+    assert not dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_called_once()
 
 
@@ -118,8 +118,11 @@ def test_loss_at_material_boundary_preserves_uncertain_slot(lost_at):
         return original(*args, **kwargs) if callable(original) else original
 
     operation.side_effect = lose
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
     with pytest.raises(PermissionError, match="leadership lost"):
-        run_controller_once(deps, assignment, {"T"}, execute)
+        dispatch_pass.execute({"T"})
     deps.dispatch.block.assert_not_called()
     assert deps.leadership.release_calls == 1
     if lost_at == "claim":
@@ -140,15 +143,21 @@ def test_callback_guard_stops_internal_effect_and_exception_blocks_only_while_ow
         publish()
         return SHA
 
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
     with pytest.raises(PermissionError):
-        run_controller_once(deps, assignment, {"T"}, execute)
+        dispatch_pass.execute({"T"})
     publish.assert_not_called()
     deps.dispatch.block.assert_not_called()
 
     deps, assignment, execute = fixture()
     execute.side_effect = RuntimeError("worker failed")
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
     with pytest.raises(RuntimeError, match="worker failed"):
-        run_controller_once(deps, assignment, {"T"}, execute)
+        dispatch_pass.execute({"T"})
     deps.dispatch.block.assert_called_once_with("dispatch")
     assert deps.leadership.release_calls == 1
 
@@ -161,8 +170,11 @@ def test_cancellation_releases_session_and_retains_slot_on_loss():
         raise KeyboardInterrupt
 
     execute.side_effect = cancelled
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership, deps.dispatch, assignment, execute
+    )
     with pytest.raises(KeyboardInterrupt):
-        run_controller_once(deps, assignment, {"T"}, execute)
+        dispatch_pass.execute({"T"})
     deps.dispatch.block.assert_not_called()
     assert deps.leadership.release_calls == 1
 
@@ -188,6 +200,13 @@ def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure)
             raise RuntimeError("pin retained")
 
     deps.dispatch.finish.side_effect = finish
+    dispatch_pass = RunDispatchPassUseCase(
+        deps.leadership,
+        deps.dispatch,
+        assignment,
+        execute,
+        on_finished=cleanup,
+    )
     if failure:
         expected = {
             "cleanup": WorkflowError,
@@ -195,11 +214,9 @@ def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure)
             "lost": PermissionError,
         }[failure]
         with pytest.raises(expected):
-            run_controller_once(deps, assignment, {"T"}, execute, on_finished=cleanup)
+            dispatch_pass.execute({"T"})
     else:
-        assert run_controller_once(
-            deps, assignment, {"T"}, execute, on_finished=cleanup
-        )
+        assert dispatch_pass.execute({"T"})
     assert events == (
         ["finish", "cleanup"] if failure in {None, "cleanup"} else ["finish"]
     )

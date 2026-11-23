@@ -2,10 +2,16 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
+from agent_workflow.application.dispatch.ports import (
+    CoderAssignment,
+    DispatchClaim,
+    IDispatchRepository,
+)
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
-from agent_workflow.composition.postgres_leader_runner import compose_dispatch_pass
 from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
@@ -88,7 +94,11 @@ def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
         )
         runtime = None
 
-        def execute(claim: dict, context: dict, guard: Callable[[], None]) -> str:
+        def execute(
+            claim: DispatchClaim,
+            context: CoderAssignment,
+            guard: Callable[[], None],
+        ) -> str:
             nonlocal runtime
             guard()
             if (
@@ -109,7 +119,15 @@ def run_postgres_dispatch_once(config: dict, app_config: AppConfig) -> bool:
 
         task_ids = set(config["tasks"])
         timeout = config.get("timeout_seconds", 1800)
-        dispatch_pass = compose_dispatch_pass(
-            dependencies, service, execute, on_finished=finished
+        if service.repository is not dependencies.workflow:
+            raise TypeError(
+                "Controller assignment must use the composed PostgreSQL workflow"
+            )
+        dispatch_pass = RunDispatchPassUseCase(
+            dependencies.leadership,
+            cast(IDispatchRepository, dependencies.dispatch),
+            service,
+            execute,
+            on_finished=finished,
         )
         return dispatch_pass.execute(task_ids, timeout)
