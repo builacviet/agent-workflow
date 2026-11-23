@@ -5,11 +5,23 @@ The injected Application use case performs the guarded reconciliation.
 """
 
 import argparse
+import logging
+import os
+import sys
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
+    PersistenceUnavailableError,
+)
+from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.observability.correlation import correlation_scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +41,7 @@ class CiRunResponse:
 
 CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
 sleep = time.sleep
+_LOGGER = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
 
 
 class CiController:
@@ -61,7 +74,14 @@ def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run_ci_once(reconcile: CiRunOperation) -> None:
     """Print only after a successful committed pass."""
-    result = reconcile(CiRunRequest(startup=True))
+    _print_ci_once(_execute_ci_once(reconcile))
+
+
+def _execute_ci_once(reconcile: CiRunOperation) -> CiRunResponse:
+    return reconcile(CiRunRequest(startup=True))
+
+
+def _print_ci_once(result: CiRunResponse) -> None:
     print(
         f"CI reconciliation: {result.observed_count} tracked observations",
         flush=True,
@@ -84,3 +104,154 @@ def run_ci_watch(
         if stop is not None and stop():
             break
         sleep(delay)
+
+
+def run_ci_command(
+    *,
+    ci_once: bool,
+    ci_watch: bool,
+    dispatch_once: bool,
+    acknowledge: str | None,
+    reconciled: bool,
+    prepare: Callable[[], tuple[dict, object]],
+    compose: Callable[[dict, object], AbstractContextManager[CiRunOperation]],
+    log_scope: Callable[[], AbstractContextManager[None]],
+) -> None:
+    """Run a terminal CI command and translate failures at the CLI boundary.
+
+    The lower-level run_ci_once/run_ci_watch APIs deliberately keep propagating
+    exceptions for callers that compose them directly.
+    """
+    mode = "watch" if ci_watch else "once"
+    with correlation_scope(correlation_id=os.environ.get("CORRELATION_ID")):
+        with log_scope():
+            if (
+                ci_once == ci_watch
+                or dispatch_once
+                or acknowledge is not None
+                or reconciled
+            ):
+                _finish_error(
+                    mode,
+                    "invalid_request",
+                    "Use exactly one CI mode without dispatch acknowledgement options.",
+                    2,
+                )
+            if "PG_RUNTIME_DSN" not in os.environ:
+                _finish_error(
+                    mode,
+                    "invalid_configuration",
+                    "PG_RUNTIME_DSN is required for CI commands.",
+                    2,
+                )
+
+            try:
+                config, app_config = prepare()
+            except (OSError, UnicodeError, ValueError, TypeError):
+                _finish_error(
+                    mode,
+                    "invalid_configuration",
+                    "CI configuration is invalid or unavailable.",
+                    2,
+                )
+            if not isinstance(config, dict):
+                _finish_error(
+                    mode,
+                    "invalid_configuration",
+                    "CI configuration is invalid or unavailable.",
+                    2,
+                )
+
+            try:
+                with compose(config, app_config) as reconcile:
+                    if ci_once:
+                        result = _execute_ci_once(reconcile)
+                    else:
+                        run_ci_watch(reconcile)
+                if ci_once:
+                    _print_ci_once(result)
+            except KeyboardInterrupt:
+                _finish_error(
+                    mode,
+                    "interrupted",
+                    "CI watch interrupted; stopping."
+                    if ci_watch
+                    else "CI command interrupted; stopping.",
+                    130,
+                    level=logging.INFO,
+                )
+            except PersistenceUnavailableError:
+                _finish_error(
+                    mode,
+                    "persistence_unavailable",
+                    "CI persistence is temporarily unavailable.",
+                    75,
+                )
+            except TimeoutError:
+                _finish_error(
+                    mode,
+                    "timeout",
+                    "The CI operation timed out.",
+                    75,
+                )
+            except (InvalidApplicationRequestError, DomainError):
+                _finish_error(
+                    mode,
+                    "request_rejected",
+                    "The CI request was rejected.",
+                    2,
+                )
+            except CorruptedPersistenceDataError:
+                _finish_error(
+                    mode,
+                    "persistence_data_invalid",
+                    "Stored CI data failed validation.",
+                    1,
+                )
+            except PermissionError:
+                _finish_error(
+                    mode,
+                    "leadership_lost",
+                    "CI leadership was lost; reconcile in-flight work.",
+                    1,
+                )
+            except ApplicationError:
+                # The current CI ApplicationError is the leadership contention
+                # contract. Do not inspect its message to select this outcome.
+                _finish_error(
+                    mode,
+                    "leadership_unavailable",
+                    "CI leadership is unavailable.",
+                    1,
+                )
+            except OSError:
+                _finish_error(
+                    mode,
+                    "integration_failure",
+                    "A required CI service is unavailable.",
+                    1,
+                )
+            except Exception:
+                _finish_error(
+                    mode,
+                    "unexpected_failure",
+                    "CI operation failed; inspect the sanitized application logs.",
+                    1,
+                )
+
+
+def _finish_error(
+    mode: str,
+    reason: str,
+    message: str,
+    exit_code: int,
+    *,
+    level: int = logging.ERROR,
+) -> None:
+    _LOGGER.log(
+        level,
+        "ci_cli_failure",
+        extra={"mode": mode, "reason": reason},
+    )
+    print(message, file=sys.stderr, flush=True)
+    raise SystemExit(exit_code)

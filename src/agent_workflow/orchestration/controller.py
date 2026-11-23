@@ -14,6 +14,7 @@ from typing import Callable
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.logging.json_formatter import ci_log_scope
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.storage.dispatch_repository import DispatchLedger
@@ -93,8 +94,27 @@ def main() -> None:
     parser.add_argument("--reconciled", action="store_true")
     ci_cli.add_ci_arguments(parser)
     args = parser.parse_args()
-    if (args.ci_once or args.ci_watch) and "PG_RUNTIME_DSN" not in os.environ:
-        raise ValueError("PG_RUNTIME_DSN is required for --ci-once and --ci-watch")
+    if args.ci_once or args.ci_watch:
+        from agent_workflow.composition.postgres_ci_entrypoint import (
+            compose_ci_execution,
+        )
+
+        ci_cli.run_ci_command(
+            ci_once=args.ci_once,
+            ci_watch=args.ci_watch,
+            dispatch_once=args.once,
+            acknowledge=args.acknowledge,
+            reconciled=args.reconciled,
+            prepare=lambda: (
+                json.loads(
+                    args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
+                ),
+                AppConfig.from_env(),
+            ),
+            compose=compose_ci_execution,
+            log_scope=ci_log_scope,
+        )
+        return
     config = json.loads(
         args.config.resolve(strict=True).read_text(encoding="utf-8-sig")
     )
@@ -115,16 +135,6 @@ def main() -> None:
 
             run_postgres_dispatch_once(config, app_config)
             return
-        from agent_workflow.composition.postgres_ci_entrypoint import (
-            compose_ci_execution,
-        )
-
-        with compose_ci_execution(config, app_config) as reconcile:
-            if args.ci_once:
-                ci_cli.run_ci_once(reconcile)
-            else:
-                ci_cli.run_ci_watch(reconcile)
-        return
     from agent_workflow.runners.coder_runtime import validate_config
 
     validate_config(config)

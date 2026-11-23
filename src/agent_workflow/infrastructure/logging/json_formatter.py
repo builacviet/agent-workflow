@@ -15,7 +15,10 @@ from agent_workflow.observability.correlation import (
 _CLI_LOGGERS = (
     "agent_workflow.admin",
     "agent_workflow.application.task.use_cases.authorize_task",
+    "agent_workflow.interfaces.cli.ci_controller",
 )
+_ADMIN_LOGGERS = _CLI_LOGGERS[:2]
+_CI_LOGGERS = (_CLI_LOGGERS[2],)
 _LEVELS = {
     logging.DEBUG: "DEBUG",
     logging.INFO: "INFO",
@@ -28,18 +31,33 @@ _MESSAGES = {
     "task_authorization_started": "Task authorization started",
     "task_authorization_skipped": "Task already authorized",
     "task_authorization_committed": "Task authorization committed",
+    "ci_cli_failure": "CI CLI operation ended without success",
 }
 _EVENT_FIELDS = {
     "action": frozenset(
         ("provision", "seed-history", "seed-synthetic", "reset-synthetic")
     ),
-    "reason": frozenset(("persistence_unavailable", "timeout")),
+    "reason": frozenset(
+        (
+            "persistence_unavailable",
+            "timeout",
+            "invalid_request",
+            "invalid_configuration",
+            "request_rejected",
+            "persistence_data_invalid",
+            "leadership_unavailable",
+            "leadership_lost",
+            "integration_failure",
+            "unexpected_failure",
+            "interrupted",
+        )
+    ),
+    "mode": frozenset(("once", "watch")),
 }
 
 
 _admin_log_lock = Lock()
-_admin_log_stack = ExitStack()
-_active_admin_scopes = 0
+_active_scopes: dict[tuple[str, ...], tuple[int, ExitStack]] = {}
 
 
 class JsonFormatter(logging.Formatter):
@@ -67,24 +85,40 @@ class JsonFormatter(logging.Formatter):
 
 @contextmanager
 def admin_log_scope() -> Iterator[None]:
-    """Keep one stderr handler installed until the last CLI call exits."""
-    global _active_admin_scopes
+    """Keep one sanitized stderr handler for overlapping Admin CLI calls."""
+    with _log_scope(_ADMIN_LOGGERS):
+        yield
+
+
+@contextmanager
+def ci_log_scope() -> Iterator[None]:
+    """Keep one sanitized stderr handler for overlapping CI CLI calls."""
+    with _log_scope(_CI_LOGGERS):
+        yield
+
+
+@contextmanager
+def _log_scope(names: tuple[str, ...]) -> Iterator[None]:
     with _admin_log_lock:
-        if _active_admin_scopes == 0:
-            _admin_log_stack.enter_context(_attach_admin_stderr())
-        _active_admin_scopes += 1
+        active, stack = _active_scopes.get(names, (0, ExitStack()))
+        if active == 0:
+            stack.enter_context(_attach_stderr(names))
+        _active_scopes[names] = (active + 1, stack)
     try:
         yield
     finally:
         with _admin_log_lock:
-            _active_admin_scopes -= 1
-            if _active_admin_scopes == 0:
-                _admin_log_stack.close()
+            active, stack = _active_scopes[names]
+            if active == 1:
+                stack.close()
+                del _active_scopes[names]
+            else:
+                _active_scopes[names] = (active - 1, stack)
 
 
 @contextmanager
-def _attach_admin_stderr() -> Iterator[None]:
-    loggers = tuple(logging.getLogger(name) for name in _CLI_LOGGERS)
+def _attach_stderr(names: tuple[str, ...]) -> Iterator[None]:
+    loggers = tuple(logging.getLogger(name) for name in names)
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     previous = [(logger, logger.level, logger.propagate) for logger in loggers]

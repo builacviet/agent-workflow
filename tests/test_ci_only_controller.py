@@ -35,8 +35,9 @@ def test_ci_mode_requires_postgres_before_any_fallback(monkeypatch, tmp_path, mo
     )
     monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
 
-    with pytest.raises(ValueError, match="PG_RUNTIME_DSN is required"):
+    with pytest.raises(SystemExit) as error:
         controller.main()
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("flag", ["ci_once", "ci_watch"])
@@ -83,7 +84,12 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         postgres_ci_entrypoint, "compose_ci_execution", compose_ci_execution
     )
     monkeypatch.setattr(
-        ci_cli, "run_ci_once", lambda operation: run_handler("once", operation)
+        ci_cli,
+        "_execute_ci_once",
+        lambda operation: (
+            run_handler("once", operation)
+            or ci_cli.CiRunResponse(observed_count=0, blocked_count=0)
+        ),
     )
     monkeypatch.setattr(
         ci_cli, "run_ci_watch", lambda operation: run_handler("watch", operation)
@@ -92,9 +98,9 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     if failure is None:
         controller.main()
     else:
-        with pytest.raises(PermissionError) as error:
+        with pytest.raises(SystemExit) as error:
             controller.main()
-        assert error.value is failure
+        assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
 
@@ -124,8 +130,13 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags):
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
-    with pytest.raises(WorkflowError, match="PostgreSQL supports only"):
-        controller.main()
+    if "--ci-once" in flags or "--ci-watch" in flags:
+        with pytest.raises(SystemExit) as error:
+            controller.main()
+        assert error.value.code == 2
+    else:
+        with pytest.raises(WorkflowError, match="PostgreSQL supports only"):
+            controller.main()
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
@@ -137,8 +148,9 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     monkeypatch.setattr(
         controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
     )
-    with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
+    with pytest.raises(SystemExit) as error:
         controller.main()
+    assert error.value.code == 2
 
 
 def _watch_setup(monkeypatch):
