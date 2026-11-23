@@ -65,6 +65,23 @@ A short assignment prompt should contain the **Notion task link + ID**, base/bra
 
 Before assignment, TL runs **bounded dependency discovery** over entrypoints, callers, related tests, shared contracts and likely protected exceptions. Preauthorize foreseeable LOW/MEDIUM and specific HIGH exceptions together, so the Coder need not repeatedly ask about trivial supporting changes. TL ultimately verifies every changed path against the approved task, the full diff and exact-HEAD CI. No new runtime privileges, QC/MTP/independent reviewer gates or Owner merge rights are created by this policy.
 
+## 4A. Choose Coder model and reasoning effort (manual DEVELOPMENT)
+
+Model selection is an **efficiency recommendation**, not a security approval, a task's risk classification or a guaranteed model capability. These are **Owner-defined Codex routing profiles**; confirm the profiles actually available in the current manual Coder session. Separate **Task Risk (LOW / MEDIUM / HIGH, per §4)** from **Coder model/effort**. A task with five changed lines can still be HIGH risk if it affects authorization; a multi-file mechanical edit may be suitable for a MEDIUM model if bounded and verified.
+
+| Routing profile | Best-fit task shape | Limits / escalation |
+| --- | --- | --- |
+| **Luna — Low** | Docs, rename, mechanical refactoring, repetitive test updates from an established pattern, nonsemantic typing cleanup. | Avoid when logic, ownership, contracts or security may change. |
+| **Terra — Medium** | Small reproducible bugs, bounded behavior-preserving refactors, focused tests, local UI/Composition cleanup. | Escalate if authorization, isolation, transaction/leadership semantics or untested broad effects arise. |
+| **Sol — Medium / High** | New features, coordinated Application/adapter work, multi-module changes, database or complex debugging; use High for well-scoped sensitive implementation. | HIGH/protected changes still require the exact approved Scope Envelope; Sol is not a substitute for Owner authorization. |
+| **Astra — High / Extra High** | Unresolved architecture/security/concurrency risks, difficult races, multi-constraint design or root-cause investigation. | Prefer a focused design/investigation pass before a smaller authorized implementation; not the default for routine code. |
+
+**Proportional assignment:** (1) classify Task Risk, protected paths and required Owner approvals **first**; (2) estimate reasoning difficulty, blast radius, uncertainty and test evidence; (3) choose the **least costly profile likely to complete the approved AC reliably**; (4) split clearly separable safe cleanup from HIGH authorization or concurrency decisions instead of raising the model for the entire task; (5) escalate model/effort or stop the affected edit when concrete evidence shows the current model or scope is insufficient. Model upgrades do not widen task write/publish permissions.
+
+**Examples:** `R2-PG-RET-02A` (Composition wrapper and type-contract cleanup, behavior unchanged) → **Terra / Medium**; `R2-PG-RET-02B` (task eligibility/authorization moves into Application) → **Sol / High** after a separately approved HIGH gate. Use **Astra / High** for the latter's design review only if a substantive trust/concurrency ambiguity remains; Sol can then implement an approved, bounded decision. Model selection and independent TL exact-HEAD PR review are different responsibilities.
+
+Record the **Task Risk, recommended Coder profile, reasoning effort, one-sentence rationale and escalation trigger** in the task's existing **Execution / Constraints** fields on Notion (and succinctly in the Coder handoff). **Do not add a new database column, planning/approval gate, checklist, reviewer, or automatic model dispatcher.** Keep the manual TL → Coder → Draft PR → CI → TL review → Owner merge process unchanged.
+
 ## 5. Execute the manual development loop
 
 1. **TL assigns:** verify dependencies, base, identity, task contract, protected decisions and publish grant; create/approve the Notion task. Use one atomic task.
