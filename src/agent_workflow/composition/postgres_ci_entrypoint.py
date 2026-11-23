@@ -7,7 +7,7 @@ from pathlib import Path
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.ports import ICiChecksReader
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
-from agent_workflow.composition.ci_deps import create_ci_pass_use_case
+from agent_workflow.composition.ci_deps import create_ci_reconcile_use_case
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,
     ControllerChecksClient,
@@ -30,7 +30,7 @@ def compose_ci_execution(
     """
     installation_id, checks = _controller_checks(config, checks)
     with PostgresFactory.open(app_config) as factory:
-        use_case = create_ci_pass_use_case(
+        use_case = create_ci_reconcile_use_case(
             factory, checks, installation_id=installation_id
         )
         controller = ci_cli.CiController(use_case)

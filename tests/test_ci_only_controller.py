@@ -4,17 +4,24 @@ import json
 import sys
 from argparse import Namespace
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.ci.use_cases.run_ci_pass import CiPassResult
 from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.orchestration import controller
+
+
+def _evidence(observed_count, blocked_count):
+    return tuple(
+        SimpleNamespace(verdict="BLOCKED" if index < blocked_count else "SUCCESS")
+        for index in range(observed_count)
+    )
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
@@ -143,7 +150,7 @@ def _watch_setup(monkeypatch):
     )
     use_case = Mock()
     compose = Mock(return_value=use_case)
-    monkeypatch.setattr(postgres_ci_entrypoint, "create_ci_pass_use_case", compose)
+    monkeypatch.setattr(postgres_ci_entrypoint, "create_ci_reconcile_use_case", compose)
     config = {
         "controller_github_app": {
             "app_id": 1,
@@ -197,7 +204,7 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
 
 def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
-    results = [CiPassResult(1, 1)] * 7 + [CiPassResult(1, 0)] * 2
+    results = [_evidence(1, 1)] * 7 + [_evidence(1, 0)] * 2
     use_case.execute.side_effect = results
     sleeps = []
 
@@ -226,7 +233,7 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
 def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure):
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
     use_case.execute.side_effect = [
-        CiPassResult(1, 0),
+        _evidence(1, 0),
         failure,
     ]
     sleeps = []
@@ -262,7 +269,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
 
     factory.__exit__.reset_mock()
     use_case.execute.reset_mock(side_effect=True)
-    use_case.execute.return_value = CiPassResult(0, 0)
+    use_case.execute.return_value = _evidence(0, 0)
     with (
         pytest.raises(KeyboardInterrupt),
         postgres_ci_entrypoint.compose_ci_execution(
@@ -280,8 +287,8 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
 
     factory, use_case, compose, config, app_config, checks = _watch_setup(monkeypatch)
     use_case.execute.side_effect = [
-        CiPassResult(3, 1),
-        CiPassResult(0, 0),
+        _evidence(3, 1),
+        _evidence(0, 0),
     ]
 
     with postgres_ci_entrypoint.compose_ci_execution(
