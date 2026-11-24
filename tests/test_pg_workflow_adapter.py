@@ -730,3 +730,26 @@ def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
         assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
         assert unit.find_task((task_id,))["completed_review_rounds"] == 0
         assert unit.find_task((task_id,))["status"] == "IN_REVIEW"
+
+
+def test_mcp_submit_deadline_failure_rolls_back(setup, mcp_postgres, monkeypatch):
+    import agent_workflow.storage.postgres_workflow as workflow_storage
+
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+
+    def expired():
+        raise TimeoutError("injected deadline")
+
+    monkeypatch.setattr(workflow_storage, "check_deadline", expired)
+    with pytest.raises(ToolError, match="injected deadline"):
+        mcp_postgres("submit_review", {"submission": payload(claim)})
+    monkeypatch.undo()
+    with repo.read() as unit:
+        assert unit.list_reviews((task_id,)) == []
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
+        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
