@@ -6,8 +6,10 @@ Dependencies: Application use cases and PostgreSQL adapters.
 from collections.abc import Iterator
 from contextlib import contextmanager
 from time import time
+from uuid import uuid4
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.review.use_cases.claim_review import ClaimReviewUseCase
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextUseCase,
 )
@@ -17,10 +19,16 @@ from agent_workflow.application.review.use_cases.get_review_result import (
 from agent_workflow.application.review.use_cases.list_review_queue import (
     ListReviewQueueUseCase,
 )
+from agent_workflow.application.review.use_cases.submit_review import (
+    SubmitReviewUseCase,
+)
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueScope,
+)
+from agent_workflow.infrastructure.database.repositories.review_writes import (
+    PostgresReviewWriteScope,
 )
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
@@ -54,5 +62,20 @@ def postgres_mcp_service(app_config: AppConfig) -> Iterator[WorkflowService]:
             repository=PostgresWorkflowRepository(factory),
             require_ci=app_config.ci_gate_required,
         )
+    finally:
+        factory.close()
+
+
+@contextmanager
+def postgres_mcp_review_writes(app_config: AppConfig):
+    factory = PostgresFactory.open(app_config)
+    try:
+        scope = PostgresReviewWriteScope(PostgresWorkflowRepository(factory))
+        kwargs = dict(
+            clock=time,
+            token=lambda: uuid4().hex,
+            require_ci=app_config.ci_gate_required,
+        )
+        yield ClaimReviewUseCase(scope, **kwargs), SubmitReviewUseCase(scope, **kwargs)
     finally:
         factory.close()

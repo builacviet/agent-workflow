@@ -21,6 +21,10 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 from agent_workflow.application.review.use_cases.get_review_result import (
     GetReviewResultOutput,
 )
+from agent_workflow.application.review.use_cases.write_contracts import (
+    ClaimReviewInput,
+    SubmitReviewInput,
+)
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
@@ -98,7 +102,12 @@ def _review_result_response(output: GetReviewResultOutput) -> dict:
     return result
 
 
-def register_tools(mcp, service_provider, review_reads_provider):
+def register_tools(
+    mcp,
+    service_provider,
+    review_reads_provider,
+    review_writes_provider,
+):
     """Open a fresh scope for each authorized workflow tool call."""
 
     @contextmanager
@@ -125,14 +134,33 @@ def register_tools(mcp, service_provider, review_reads_provider):
     @mcp.tool()
     def claim_review(task_id: str, expected_head_sha: str, ctx: Context) -> dict:
         """Authenticated mutation: atomically lease the exact current task SHA."""
-        with service(ctx) as (engine, actor):
-            return engine.claim_review(task_id, expected_head_sha, actor)
+        actor = authorize_context(ctx)
+        with review_writes_provider() as (claim, _):
+            return asdict(
+                claim.execute(ClaimReviewInput(task_id, expected_head_sha, actor))
+            )
 
     @mcp.tool()
     def submit_review(submission: Submission, ctx: Context) -> dict:
         """Authenticated mutation: submit structured verdict using claim token as idempotency identity."""
-        with service(ctx) as (engine, actor):
-            return engine.submit_review(submission.model_dump(), actor)
+        actor = authorize_context(ctx)
+        with review_writes_provider() as (_, submit):
+            result = submit.execute(SubmitReviewInput(submission, actor))
+            if result.duplicate:
+                return {
+                    "task_id": result.task_id,
+                    "duplicate": True,
+                    "reviewed_head_sha": result.reviewed_head_sha,
+                    "verdict": result.verdict,
+                }
+            return {
+                "task_id": result.task_id,
+                "review_id": result.review_id,
+                "verdict": result.verdict,
+                "review_round": result.review_round,
+                "reviewed_head_sha": result.reviewed_head_sha,
+                "actual_effort": result.actual_effort,
+            }
 
     @mcp.tool()
     def get_review_result(task_id: str, ctx: Context) -> dict:

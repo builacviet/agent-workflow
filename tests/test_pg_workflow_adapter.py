@@ -654,3 +654,79 @@ def test_null_handoff_sha_does_not_match(setup):
         )
         assert db.find_head_handoff(task_id, None) is None
         assert isinstance(db.find_authorization((task_id,))["metadata"], str)
+
+
+def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeypatch):
+    service, repo, task_id, factory = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    monkeypatch.setattr(
+        WorkflowService,
+        "claim_review",
+        lambda *args: pytest.fail("legacy claim called"),
+    )
+    monkeypatch.setattr(
+        WorkflowService,
+        "submit_review",
+        lambda *args: pytest.fail("legacy submit called"),
+    )
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+    first = payload(claim)
+    result = mcp_postgres("submit_review", {"submission": first})
+    assert result["verdict"] == "CHANGES_REQUESTED" and result["review_round"] == 1
+    assert mcp_postgres("submit_review", {"submission": first}) == {
+        "task_id": task_id,
+        "duplicate": True,
+        "reviewed_head_sha": HEAD,
+        "verdict": "CHANGES_REQUESTED",
+    }
+    with pytest.raises(ToolError, match="conflicting duplicate"):
+        mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
+    service.register_task_handoff(
+        task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
+    )
+    claim2 = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": NEXT}
+    )
+    second = payload(claim2, "APPROVED", prior_resolutions={"F-1": "FIXED"})
+    result2 = mcp_postgres("submit_review", {"submission": second})
+    assert result2["verdict"] == "APPROVED" and result2["review_round"] == 2
+    assert mcp_postgres(
+        "get_review_context", {"task_id": task_id}
+    ) == service.get_review_context(task_id)
+    assert mcp_postgres(
+        "get_review_result", {"task_id": task_id}
+    ) == service.get_review_result(task_id)
+    assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
+    with repo.read() as unit:
+        assert len(unit.list_reviews((task_id,))) == 2
+
+
+def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
+    from agent_workflow.infrastructure.database.repositories.review_writes import (
+        PostgresReviewWrites,
+    )
+
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+    original = PostgresReviewWrites.transition
+
+    def fail(self, task, status, action, now, metadata):
+        if action == "REVIEW_SUBMITTED":
+            raise RuntimeError("injected persistence failure")
+        return original(self, task, status, action, now, metadata)
+
+    monkeypatch.setattr(PostgresReviewWrites, "transition", fail)
+    with pytest.raises(ToolError, match="injected persistence failure"):
+        mcp_postgres("submit_review", {"submission": payload(claim)})
+    with repo.read() as unit:
+        assert unit.list_reviews((task_id,)) == []
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
+        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
+        assert unit.find_task((task_id,))["status"] == "IN_REVIEW"

@@ -98,20 +98,6 @@ def authorized_workflow(monkeypatch):
     ("name", "arguments", "service_args", "service_result", "tool_result"),
     [
         (
-            "claim_review",
-            {**TASK, "expected_head_sha": HEAD},
-            ("TEST", HEAD, ACTOR),
-            RECORD,
-            RECORD,
-        ),
-        (
-            "submit_review",
-            {"submission": SUBMISSION},
-            (SUBMISSION, ACTOR),
-            RECORD,
-            RECORD,
-        ),
-        (
             "register_task_handoff",
             HANDOFF,
             ("TEST", REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test evidence"),
@@ -409,3 +395,64 @@ def test_denied_auth0_calls_do_not_open_postgres(
     finally:
         auth_context_var.reset(reset)
     open_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["claim_review", "submit_review"])
+def test_review_writes_use_cases_authorize_and_close(
+    monkeypatch, authorized_workflow, name
+):
+    from agent_workflow.application.review.use_cases.claim_review import (
+        ClaimReviewUseCase,
+    )
+    from agent_workflow.application.review.use_cases.submit_review import (
+        SubmitReviewUseCase,
+    )
+    from agent_workflow.application.review.use_cases.write_contracts import (
+        ClaimReviewOutput,
+        SubmitReviewOutput,
+    )
+
+    factory = Mock()
+    opened = Mock(return_value=factory)
+    monkeypatch.setattr(PostgresFactory, "open", opened)
+    monkeypatch.setattr(
+        WorkflowService, name, Mock(side_effect=AssertionError("legacy called"))
+    )
+    if name == "claim_review":
+        case = ClaimReviewUseCase
+        arguments = {**TASK, "expected_head_sha": HEAD}
+        result = ClaimReviewOutput("token", "TEST", HEAD, 1, 100.0)
+        expected = {
+            "claim_token": "token",
+            "task_id": "TEST",
+            "reviewed_sha": HEAD,
+            "review_round": 1,
+            "lease_expiration": 100.0,
+        }
+    else:
+        case = SubmitReviewUseCase
+        arguments = {"submission": SUBMISSION}
+        result = SubmitReviewOutput(
+            "TEST", "APPROVED", HEAD, review_id="review", review_round=1
+        )
+        expected = {
+            "task_id": "TEST",
+            "review_id": "review",
+            "verdict": "APPROVED",
+            "review_round": 1,
+            "reviewed_head_sha": HEAD,
+            "actual_effort": None,
+        }
+    execute = Mock(return_value=result)
+    monkeypatch.setattr(case, "execute", lambda self, request: execute(request))
+    reset = auth_context_var.set(None)
+    try:
+        with pytest.raises(ToolError, match="workflow OAuth authorization required"):
+            asyncio.run(mcp.call_tool(name, arguments))
+        opened.assert_not_called()
+    finally:
+        auth_context_var.reset(reset)
+    assert json.loads(asyncio.run(mcp.call_tool(name, arguments))[0].text) == expected
+    assert execute.call_args.args[0].reviewer == ACTOR
+    opened.assert_called_once()
+    factory.close.assert_called_once()

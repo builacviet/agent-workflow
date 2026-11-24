@@ -14,6 +14,7 @@ from agent_workflow.application.review.ports import (
     IReviewQueueReader,
     IReviewQueueScope,
 )
+from agent_workflow.domain.review.policy import require_ci
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
 
@@ -44,12 +45,18 @@ class ListReviewQueueUseCase:
             )
 
     def _ci_allows(self, reader: IReviewQueueReader, item: ReviewQueueItem) -> bool:
-        if not self._require_ci and (
+        handoff = (
             reader.latest_head_handoff_action(item.task_id, item.head_sha)
-            != "CI_REPAIR_HANDOFF"
-        ):
+            if not self._require_ci
+            else None
+        )
+        if require_ci(self._require_ci, handoff, False):
             return True
-        return reader.has_successful_ci(item.task_id, item.head_sha)
+        return require_ci(
+            self._require_ci,
+            handoff,
+            reader.has_successful_ci(item.task_id, item.head_sha),
+        )
 
     def _recover_expired_claims(self, leases: IReviewLeaseStore) -> None:
         for task in leases.lock_claimed_tasks():

@@ -14,6 +14,7 @@ from starlette.applications import Starlette
 
 from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_reads_provider,
+    postgres_review_writes_provider,
     postgres_workflow_provider,
 )
 from agent_workflow.mcp.security import TECHLEAD_SCOPE
@@ -131,7 +132,12 @@ def get_server_info() -> dict:
 mcp = create_mcp_server()
 mcp.tool()(ping)
 mcp.tool()(get_server_info)
-register_tools(mcp, postgres_workflow_provider, postgres_review_reads_provider)
+register_tools(
+    mcp,
+    postgres_workflow_provider,
+    postgres_review_reads_provider,
+    postgres_review_writes_provider,
+)
 
 
 def main() -> None:
