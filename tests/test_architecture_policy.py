@@ -385,13 +385,6 @@ src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.ConfigDict|
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.Field|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.StrictStr|1
 src/agent_workflow/domain/contracts.py|domain-base|StrictModel|pydantic.BaseModel|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.REPOSITORY|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.WorkflowError|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.canonical_repository|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.integrations.github.validate_sha|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.paths.database_path|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.storage.repository.SQLiteWorkflowRepository|1
-src/agent_workflow/domain/service.py|core-import|<module>|agent_workflow.storage.repository.WorkflowRepository|1
 src/agent_workflow/integrations/github_app_checks.py|inline-import|ControllerAppToken.__call__|jwt|1
 src/agent_workflow/mcp/security.py|inline-import|authorize_context|mcp.server.auth.middleware.auth_context.get_access_token|1
 src/agent_workflow/mcp/security.py|inline-import|authorize_techlead|mcp.server.auth.middleware.auth_context.get_access_token|1
