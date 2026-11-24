@@ -22,7 +22,7 @@ from agent_workflow.application.review.dtos import ReviewQueueItem
 from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_reads_provider,
     postgres_review_writes_provider,
-    postgres_workflow_provider,
+    postgres_task_operations_provider,
 )
 from agent_workflow.mcp.server import create_mcp_server, get_server_info, ping
 from agent_workflow.mcp.techlead_github import TechLeadError, TechLeadGitHub
@@ -89,7 +89,7 @@ def _server(review_reads_provider=postgres_review_reads_provider):
     mcp.tool()(get_server_info)
     register_tools(
         mcp,
-        postgres_workflow_provider,
+        postgres_task_operations_provider,
         review_reads_provider,
         postgres_review_writes_provider,
     )

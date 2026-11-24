@@ -459,8 +459,8 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@localhost/test"
     )
     monkeypatch.setattr(
-        "agent_workflow.composition.postgres_mcp.postgres_mcp_service",
-        lambda config: nullcontext(engine),
+        "agent_workflow.composition.postgres_mcp.postgres_mcp_task_operations",
+        lambda config: pytest.fail("unauthorized task request opened PostgreSQL"),
     )
 
     # Exercise the actual write use cases against the existing disposable fixture.

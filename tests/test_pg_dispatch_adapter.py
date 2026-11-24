@@ -525,7 +525,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         runtime = original_compose(
             config, service, deps, leadership_guard=leadership_guard
         )
-        assert service.repository is deps.workflow
+        assert service.scope.repository is deps.workflow
         assert runtime.agent_runtime.dispatch is deps.dispatch
         assert runtime.agent_runtime.ci is deps.ci_tracking
         host = FakeHost(calls)
@@ -537,14 +537,18 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         def handoff(context, result, summary):
             leadership_guard()
             calls.append("handoff")
-            service.register_task_handoff(
-                task_id,
-                context["repository"],
-                context["branch"],
-                context["base_sha"],
-                result["head_sha"],
-                "docs/handoff.md",
-                summary,
+            from agent_workflow.domain.task.handoff import HandoffRequest
+
+            service.execute(
+                HandoffRequest(
+                    task_id,
+                    context["repository"],
+                    context["branch"],
+                    context["base_sha"],
+                    result["head_sha"],
+                    "docs/handoff.md",
+                    summary,
+                )
             )
 
         host._register_handoff = handoff

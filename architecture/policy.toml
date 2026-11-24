@@ -95,21 +95,6 @@ module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
-path = "src/agent_workflow/runners/coder_runtime.py"
-module = "agent_workflow.domain.service"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/coder_runtime.py"
-module = "agent_workflow.storage.dispatch_repository"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/coder_runtime.py"
-module = "agent_workflow.storage.ci_state"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
 path = "src/agent_workflow/runners/runtime_plugins.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"

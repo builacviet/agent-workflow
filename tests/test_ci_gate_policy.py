@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.bootstrap import controller_entrypoint as controller
-from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
+from agent_workflow.bootstrap.mcp_runtime import postgres_review_reads_provider
 from agent_workflow.composition import (
     postgres_dispatch_deps,
     postgres_dispatch_entrypoint,
@@ -93,8 +93,8 @@ def test_mcp_provider_injects_ci_policy(monkeypatch, env_value, expected):
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
 
-    with postgres_workflow_provider() as service:
-        assert service.require_ci is expected
+    with postgres_review_reads_provider() as (queue, _, _):
+        assert queue._require_ci is expected
     factory.close.assert_called_once_with()
 
 
@@ -133,19 +133,22 @@ def test_controller_injects_same_policy_without_docker_launch(
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
     factory = Mock()
     dependencies = Mock()
+    from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+    dependencies.workflow = PostgresWorkflowRepository(factory)
     compose = Mock(return_value=dependencies)
-    service = Mock(wraps=WorkflowService)
+    assignment = Mock()
+    handoff = Mock()
     launch = Mock(side_effect=AssertionError("composition must not launch Worker"))
     monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_controller", compose)
-    monkeypatch.setattr(postgres_dispatch_deps, "WorkflowService", service)
+    monkeypatch.setattr(postgres_dispatch_deps, "GetCoderAssignmentUseCase", assignment)
+    monkeypatch.setattr(postgres_dispatch_deps, "RegisterTaskHandoffUseCase", handoff)
     monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_worker", launch)
 
     postgres_dispatch_deps.create_dispatch_use_case({}, AppConfig.from_env(), factory)
-
     compose.assert_called_once_with(factory)
-    service.assert_called_once_with(
-        repository=dependencies.workflow, require_ci=expected
-    )
+    assignment.assert_called_once()
+    handoff.assert_called_once()
     launch.assert_not_called()
 
 
@@ -168,7 +171,7 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     monkeypatch.setattr(sys, "argv", ["controller", str(config), "--once"])
 
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
-        postgres_workflow_provider()
+        postgres_review_reads_provider()
     with pytest.raises(SystemExit) as error:
         controller.main()
 

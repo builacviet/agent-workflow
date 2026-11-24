@@ -1,15 +1,23 @@
-"""Compose a trusted Worker runtime from already assembled dependencies."""
+"""Layer: Composition
+Responsibility: Compose a trusted Worker from Controller dependencies.
+Dependencies: Application operations and PostgreSQL adapters.
+"""
 
 from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.composition.postgres_controller import (
     ControllerCiSessionProvider,
     ControllerDependencies,
 )
-from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
+)
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -24,7 +32,7 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 def compose_postgres_worker(
     config: dict,
-    service: WorkflowService,
+    handoff: RegisterTaskHandoffUseCase,
     dependencies: ControllerDependencies,
     *,
     leadership_guard: Callable[[], None],
@@ -45,8 +53,9 @@ def compose_postgres_worker(
     leadership = dependencies.leadership
     if (
         not isinstance(workflow, PostgresWorkflowRepository)
-        or not isinstance(service, WorkflowService)
-        or service.repository is not workflow
+        or not isinstance(handoff, RegisterTaskHandoffUseCase)
+        or type(handoff.scope) is not PostgresHandoffScope
+        or handoff.scope.repository is not workflow
     ):
         raise TypeError("Worker requires the composed PostgreSQL workflow")
     if (
@@ -91,7 +100,7 @@ def compose_postgres_worker(
 
     return CoderRuntime(
         config,
-        service,
+        handoff,
         plugins=plugins,
         dispatch=dispatch,
         ci=ci_tracking,

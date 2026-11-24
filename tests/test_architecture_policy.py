@@ -380,7 +380,6 @@ def test_nested_trusted_git_package_is_classified():
 # never exemptions. Repeated identical violations are counted per symbol.
 # admin.py was clean at the approved base and still participates in the scan.
 _LEGACY_R2_AST_INVENTORY = """\
-src/agent_workflow/bootstrap/mcp_runtime.py|inline-import|postgres_workflow_provider|agent_workflow.composition.postgres_mcp.postgres_mcp_service|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.BaseModel|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.ConfigDict|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.Field|1
@@ -401,7 +400,6 @@ src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
 src/agent_workflow/runners/coder_runtime.py|inline-import|CoderRuntime._validated_result|agent_workflow.integrations.github.validate_sha|1
-src/agent_workflow/runners/coder_runtime.py|inline-import|_SqliteCiTracking.track|agent_workflow.storage.ci_state.ControllerCiState|1
 src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1
 src/agent_workflow/runners/sandbox.py|inline-import|_docker|agent_workflow.runners.coder_runtime.docker_command|1
 src/agent_workflow/runners/sandbox.py|inline-import|_workspace_bind|agent_workflow.runners.coder_runtime.is_linked|1

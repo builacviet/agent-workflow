@@ -35,7 +35,8 @@ from agent_workflow.application.exceptions import (
     InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
-from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
+from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
+from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
 from agent_workflow.composition.ci_deps import create_ci_state_adapters
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
@@ -433,10 +434,10 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     assert not approved(task_id, HEAD)
     assert reader.tracked() == ()
     with (
-        postgres_workflow_provider() as mcp_service,
+        postgres_review_writes_provider() as (claim_use_case, _),
         pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
     ):
-        mcp_service.claim_review(task_id, NEXT, "lead")
+        claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
     with pytest.raises(WorkflowError, match="HEAD differs"):
         track(task_id, PR, NEXT)
     with pytest.raises(WorkflowError, match="mismatched"):
@@ -459,20 +460,20 @@ def test_mcp_provider_claims_require_exact_head_ci(
 
     if ci_required == "1":
         with (
-            postgres_workflow_provider() as mcp_service,
+            postgres_review_writes_provider() as (claim_use_case, _),
             pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
         ):
-            mcp_service.claim_review(task_id, HEAD, "lead")
+            claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))
         track(task_id, PR, HEAD)
         record(evidence(task_id))
         assert approved(task_id, HEAD)
 
-    with postgres_workflow_provider() as mcp_service:
+    with postgres_review_writes_provider() as (claim_use_case, _):
         with pytest.raises(WorkflowError, match="stale claim SHA"):
-            mcp_service.claim_review(task_id, NEXT, "lead")
-        claim = mcp_service.claim_review(task_id, HEAD, "lead")
-    assert claim["task_id"] == task_id
-    assert claim["reviewed_sha"] == HEAD
+            claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
+        claim = claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))
+    assert claim.task_id == task_id
+    assert claim.reviewed_sha == HEAD
 
 
 def test_concurrent_observations_keep_sticky_failure_and_history(setup):
@@ -524,16 +525,35 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     record = RecordCiEvidenceUseCase(repository).execute
-    handoff(service, task_id, HEAD)
+    from agent_workflow.application.task.use_cases.register_task_handoff import (
+        RegisterTaskHandoffUseCase,
+    )
+    from agent_workflow.domain.task.handoff import HandoffRequest
+    from agent_workflow.infrastructure.database.repositories.task_handoff import (
+        PostgresHandoffScope,
+    )
+
+    operation = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(service.repository), clock=lambda: 1000.0
+    )
+
+    def current_handoff(head):
+        return operation.execute(
+            HandoffRequest(
+                task_id, REPO, "task/test", BASE, head, "docs/handoff.md", "test"
+            )
+        )
+
+    current_handoff(HEAD)
     track(task_id, PR, HEAD)
     record(evidence(task_id, "BLOCKED"))
     with pytest.raises(WorkflowError, match="repair"):
-        handoff(service, task_id, NEXT)
+        current_handoff(NEXT)
     record(evidence(task_id, "FAILURE"))
 
     previous = HEAD
     for count, head in enumerate((NEXT, "c" * 40), 1):
-        handoff(service, task_id, head)
+        current_handoff(head)
         track(task_id, PR, head)
         assert reader.tracked() == (
             CiTrackedTaskSnapshot(task_id, PR, head, "BLOCKED", count),
@@ -544,9 +564,9 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
         previous = head
 
     with pytest.raises(WorkflowError, match="stale"):
-        handoff(service, task_id, HEAD)
+        current_handoff(HEAD)
     with pytest.raises(WorkflowError, match="repair"):
-        handoff(service, task_id, "d" * 40)
+        current_handoff("d" * 40)
     assert reader.tracked()[0].repair_heads == 2
     assert [row["head_sha"] for row in observations(factory, task_id)] == [
         HEAD,

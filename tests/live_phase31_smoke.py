@@ -11,14 +11,17 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_workflow.domain.service import WorkflowService  # noqa: E402
+from agent_workflow.application.task.use_cases.register_task_handoff import (  # noqa: E402
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.integrations.github import WorkflowError  # noqa: E402
 from agent_workflow.runners.coder_runtime import (  # noqa: E402
-    LegacySqliteCoderRuntime,
+    CoderRuntime,
     safe_path,
 )
 from agent_workflow.workers.trusted_git.repository import git  # noqa: E402
@@ -59,13 +62,18 @@ def main() -> None:
         for name in names:
             (Path(directory) / name).chmod(0o666)
     profile = ROOT / "docker/coder-seccomp.json"
-    runtime = LegacySqliteCoderRuntime(
+    dispatch = Mock()
+    dispatch.is_pre_launch.return_value = False
+    runtime = CoderRuntime(
         {
             "image": args.image,
             "seccomp_profile": str(profile),
             "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
         },
-        WorkflowService(scratch / "smoke.sqlite3"),
+        Mock(spec=RegisterTaskHandoffUseCase),
+        dispatch=dispatch,
+        ci=Mock(),
+        leadership_guard=lambda: True,
     )
     claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 120}
     try:
