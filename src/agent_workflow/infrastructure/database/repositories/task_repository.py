@@ -1,4 +1,7 @@
-"""Project the task fields needed by the review context."""
+"""Layer: Infrastructure
+Responsibility: Project persisted task fields for review context.
+Dependencies: Application review DTOs, SQLAlchemy models and session controls.
+"""
 
 import json
 

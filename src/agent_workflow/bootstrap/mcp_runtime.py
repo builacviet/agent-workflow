@@ -1,4 +1,7 @@
-"""Provide a fresh PostgreSQL workflow scope for each authorized MCP call."""
+"""Layer: Bootstrap
+Responsibility: Load MCP invocation settings and expose scoped dependency providers.
+Dependencies: AppConfig and PostgreSQL MCP composition.
+"""
 
 from agent_workflow.app_config import AppConfig
 

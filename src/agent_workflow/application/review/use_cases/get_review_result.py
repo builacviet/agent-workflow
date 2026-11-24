@@ -1,4 +1,7 @@
-"""Derive review result fields from the same snapshot as review context."""
+"""Layer: Application
+Responsibility: Derive review result fields from one review context snapshot.
+Dependencies: The review context use case and Domain workflow statuses.
+"""
 
 from dataclasses import dataclass
 

@@ -1,4 +1,7 @@
-"""MCP adapters; existing ping/info and transport settings are preserved."""
+"""Layer: Interfaces/MCP
+Responsibility: Authorize MCP tool calls, invoke scoped dependencies and map wire responses.
+Dependencies: MCP SDK, Application use cases and MCP security and integration adapters.
+"""
 
 import json
 from contextlib import contextmanager

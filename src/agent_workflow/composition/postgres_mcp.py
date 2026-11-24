@@ -1,7 +1,11 @@
-"""Scoped PostgreSQL dependencies for the workflow MCP tools."""
+"""Layer: Composition
+Responsibility: Assemble scoped PostgreSQL dependencies for MCP workflow tools.
+Dependencies: Application use cases and PostgreSQL adapters.
+"""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from time import time
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.review.use_cases.get_review_context import (
@@ -32,10 +36,9 @@ def postgres_mcp_review_reads(
     try:
         context = create_get_review_context_use_case(factory)
         queue = ListReviewQueueUseCase(
-            PostgresReviewQueueScope(
-                PostgresWorkflowRepository(factory),
-                require_ci=app_config.ci_gate_required,
-            )
+            PostgresReviewQueueScope(PostgresWorkflowRepository(factory)),
+            require_ci=app_config.ci_gate_required,
+            clock=time,
         )
         yield queue, context, GetReviewResultUseCase(context)
     finally:

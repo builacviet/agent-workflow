@@ -1,4 +1,7 @@
-"""Typed review context data shared by the use case and its read port."""
+"""Layer: Application
+Responsibility: Define immutable review context, queue and lease data.
+Dependencies: Domain workflow statuses.
+"""
 
 from dataclasses import dataclass
 
@@ -84,3 +87,24 @@ class ReviewQueueItem:
     head_sha: str | None
     requested_effort: str
     review_round: int
+
+
+@dataclass(frozen=True)
+class ClaimedReviewTask:
+    task_id: str
+    head_sha: str | None
+    status: WorkflowStatus
+
+
+@dataclass(frozen=True)
+class ActiveReviewClaim:
+    token: str
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class ReviewLeaseTransition:
+    task: ClaimedReviewTask
+    next_status: WorkflowStatus
+    action: str
+    timestamp: float

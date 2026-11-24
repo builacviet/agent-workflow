@@ -1,3 +1,8 @@
+"""Layer: Interfaces/MCP
+Responsibility: Configure the MCP transport and register tools with their providers.
+Dependencies: MCP SDK, Bootstrap dependency providers and MCP tool adapters.
+"""
+
 import os
 import re
 from datetime import datetime, timezone

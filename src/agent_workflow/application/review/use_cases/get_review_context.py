@@ -1,4 +1,7 @@
-"""Read persisted review context for an authorized task."""
+"""Layer: Application
+Responsibility: Read persisted review context for an authorized task.
+Dependencies: Application review ports and Domain workflow types.
+"""
 
 from dataclasses import dataclass
 
