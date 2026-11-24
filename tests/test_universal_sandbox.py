@@ -12,15 +12,18 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
 
 from agent_workflow import budget
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox, sandbox_watchdog
-from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
+from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import (
     SandboxManager,
     SandboxPolicy,
@@ -976,13 +979,24 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
 ):
     state = tmp_path / "sandbox-state"
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(state))
-    service = WorkflowService(tmp_path / "db.sqlite")
-    first = LegacySqliteCoderRuntime({}, service)
+    first = CoderRuntime(
+        {},
+        Mock(spec=RegisterTaskHandoffUseCase),
+        dispatch=Mock(),
+        ci=Mock(),
+        leadership_guard=lambda: True,
+    )
     assert first.sandbox._fence_dir == state
     dispatch = "a" * 32
     first.sandbox.record_engine(dispatch, "unix:///fixture.sock", "fixture-daemon-a")
     dsn = "postgresql://user:secret-password@localhost/database"
-    second = LegacySqliteCoderRuntime({"database": dsn}, service)
+    second = CoderRuntime(
+        {"database": dsn},
+        Mock(spec=RegisterTaskHandoffUseCase),
+        dispatch=Mock(),
+        ci=Mock(),
+        leadership_guard=lambda: True,
+    )
     assert second.sandbox._fence_dir == state
     assert second.sandbox.has_launch_records(dispatch)
     assert second.sandbox.recovery_engine(dispatch) == (
@@ -992,50 +1006,15 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     assert "secret-password" not in str(second.sandbox._fence_dir)
 
 
-def test_runtime_refuses_to_abandon_legacy_fences(monkeypatch, tmp_path):
-    database = tmp_path / "state.sqlite"
-    legacy = tmp_path / "state.sqlite.sandbox-fences"
-    legacy.mkdir()
-    (legacy / "pending.scope").write_text("pending", encoding="ascii")
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = WorkflowService(database)
-    with pytest.raises(WorkflowError, match="operator recovery"):
-        LegacySqliteCoderRuntime({}, service)
-    assert (legacy / "pending.scope").read_text() == "pending"
-
-
 def test_runtime_without_state_override_uses_stable_default(monkeypatch, tmp_path):
     monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
-    runtime = LegacySqliteCoderRuntime({}, WorkflowService(tmp_path / "legacy.db"))
+    runtime = CoderRuntime(
+        {},
+        Mock(spec=RegisterTaskHandoffUseCase),
+        dispatch=Mock(),
+        ci=Mock(),
+        leadership_guard=lambda: True,
+    )
     assert (
         runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
     )
-
-
-def test_dsn_override_cannot_hide_repository_legacy_fences(monkeypatch, tmp_path):
-    database = tmp_path / "state.sqlite"
-    legacy = tmp_path / "state.sqlite.sandbox-fences"
-    legacy.mkdir()
-    record = legacy / "pending.scope"
-    record.write_text("pending", encoding="ascii")
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = WorkflowService(database)
-    dsn = "postgresql://user:secret-password@localhost/database"
-    with pytest.raises(WorkflowError, match="operator recovery") as error:
-        LegacySqliteCoderRuntime({"database": dsn}, service)
-    assert "secret-password" not in str(error.value)
-    assert record.read_text(encoding="ascii") == "pending"
-
-
-def test_runtime_rejects_dangling_legacy_fence_link(monkeypatch, tmp_path):
-    database = tmp_path / "state.sqlite"
-    legacy = tmp_path / "state.sqlite.sandbox-fences"
-    try:
-        legacy.symlink_to(tmp_path / "missing-legacy-fences", target_is_directory=True)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink creation unavailable")
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "new-state"))
-    service = WorkflowService(database)
-    with pytest.raises(WorkflowError, match="operator recovery"):
-        LegacySqliteCoderRuntime({}, service)
-    assert legacy.is_symlink()

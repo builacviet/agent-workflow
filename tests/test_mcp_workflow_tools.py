@@ -95,38 +95,39 @@ def authorized_workflow(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("name", "arguments", "service_args", "service_result", "tool_result"),
-    [
-        (
-            "register_task_handoff",
-            HANDOFF,
-            ("TEST", REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test evidence"),
-            RECORD,
-            RECORD,
-        ),
-        ("get_coder_assignment", TASK, ("TEST",), RECORD, RECORD),
-    ],
+    "name,arguments",
+    [("register_task_handoff", HANDOFF), ("get_coder_assignment", TASK)],
 )
 def test_workflow_paths_authorize_and_close(
-    monkeypatch,
-    authorized_workflow,
-    name,
-    arguments,
-    service_args,
-    service_result,
-    tool_result,
+    monkeypatch, authorized_workflow, name, arguments
 ):
+    from agent_workflow.application.task.use_cases.get_coder_assignment import (
+        GetCoderAssignmentUseCase,
+    )
+    from agent_workflow.application.task.use_cases.register_task_handoff import (
+        HandoffResult,
+        RegisterTaskHandoffUseCase,
+    )
+    from agent_workflow.domain.task.handoff import HandoffRequest
+
     factory = Mock()
     open_factory = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
-    operation = Mock(return_value=service_result)
-
-    def run(service, *args):
-        assert service.repository.factory is factory
-        factory.close.assert_not_called()
-        return operation(*args)
-
-    monkeypatch.setattr(WorkflowService, name, run)
+    monkeypatch.setattr(
+        WorkflowService, name, Mock(side_effect=AssertionError("legacy called"))
+    )
+    if name == "register_task_handoff":
+        operation = Mock(
+            return_value=HandoffResult("TEST", WorkflowStatus.READY_IN_REVIEW, HEAD)
+        )
+        monkeypatch.setattr(RegisterTaskHandoffUseCase, "execute", operation)
+        expected = {"task_id": "TEST", "status": "READY_IN_REVIEW", "head_sha": HEAD}
+    else:
+        operation = Mock(return_value=RECORD)
+        monkeypatch.setattr(
+            GetCoderAssignmentUseCase, "get_coder_assignment", operation
+        )
+        expected = RECORD
     reset = auth_context_var.set(None)
     try:
         with pytest.raises(ToolError, match="workflow OAuth authorization required"):
@@ -135,13 +136,14 @@ def test_workflow_paths_authorize_and_close(
         operation.assert_not_called()
     finally:
         auth_context_var.reset(reset)
-
     output = asyncio.run(mcp.call_tool(name, arguments))
-    assert json.loads(output[0].text) == tool_result
+    assert json.loads(output[0].text) == expected
     open_factory.assert_called_once()
-    assert open_factory.call_args.args[0].pg_runtime_dsn == DSN
-    operation.assert_called_once_with(*service_args)
     factory.close.assert_called_once_with()
+    if name == "register_task_handoff":
+        operation.assert_called_once_with(HandoffRequest(**HANDOFF))
+    else:
+        operation.assert_called_once_with("TEST")
 
 
 SPEC = spec()

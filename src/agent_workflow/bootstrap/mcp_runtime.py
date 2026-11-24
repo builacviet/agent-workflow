@@ -24,15 +24,15 @@ def postgres_review_reads_provider():
     return postgres_mcp.postgres_mcp_review_reads(config)
 
 
-def postgres_workflow_provider():
+def postgres_task_operations_provider():
     """Validate invocation settings before loading the PostgreSQL composition."""
     config = AppConfig.from_env()
     if config.pg_runtime_dsn is None:
         raise ValueError("PG_RUNTIME_DSN is required")
 
-    from agent_workflow.composition.postgres_mcp import postgres_mcp_service
-
-    return postgres_mcp_service(config)
+    if postgres_mcp is None:
+        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    return postgres_mcp.postgres_mcp_task_operations(config)
 
 
 def postgres_review_writes_provider():

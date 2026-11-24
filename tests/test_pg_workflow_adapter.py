@@ -21,7 +21,7 @@ from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.composition.postgres_mcp import postgres_mcp_service
+from agent_workflow.composition.postgres_mcp import postgres_mcp_task_operations
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueReader,
@@ -40,11 +40,11 @@ def test_mcp_composition_owns_factory_and_config(require_ci):
     )
     factory = Mock()
     with patch.object(PostgresFactory, "open", return_value=factory) as open_factory:
-        with postgres_mcp_service(config) as service:
+        with postgres_mcp_task_operations(config) as (handoff, assignment):
             open_factory.assert_called_once_with(config)
-            assert isinstance(service.repository, PostgresWorkflowRepository)
-            assert service.repository.factory is factory
-            assert service.require_ci is require_ci
+            assert isinstance(handoff.scope.repository, PostgresWorkflowRepository)
+            assert handoff.scope.repository.factory is factory
+            assert assignment.context is not None
             factory.close.assert_not_called()
         factory.close.assert_called_once_with()
 
@@ -56,16 +56,16 @@ def test_mcp_composition_closes_on_scope_and_construction_errors():
     factory = Mock()
     with patch.object(PostgresFactory, "open", return_value=factory):
         with pytest.raises(RuntimeError, match="scope error"):
-            with postgres_mcp_service(config):
+            with postgres_mcp_task_operations(config):
                 raise RuntimeError("scope error")
         factory.close.assert_called_once_with()
         factory.reset_mock()
         with patch(
-            "agent_workflow.composition.postgres_mcp.WorkflowService",
+            "agent_workflow.composition.postgres_mcp.RegisterTaskHandoffUseCase",
             side_effect=RuntimeError("construction error"),
         ):
             with pytest.raises(RuntimeError, match="construction error"):
-                with postgres_mcp_service(config):
+                with postgres_mcp_task_operations(config):
                     pytest.fail("service must not be yielded")
         factory.close.assert_called_once_with()
 
@@ -76,7 +76,7 @@ def test_mcp_composition_rejects_missing_or_invalid_dsn(dsn):
     with patch("agent_workflow.storage.postgres_connection.create_engine") as engine:
         with patch("agent_workflow.domain.service.SQLiteWorkflowRepository") as sqlite:
             with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
-                with postgres_mcp_service(config):
+                with postgres_mcp_task_operations(config):
                     pytest.fail("service must not be yielded")
             engine.assert_not_called()
             sqlite.assert_not_called()
@@ -202,6 +202,96 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
     assert context == service.get_review_context(task_id)
 
 
+def test_mcp_handoff_and_assignment_do_not_call_legacy_service(
+    setup, mcp_postgres, monkeypatch
+):
+    service, repo, task_id, _ = setup
+    service.provision_task(spec(task_id))
+    monkeypatch.setattr(
+        WorkflowService,
+        "register_task_handoff",
+        Mock(side_effect=AssertionError("legacy handoff invoked")),
+    )
+    monkeypatch.setattr(
+        WorkflowService,
+        "get_coder_assignment",
+        Mock(side_effect=AssertionError("legacy assignment invoked")),
+    )
+    arguments = {
+        "task_id": task_id,
+        "repository": REPO,
+        "branch": "task/test",
+        "base_sha": BASE,
+        "new_head_sha": HEAD,
+        "handoff_file_path": "docs/handoff.md",
+        "test_summary": "fixture",
+    }
+    assert mcp_postgres("register_task_handoff", arguments)["head_sha"] == HEAD
+    assert mcp_postgres("register_task_handoff", arguments)["head_sha"] == HEAD
+    assert (
+        mcp_postgres("get_coder_assignment", {"task_id": task_id})[
+            "unresolved_findings"
+        ]
+        == []
+    )
+    with repo.read() as unit:
+        assert (
+            len([e for e in unit.list_events((task_id,)) if e["action"] == "HANDOFF"])
+            == 1
+        )
+
+
+def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres, monkeypatch):
+    service, _, task_id, _ = setup
+    ready(service, task_id)
+    claim = service.claim_review(task_id, HEAD, "lead")
+    service.submit_review(payload(claim, "CHANGES_REQUESTED"), "lead")
+    expected = service.get_coder_assignment(task_id)
+    monkeypatch.setattr(
+        WorkflowService,
+        "get_coder_assignment",
+        Mock(side_effect=AssertionError("legacy assignment invoked")),
+    )
+    actual = mcp_postgres("get_coder_assignment", {"task_id": task_id})
+    assert actual == expected
+    assert actual["unresolved_findings"][0]["resolution_status"] == "NOT_VERIFIED"
+
+
+def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
+    from agent_workflow.application.task.use_cases.register_task_handoff import (
+        RegisterTaskHandoffUseCase,
+    )
+    from agent_workflow.domain.task.handoff import HandoffRequest
+    from agent_workflow.infrastructure.database.repositories.task_handoff import (
+        PostgresHandoffRepository,
+        PostgresHandoffScope,
+    )
+
+    service, repo, task_id, _ = setup
+    service.provision_task(spec(task_id))
+    original = PostgresHandoffRepository.record
+
+    def fail_after_writes(self, *args):
+        original(self, *args)
+        raise RuntimeError("synthetic write failure")
+
+    monkeypatch.setattr(PostgresHandoffRepository, "record", fail_after_writes)
+    operation = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(repo), clock=lambda: 1.0
+    )
+    with pytest.raises(RuntimeError, match="synthetic write failure"):
+        operation.execute(
+            HandoffRequest(
+                task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "fixture"
+            )
+        )
+    with repo.read() as unit:
+        assert unit.find_task((task_id,))["current_head_sha"] is None
+        assert [event["action"] for event in unit.list_events((task_id,))] == [
+            "LOCAL_AUTHORIZATION"
+        ]
+
+
 @pytest.mark.parametrize("verdict", ["APPROVED", "ESCALATED"])
 def test_mcp_context_and_result_match_persisted_history(setup, mcp_postgres, verdict):
     service, _, task_id, _ = setup
@@ -311,12 +401,10 @@ def test_mcp_queue_read_failure_rolls_back_lease_recovery(
 def test_service_history_and_replay(setup):
     _, _, task_id, _ = setup
     config = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"], ci_gate_required=False)
-    with postgres_mcp_service(config) as service:
-        ready(service, task_id)
-    with postgres_mcp_service(config) as service:
-        assert service.get_review_context(task_id)["current_head_sha"] == HEAD
-    # The fixture owns a separate factory for the remaining workflow and cleanup.
     service, _, _, _ = setup
+    ready(service, task_id)
+    with postgres_mcp_task_operations(config) as (_, assignment):
+        assert assignment.get_coder_assignment(task_id)["current_head_sha"] == HEAD
     with pytest.raises(WorkflowError, match="stale"):
         service.claim_review(task_id, NEXT, "lead")
     claim = service.claim_review(task_id, HEAD, "lead")

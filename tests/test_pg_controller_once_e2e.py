@@ -6,6 +6,7 @@ import runpy
 import sqlite3
 import sys
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -271,11 +272,7 @@ def test_entrypoint_rejects_uncomposed_repository_before_leadership(
         "compose_postgres_controller",
         lambda factory: dependencies if factory is offline_factory else forbidden(),
     )
-    monkeypatch.setattr(
-        deps_wiring,
-        "WorkflowService",
-        lambda **_: SimpleNamespace(repository=object()),
-    )
+    dependencies = replace(dependencies, workflow=object())
 
     with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
         run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
@@ -348,7 +345,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
         return context
 
     monkeypatch.setattr(
-        deps_wiring.WorkflowService, "get_coder_assignment", get_assignment
+        deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )
     opened = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", opened)
@@ -357,12 +354,10 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "compose_postgres_controller",
         lambda borrowed: deps if borrowed is factory else forbidden(),
     )
-    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
-    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
 
     def compose(cfg, service, borrowed, *, leadership_guard):
-        assert borrowed is deps and service.repository is deps.workflow
+        assert borrowed is deps and service.scope.repository is deps.workflow
         assert cfg is config
         leadership_guard()
         events.append("compose_worker")
@@ -537,12 +532,12 @@ def test_pg_once_runs_native_dev_stages(
     monkeypatch.setattr(deps.dispatch, "block", events.block)
     get_assignment = Mock(return_value=assignment)
     monkeypatch.setattr(
-        deps_wiring.WorkflowService, "get_coder_assignment", get_assignment
+        deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )
     monkeypatch.setattr(
-        deps_wiring.WorkflowService,
-        "register_task_handoff",
-        lambda _, *args: events.handoff(*args),
+        deps_wiring.RegisterTaskHandoffUseCase,
+        "execute",
+        lambda _, request: events.handoff(request),
     )
 
     session = Mock()
@@ -554,7 +549,7 @@ def test_pg_once_runs_native_dev_stages(
         if model is Task:
             return SimpleNamespace(
                 repository=REPOSITORY,
-                current_head_sha=events.handoff.call_args.args[4],
+                current_head_sha=events.handoff.call_args.args[0].new_head_sha,
                 status="READY_IN_REVIEW",
             )
         assert model is CITask
@@ -565,8 +560,6 @@ def test_pg_once_runs_native_dev_stages(
     for module in (coder_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")
-    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
-    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(trusted_worker, "ROOT", stage)
     monkeypatch.setattr(trusted_worker, "GitHubApp", forbidden)
     verifier = Mock()
@@ -730,7 +723,15 @@ def test_pg_once_runs_native_dev_stages(
             tested_digest,
             pushed_sha,
         )
-        assert events.handoff.call_args.args[:6] == (
+        request = events.handoff.call_args.args[0]
+        assert (
+            request.task_id,
+            request.repository,
+            request.branch,
+            request.base_sha,
+            request.new_head_sha,
+            request.handoff_file_path,
+        ) == (
             "T",
             REPOSITORY,
             branch,

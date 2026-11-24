@@ -3,10 +3,7 @@ Responsibility: Authorize MCP tool calls, invoke scoped dependencies and map wir
 Dependencies: MCP SDK, Application use cases and MCP security and integration adapters.
 """
 
-import json
-from contextlib import contextmanager
 from dataclasses import asdict
-from urllib.parse import quote
 
 from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.fastmcp import Context
@@ -16,7 +13,6 @@ from pydantic import StrictInt
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
-    GetReviewContextOutput,
 )
 from agent_workflow.application.review.use_cases.get_review_result import (
     GetReviewResultOutput,
@@ -25,8 +21,12 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
     SubmitReviewInput,
 )
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    review_context_response as _review_context_response,
+)
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.mcp.security import (
     TECHLEAD_SCOPE,
@@ -42,48 +42,6 @@ def _review_request(task_id: str) -> GetReviewContextInput:
     if not task_id.strip():
         raise WorkflowError("unknown authorized task")
     return GetReviewContextInput(task_id)
-
-
-def _review_context_response(output: GetReviewContextOutput) -> dict:
-    task = asdict(output.task)
-    # The MCP contract flattens the original task spec, including stored fields
-    # absent from the typed workflow task projection.
-    spec = json.loads(task.pop("spec_json"))
-    task.pop("context_paths")
-    history = []
-    for review in output.previous_reviews:
-        record = asdict(review)
-        record["prior_resolutions"] = dict(review.prior_resolutions)
-        record["findings"] = list(record["findings"])
-        history.append(record)
-
-    root = f"https://github.com/{output.task.repository}"
-    head = output.task.current_head_sha
-    prior = output.previous_reviewed_sha
-    return {
-        **spec,
-        **task,
-        "review_round": output.review_round,
-        "rounds_remaining": output.rounds_remaining,
-        "previous_reviews": history,
-        "previous_reviewed_sha": prior,
-        "previous_verdict": output.previous_verdict,
-        "github_references": {
-            "complete_diff": f"{root}/compare/{output.task.base_sha}...{head}"
-            if head
-            else None,
-            "correction_diff": f"{root}/compare/{prior}...{head}"
-            if prior and head
-            else None,
-            "context_files": {
-                path: f"{root}/blob/{head}/{quote(path, safe='/')}"
-                for path in output.task.context_paths
-            }
-            if head
-            else {},
-        },
-        "events": [asdict(event) for event in output.events],
-    }
 
 
 def _review_result_response(output: GetReviewResultOutput) -> dict:
@@ -104,17 +62,11 @@ def _review_result_response(output: GetReviewResultOutput) -> dict:
 
 def register_tools(
     mcp,
-    service_provider,
+    task_operations_provider,
     review_reads_provider,
     review_writes_provider,
 ):
     """Open a fresh scope for each authorized workflow tool call."""
-
-    @contextmanager
-    def service(ctx):
-        actor = authorize_context(ctx)
-        with service_provider() as engine:
-            yield engine, actor
 
     @mcp.tool()
     def list_review_queue(ctx: Context, requested_effort: str | None = None) -> dict:
@@ -182,22 +134,25 @@ def register_tools(
         ctx: Context,
     ) -> dict:
         """Authenticated mutation: record reported handoff for a locally authorized task; no remote verification."""
-        with service(ctx) as (engine, _):
-            return engine.register_task_handoff(
-                task_id,
-                repository,
-                branch,
-                base_sha,
-                new_head_sha,
-                handoff_file_path,
-                test_summary,
-            )
+        authorize_context(ctx)
+        request = HandoffRequest(
+            task_id,
+            repository,
+            branch,
+            base_sha,
+            new_head_sha,
+            handoff_file_path,
+            test_summary,
+        )
+        with task_operations_provider() as (handoff, _):
+            return asdict(handoff.execute(request))
 
     @mcp.tool()
     def get_coder_assignment(task_id: str, ctx: Context) -> dict:
         """Authenticated read only: task and unresolved findings; never dispatch Codex."""
-        with service(ctx) as (engine, _):
-            return engine.get_coder_assignment(task_id)
+        authorize_context(ctx)
+        with task_operations_provider() as (_, assignment):
+            return assignment.get_coder_assignment(task_id)
 
     if mcp.settings.auth is None:
         return

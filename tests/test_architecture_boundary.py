@@ -2,23 +2,22 @@
 
 import inspect
 import json
-import socket
 import subprocess
-from contextlib import contextmanager
 from unittest.mock import Mock
 
 import pytest
-from test_agent_workflow import payload, spec
+from test_agent_workflow import spec
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 from agent_workflow.application.dispatch import run_dispatch_pass
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox
-from agent_workflow.runners.coder_runtime import CoderRuntime, LegacySqliteCoderRuntime
+from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 
 @pytest.fixture(autouse=True)
@@ -26,98 +25,107 @@ def isolated_sandbox_state(tmp_path, monkeypatch):
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
 
 
-def test_wfc_full_lifecycle_needs_no_network_or_subprocess(tmp_path, monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("WFC attempted external access")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(subprocess, "Popen", denied)
-    service = WorkflowService(tmp_path / "state.db", require_ci=False)
-    service.provision_task(spec())
-    head = "a" * 40
-    service.register_task_handoff(
-        "TEST",
-        spec()["repository"],
-        "task/test",
-        spec()["base_sha"],
-        head,
-        "docs/handoff.md",
-        "worker reported tests passed",
-    )
-    claim = service.claim_review("TEST", head, "lead")
-    service.submit_review(payload(claim, "APPROVED"), "lead")
-    result = service.get_review_result("TEST")
-    assert result["approval_current"] is None
-    assert result["remote_verification"] == "not_performed_by_wfc"
-    assert service.submit_review(payload(claim, "APPROVED"), "lead")["duplicate"]
-    assert service.get_coder_assignment("TEST")["completed_review_rounds"] == 1
-
-
-def test_service_has_no_sql_or_external_adapter():
-    import agent_workflow.domain.service as service
-
-    text = inspect.getsource(service)
-    assert "sqlite3" not in text and ".execute(" not in text
-    assert (
-        "verify_remote" not in text and "agent_workflow.workers.trusted_git" not in text
-    )
+def test_dispatch_and_runtime_do_not_own_worker_publication():
     assert "GitHubApp" not in inspect.getsource(run_dispatch_pass)
     assert not hasattr(CoderRuntime, "publish")
 
 
-class MemoryUnit:
+class BoundaryState:
     def __init__(self):
         self.tasks = {}
-        self.events = []
 
-    def find_authorization(self, values):
-        task = self.tasks.get(values[0])
-        return {"metadata": task["metadata"]} if task else None
+    def provision_task(self, value):
+        self.tasks[value["task_id"]] = value | {
+            "status": "AWAITING_HANDOFF",
+            "current_head_sha": None,
+            "completed_review_rounds": 0,
+        }
 
-    def insert_task(self, values):
-        keys = [
-            "task_id",
-            "metadata",
-            "repository",
-            "branch",
-            "base_sha",
-            "requested_effort",
-            "require_verified_effort",
-            "status",
-            "created_at",
-            "updated_at",
-        ]
-        self.tasks[values[0]] = dict(zip(keys, values))
+    def get_coder_assignment(self, task_id):
+        return dict(self.tasks[task_id])
 
-    def insert_event(self, values):
-        self.events.append(values)
-
-    def set_status(self, values):
-        status, timestamp, task_id = values
-        self.tasks[task_id].update(status=status, updated_at=timestamp)
+    def get_review_context(self, task_id):
+        return dict(self.tasks[task_id])
 
 
-class MemoryRepository:
-    def __init__(self):
-        self.unit = MemoryUnit()
+class BoundaryLedger:
+    def __init__(self, state):
+        self.state = state
+        self.slot = None
+        self.pre_launch = False
+        self.done = set()
+        self.finished_dispatch = None
 
-    @contextmanager
-    def transaction(self):
-        yield self.unit
+    def claim(self, task_ids, timeout, *, track_pre_launch=False):
+        import time
+        import uuid
 
-    @contextmanager
-    def read(self):
-        yield self.unit
+        if self.slot is not None:
+            return None
+        eligible = sorted(
+            task
+            for task in task_ids
+            if task not in self.done and task in self.state.tasks
+        )
+        if not eligible:
+            return None
+        task_id = eligible[0]
+        task = self.state.tasks[task_id]
+        claim = {
+            "task_id": task_id,
+            "dispatch_id": uuid.uuid4().hex,
+            "input_sha": task["current_head_sha"] or task["base_sha"],
+            "round_number": task["completed_review_rounds"],
+            "deadline": time.time() + timeout,
+        }
+        self.slot = (claim["dispatch_id"], "ACTIVE", task_id)
+        self.pre_launch = track_pre_launch
+        return claim
+
+    def is_pre_launch(self, dispatch_id):
+        return bool(self.slot and self.slot[0] == dispatch_id and self.pre_launch)
+
+    def retire_pre_launch(self, dispatch_id):
+        assert self.slot and self.slot[0] == dispatch_id
+        self.pre_launch = False
+
+    def record_runtime_evidence(self, *args):
+        assert self.slot and self.slot[0] == args[0]
+
+    def block(self, dispatch_id):
+        assert self.slot and self.slot[0] == dispatch_id
+        self.slot = (dispatch_id, "BLOCKED", self.slot[2])
+
+    def finish(self, dispatch_id, sha):
+        assert self.slot and self.slot[0] == dispatch_id
+        self.done.add(self.slot[2])
+        self.finished_dispatch = dispatch_id
+        self.slot = None
+
+    def acknowledge(self, dispatch_id):
+        assert self.slot and self.slot[0] == dispatch_id and self.slot[1] == "BLOCKED"
+        self.done.add(self.slot[2])
+        self.slot = None
+        self.pre_launch = False
 
 
-def test_service_accepts_repository_interface_without_sqlite(tmp_path):
-    repo = MemoryRepository()
-    service = WorkflowService(repository=repo, require_ci=False)
-    service.provision_task(spec())
-    service.provision_task(spec())
-    assert len(repo.unit.tasks) == 1 and len(repo.unit.events) == 1
-    with pytest.raises(WorkflowError):
-        service.provision_task(spec() | {"title": "conflicting authorization"})
+def injected_runtime(config, state, ledger, *, plugins=()):
+    handoff = Mock(spec=RegisterTaskHandoffUseCase)
+
+    def register(request):
+        state.tasks[request.task_id].update(
+            status="READY_IN_REVIEW", current_head_sha=request.new_head_sha
+        )
+
+    handoff.execute.side_effect = register
+    return CoderRuntime(
+        config,
+        handoff,
+        dispatch=ledger,
+        ci=Mock(),
+        leadership_guard=lambda: True,
+        plugins=plugins,
+    )
 
 
 @pytest.mark.parametrize(
@@ -137,7 +145,7 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
 def test_dispatch_pass_only_launches_phases_and_receives_result(
     tmp_path, monkeypatch, failure, runtime_name
 ):
-    service = WorkflowService(tmp_path / "state.db", require_ci=False)
+    service = BoundaryState()
     service.provision_task(spec())
     task = {
         "worktree": str(tmp_path),
@@ -150,7 +158,8 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
     effort = (
         "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
     )
-    runtime = LegacySqliteCoderRuntime(
+    ledger = BoundaryLedger(service)
+    runtime = injected_runtime(
         {
             "tasks": {"TEST": task},
             "app_id": 1,
@@ -162,6 +171,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
             "runtime_image": "synthetic-image",
         },
         service,
+        ledger,
         plugins=(FakePlugin(),),
     )
     if runtime_name == "codex":
@@ -218,7 +228,6 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
 
     monkeypatch.setattr(runtime, "docker", docker)
     monkeypatch.setattr(runtime.sandbox, "run", sandbox_run)
-    ledger = DispatchLedger(service)
     dispatch = _dispatch_pass(service, ledger, runtime.execute, runtime.release_engine)
     if failure and failure.startswith("unsupported"):
         message = (
@@ -238,7 +247,8 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
         assert ledger.claim({"TEST"}, 60) is None
     else:
         assert dispatch.execute({"TEST"})
-        assert not list((tmp_path / "state.db.sandbox-fences").glob("*.engine"))
+        assert ledger.finished_dispatch is not None
+        assert not runtime.sandbox.has_launch_records(ledger.finished_dispatch)
         assert service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
         assert [x for x in calls if x != "stop"] == [
             "prepare",
@@ -253,20 +263,16 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
 @pytest.fixture
 def recovery_dispatch(tmp_path):
     database = tmp_path / "state.db"
-    service = WorkflowService(database, require_ci=False)
+    service = BoundaryState()
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     config = {"database": str(database), "tasks": {"TEST": {}}, "model": "gpt-6-luna"}
-    return config, service, DispatchLedger(service)
+    return config, service, BoundaryLedger(service)
 
 
-def _blocked_dispatch(service):
-    with service.repository.raw_connection() as db:
-        row = db.execute(
-            "SELECT dispatch_id, status FROM coder_dispatches WHERE slot=1"
-        ).fetchone()
-    assert row["status"] == "BLOCKED"
-    return row["dispatch_id"]
+def _blocked_dispatch(ledger):
+    assert ledger.slot is not None and ledger.slot[1] == "BLOCKED"
+    return ledger.slot[0]
 
 
 def _dispatch_pass(service, ledger, execute, on_finished=None):
@@ -307,12 +313,12 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
 
         monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
 
-    runtime = LegacySqliteCoderRuntime(config, service)
+    runtime = injected_runtime(config, service, ledger)
     with pytest.raises(
         WorkflowError, match="unsupported runtime|synthetic Docker outage"
     ):
         _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
-    dispatch_id = _blocked_dispatch(service)
+    dispatch_id = _blocked_dispatch(ledger)
     assert ledger.is_pre_launch(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
     runtime.reconcile(dispatch_id)
@@ -327,7 +333,7 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     recovery_dispatch, monkeypatch, pin_written
 ):
     config, service, ledger = recovery_dispatch
-    runtime = LegacySqliteCoderRuntime(config, service)
+    runtime = injected_runtime(config, service, ledger)
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
     monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
     original = sandbox.SandboxManager.record_engine
@@ -346,7 +352,7 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
     with pytest.raises((OSError, WorkflowError), match="synthetic"):
         _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
-    dispatch_id = _blocked_dispatch(service)
+    dispatch_id = _blocked_dispatch(ledger)
     if pin_written:
         runtime.sandbox._engine_path(dispatch_id).unlink()
     assert not ledger.is_pre_launch(dispatch_id)
@@ -357,7 +363,7 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
 
 def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
     config, service, ledger = recovery_dispatch
-    runtime = LegacySqliteCoderRuntime(config, service)
+    runtime = injected_runtime(config, service, ledger)
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim["dispatch_id"]
     ledger.block(dispatch_id)
@@ -373,7 +379,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     config, service, ledger = recovery_dispatch
     dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
     ledger.block(dispatch_id)
-    runtime = LegacySqliteCoderRuntime(config, service)
+    runtime = injected_runtime(config, service, ledger)
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
     path.parent.mkdir()
     path.touch()
@@ -390,11 +396,11 @@ def test_global_slot_release_requires_affirmative_create_settlement(
 ):
     database = tmp_path / "state.db"
     config = {"database": str(database)}
-    service = WorkflowService(database, require_ci=False)
+    service = BoundaryState()
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
-    ledger = DispatchLedger(service)
-    runtime = LegacySqliteCoderRuntime(config, service)
+    ledger = BoundaryLedger(service)
+    runtime = injected_runtime(config, service, ledger)
     dispatch_id = None
     name = None
     visible = False
@@ -642,8 +648,9 @@ def test_controller_compose_parses_without_starting_services():
 
 
 def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
-    service = WorkflowService(tmp_path / "test.db", require_ci=False)
-    runtime = LegacySqliteCoderRuntime({"image": "fixture"}, service)
+    service = BoundaryState()
+    ledger = BoundaryLedger(service)
+    runtime = injected_runtime({"image": "fixture"}, service, ledger)
     dispatch = "a" * 32
     host = "unix:///fixture.sock"
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)

@@ -1,4 +1,7 @@
-"""Trusted Docker phase orchestration and worker handoff validation."""
+"""Layer: Interfaces/Worker
+Responsibility: Orchestrate trusted Docker phases and validate worker handoffs.
+Dependencies: Application handoff operation and runtime adapters.
+"""
 
 from __future__ import annotations
 
@@ -14,8 +17,11 @@ from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.integrations.github import (
     REPOSITORY,
     WorkflowError,
@@ -48,7 +54,6 @@ from agent_workflow.runners.sandbox import (
     _selected_host,
     docker_security_args,
 )
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -301,28 +306,13 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
             raise
 
 
-class _SqliteCiTracking:
-    """Lazy legacy CI adapter: opening a runtime does not open the CI database."""
-
-    def __init__(self, service: WorkflowService) -> None:
-        self.service = service
-
-    def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
-        from agent_workflow.storage.ci_state import ControllerCiState
-
-        ControllerCiState(self.service.db_path).track(task_id, pr_number, head_sha)
-
-    def execute(self, task_id: str, pr_number: int, head_sha: str) -> None:
-        self.track(task_id, pr_number, head_sha)
-
-
 class CoderRuntime:
     """Trusted Worker host with explicitly injected execution state."""
 
     def __init__(
         self,
         config: dict,
-        service: WorkflowService,
+        handoff: RegisterTaskHandoffUseCase,
         *,
         dispatch: DispatchEvidence,
         ci: CiTracking,
@@ -330,14 +320,10 @@ class CoderRuntime:
         plugins: Iterable[AgentRuntimePlugin] = (),
     ) -> None:
         if (
-            not isinstance(service, WorkflowService)
-            or not callable(getattr(service.repository, "transaction", None))
-            or callable(getattr(service.repository, "raw_transaction", None))
-            or isinstance(dispatch, DispatchLedger)
+            not isinstance(handoff, RegisterTaskHandoffUseCase)
             or not callable(getattr(dispatch, "is_pre_launch", None))
             or not callable(getattr(dispatch, "retire_pre_launch", None))
             or not callable(getattr(dispatch, "record_runtime_evidence", None))
-            or isinstance(ci, _SqliteCiTracking)
             or not callable(getattr(ci, "execute", None))
             or not callable(leadership_guard)
         ):
@@ -347,7 +333,7 @@ class CoderRuntime:
             )
         self._initialize(
             config,
-            service,
+            handoff,
             plugins,
             AppConfig.from_env(),
             dispatch,
@@ -358,14 +344,14 @@ class CoderRuntime:
     def _initialize(
         self,
         config: dict,
-        service: WorkflowService,
+        handoff: RegisterTaskHandoffUseCase,
         plugins: Iterable[AgentRuntimePlugin],
         app_config: AppConfig,
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool] | None,
     ) -> None:
-        self.config, self.service = config, service
+        self.config, self.handoff = config, handoff
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
         self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
         self.agent_runtime = AgentRuntime(
@@ -375,32 +361,6 @@ class CoderRuntime:
             leadership_guard,
             require_ci_tracking=leadership_guard is not None,
         )
-
-    @staticmethod
-    def _check_legacy_fences(config: dict, service: WorkflowService) -> None:
-        databases = (
-            config.get("database"),
-            getattr(getattr(service, "repository", None), "db_path", None),
-        )
-        # Check every known SQLite path; never interpret a DSN as a path.
-        for database in databases:
-            if database is None or "://" in str(database):
-                continue
-            try:
-                legacy = Path(str(Path(database).resolve()) + ".sandbox-fences")
-                # Even a dangling legacy link/junction is unresolved evidence.
-                redirected = legacy.is_symlink() or (
-                    getattr(legacy, "is_junction", lambda: False)()
-                )
-                legacy_pending = redirected or (
-                    legacy.exists() and any(legacy.iterdir())
-                )
-            except (OSError, ValueError):
-                raise WorkflowError("unable to inspect legacy sandbox fences") from None
-            if legacy_pending:
-                raise WorkflowError(
-                    "legacy sandbox fences require operator recovery before startup"
-                )
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
         runtime = self.config.get("runtime", "codex")
@@ -522,11 +482,7 @@ class CoderRuntime:
             # The standalone probe/test entry point also needs a durable pin.
             self.agent_runtime.require_leadership()
             existing = self.sandbox._engine_path(dispatch_id).exists()
-            if (
-                existing
-                and self.service is not None
-                and self.agent_runtime.dispatch.is_pre_launch(dispatch_id)
-            ):
+            if existing and self.agent_runtime.dispatch.is_pre_launch(dispatch_id):
                 raise WorkflowError("pre-launch evidence conflicts with Docker records")
             host = (
                 self.sandbox.recovery_engine(dispatch_id)[0]
@@ -635,9 +591,8 @@ class CoderRuntime:
             return result
 
     def _record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
-        if self.service is not None:
-            self.agent_runtime.require_leadership()
-            self.agent_runtime.dispatch.retire_pre_launch(dispatch_id)
+        self.agent_runtime.require_leadership()
+        self.agent_runtime.dispatch.retire_pre_launch(dispatch_id)
         self.agent_runtime.require_leadership()
         self.sandbox.record_engine(dispatch_id, host, daemon_id)
 
@@ -740,41 +695,14 @@ class CoderRuntime:
         test_summary: str,
     ) -> None:
         task = self.config["tasks"][context["task_id"]]
-        self.service.register_task_handoff(
-            context["task_id"],
-            context["repository"],
-            context["branch"],
-            context["base_sha"],
-            result["head_sha"],
-            task["handoff_path"],
-            test_summary + "; worker PR: " + result["pr_url"],
-        )
-
-
-class LegacySqliteCoderRuntime(CoderRuntime):
-    """Explicit compatibility entry point for the legacy SQLite Controller."""
-
-    def __init__(
-        self,
-        config: dict,
-        service: WorkflowService,
-        *,
-        plugins: Iterable[AgentRuntimePlugin] = (),
-    ) -> None:
-        app_config = AppConfig.from_env()
-        if (
-            app_config.pg_runtime_dsn is not None
-            or not isinstance(service, WorkflowService)
-            or not callable(getattr(service.repository, "raw_transaction", None))
-        ):
-            raise TypeError("Legacy SQLite Worker requires a SQLite workflow service")
-        self._check_legacy_fences(config, service)
-        self._initialize(
-            config,
-            service,
-            plugins,
-            app_config,
-            DispatchLedger(service),
-            _SqliteCiTracking(service),
-            None,
+        self.handoff.execute(
+            HandoffRequest(
+                context["task_id"],
+                context["repository"],
+                context["branch"],
+                context["base_sha"],
+                result["head_sha"],
+                task["handoff_path"],
+                test_summary + "; worker PR: " + result["pr_url"],
+            )
         )

@@ -6,11 +6,14 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from agent_workflow.domain.service import WorkflowService
-from agent_workflow.runners.coder_runtime import LegacySqliteCoderRuntime
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
+from agent_workflow.runners.coder_runtime import CoderRuntime
 
 
 def test_worker_entrypoint_uses_trusted_git_module():
@@ -49,7 +52,13 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
-    runtime = LegacySqliteCoderRuntime(config, WorkflowService(config["database"]))
+    runtime = CoderRuntime(
+        config,
+        Mock(spec=RegisterTaskHandoffUseCase),
+        dispatch=Mock(),
+        ci=Mock(),
+        leadership_guard=lambda: True,
+    )
     claim = {
         "dispatch_id": "a" * 32,
         "input_sha": "b" * 40,

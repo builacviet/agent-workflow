@@ -11,13 +11,18 @@ import pytest
 from sqlalchemy import create_engine
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.composition import worker_deps
 from agent_workflow.composition.postgres_controller import (
     ControllerCiSessionProvider,
     compose_postgres_controller,
 )
 from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffScope,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -39,7 +44,9 @@ def wiring(monkeypatch, tmp_path):
     monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda self: None)
     factory = PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
     dependencies = compose_postgres_controller(factory)
-    service = WorkflowService(repository=dependencies.workflow)
+    service = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(dependencies.workflow), clock=lambda: 0
+    )
     return factory, dependencies, service
 
 
@@ -50,8 +57,6 @@ def forbidden(*args, **kwargs):
 @pytest.fixture
 def forbid_worker_effects(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", forbidden)
-    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
-    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
     monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
     monkeypatch.setattr(coder_runtime, "docker_command", forbidden)
     monkeypatch.setattr(coder_runtime, "run_container", forbidden)
@@ -62,9 +67,6 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
 ):
     factory, dependencies, service = wiring
     monkeypatch.setattr(factory, "get_scoped_session", forbidden)
-    monkeypatch.setattr(coder_runtime.DispatchLedger, "__init__", forbidden)
-    monkeypatch.setattr(coder_runtime._SqliteCiTracking, "__init__", forbidden)
-    monkeypatch.setattr(coder_runtime.CoderRuntime, "_check_legacy_fences", forbidden)
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
     monkeypatch.setattr(factory, "connect_session", forbidden)
@@ -78,7 +80,7 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
         {"database": "legacy.db"}, service, dependencies, leadership_guard=forbidden
     )
 
-    assert runtime.service.repository is dependencies.workflow
+    assert runtime.handoff.scope.repository is dependencies.workflow
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
@@ -94,7 +96,9 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
     deferred = partial(open_scope, factory)
     monkeypatch.setattr(factory, "get_scoped_session", deferred)
     dependencies = compose_postgres_controller(factory)
-    service = WorkflowService(repository=dependencies.workflow)
+    service = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(dependencies.workflow), clock=lambda: 0
+    )
 
     runtime = compose_postgres_worker(
         {}, service, dependencies, leadership_guard=forbidden
@@ -201,7 +205,9 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
 def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
     factory, dependencies, service = wiring
     other = compose_postgres_controller(factory)
-    unrelated_service = WorkflowService(repository=other.workflow)
+    unrelated_service = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(other.workflow), clock=lambda: 0
+    )
     with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
         compose_postgres_worker(
             {}, unrelated_service, dependencies, leadership_guard=forbidden
@@ -274,39 +280,6 @@ def test_missing_or_invalid_injection_cannot_fall_back(
     assert not database.exists()
 
 
-def test_sqlite_state_cannot_be_injected_into_worker(wiring, monkeypatch, tmp_path):
-    _, deps, service = wiring
-    legacy_service = WorkflowService(tmp_path / "legacy.sqlite")
-    ledger = coder_runtime.DispatchLedger(legacy_service)
-    ci = coder_runtime._SqliteCiTracking(legacy_service)
-    monkeypatch.setattr(sqlite3, "connect", forbidden)
-    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
-    monkeypatch.setattr(coder_runtime.AppConfig, "from_env", forbidden)
-    for workflow, dispatch, ci_tracking in (
-        (legacy_service, deps.dispatch, deps.ci_tracking),
-        (service, ledger, deps.ci_tracking),
-        (service, deps.dispatch, ci),
-    ):
-        with pytest.raises(TypeError, match="Worker requires injected workflow"):
-            coder_runtime.CoderRuntime(
-                {},
-                workflow,
-                dispatch=dispatch,
-                ci=ci_tracking,
-                leadership_guard=forbidden,
-            )
-
-
-def test_explicit_legacy_entry_rejects_pg_service_with_no_dsn(
-    wiring, forbid_worker_effects
-):
-    _, _, service = wiring
-    with pytest.raises(TypeError, match="SQLite workflow service"):
-        coder_runtime.LegacySqliteCoderRuntime(
-            {"database": "deceptive.sqlite"}, service
-        )
-
-
 @pytest.mark.parametrize("guard_result", [None, False])
 def test_callback_cannot_authorize_without_the_borrowed_lock(
     wiring, monkeypatch, guard_result
@@ -368,7 +341,8 @@ def test_loss_during_engine_admission_leaves_slot_active(
     )
     monkeypatch.setattr(dependencies.dispatch, "block", forbidden)
     monkeypatch.setattr(dependencies.dispatch, "finish", forbidden)
-    monkeypatch.setattr(service, "get_coder_assignment", lambda task_id: context)
+    assignment = Mock()
+    assignment.get_coder_assignment.return_value = context
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
     monkeypatch.setattr(
         coder_runtime, "_require_engine", boundary("engine_probe", "daemon")
@@ -387,7 +361,7 @@ def test_loss_during_engine_admission_leaves_slot_active(
         RunDispatchPassUseCase(
             dependencies.leadership,
             dependencies.dispatch,
-            service,
+            assignment,
             execute,
         ).execute({"T"})
     dependencies.dispatch.claim.assert_called_once_with(
