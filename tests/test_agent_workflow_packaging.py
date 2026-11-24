@@ -48,7 +48,6 @@ def test_installed_default_preserves_legacy_state_path(monkeypatch, tmp_path):
     [
         ("contracts", "domain"),
         ("service", "domain"),
-        ("dispatch_repository", "storage"),
         ("repository", "storage"),
         ("coder_runtime", "runners"),
         ("github", "integrations"),

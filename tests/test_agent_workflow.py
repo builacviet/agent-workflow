@@ -407,7 +407,7 @@ def test_github_verifier_fail_closed_and_escapes_branch(monkeypatch):
         verify(REPO, "task/test", BASE, HEAD)
 
 
-def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
+def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
     """Real local HTTP/MCP handshake; external GitHub remains mocked."""
     import asyncio
     import socket
@@ -422,35 +422,6 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
 
     from agent_workflow.mcp.server import mcp as server_mcp
 
-    engine, _, _ = env
-    ready(engine)
-    # Production MCP composition now requires trusted exact-HEAD CI; create
-    # synthetic local evidence instead of disabling the gate for this test.
-    from agent_workflow.integrations.ci_gate import CiEvidence
-    from agent_workflow.storage.ci_state import ControllerCiState
-
-    ci = ControllerCiState(engine.db_path)
-    ci.track("TEST", 21, HEAD)
-    ci.record(
-        CiEvidence(
-            "TEST",
-            REPO,
-            17,
-            21,
-            HEAD,
-            HEAD,
-            HEAD,
-            "Python tests",
-            "github-actions",
-            "SUCCESS",
-            "REQUIRED_CHECK_PASSED",
-            71,
-            72,
-            1,
-            "2026-11-11T00:00:00Z",
-            "2026-11-11T00:01:00Z",
-        )
-    )
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
     monkeypatch.setenv("WFC_REVIEWER_ID", "http-test-reviewer")
@@ -463,29 +434,32 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
         lambda config: pytest.fail("unauthorized task request opened PostgreSQL"),
     )
 
-    # Exercise the actual write use cases against the existing disposable fixture.
-    from uuid import uuid4
+    # Transport contract only: real CI decisions and persistence are covered
+    # by the current review use-case and PostgreSQL tests.
+    from unittest.mock import Mock
 
-    from agent_workflow.application.review.use_cases.claim_review import (
-        ClaimReviewUseCase,
+    from agent_workflow.application.review.use_cases.write_contracts import (
+        ClaimReviewInput,
+        ClaimReviewOutput,
+        SubmitReviewInput,
+        SubmitReviewOutput,
     )
-    from agent_workflow.application.review.use_cases.submit_review import (
-        SubmitReviewUseCase,
-    )
-    from agent_workflow.infrastructure.database.repositories.review_writes import (
-        PostgresReviewWriteScope,
-    )
+    from agent_workflow.domain.contracts import Submission
 
-    scope = PostgresReviewWriteScope(engine.repository)
-    options = {"clock": engine.clock, "token": lambda: uuid4().hex, "require_ci": True}
+    claim_operation = Mock()
+    claim_operation.execute.return_value = ClaimReviewOutput(
+        "token", "TEST", HEAD, 1, 1000.0
+    )
+    submit_operation = Mock()
+    submit_operation.execute.return_value = SubmitReviewOutput(
+        "TEST", "APPROVED", HEAD, review_id="review", review_round=1
+    )
+    provider = Mock(
+        side_effect=lambda config: nullcontext((claim_operation, submit_operation))
+    )
     monkeypatch.setattr(
         "agent_workflow.composition.postgres_mcp.postgres_mcp_review_writes",
-        lambda config: nullcontext(
-            (
-                ClaimReviewUseCase(scope, **options),
-                SubmitReviewUseCase(scope, **options),
-            )
-        ),
+        provider,
     )
 
     def list_queue(requested_effort):
@@ -551,9 +525,9 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
                     for name, args in mutation_args.items():
                         denied = await session.call_tool(name, args)
                         assert denied.isError
-                    assert (
-                        engine.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
-                    )
+                    provider.assert_not_called()
+                    claim_operation.execute.assert_not_called()
+                    submit_operation.execute.assert_not_called()
             async with (
                 httpx.AsyncClient(
                     headers={"Authorization": "Bearer " + "t" * 40}
@@ -594,7 +568,23 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
                         "submit_review", {"submission": data}
                     )
                     assert not submitted.isError
-                    assert engine.get_review_result("TEST")["status"] == "APPROVED"
+                    assert __import__("json").loads(submitted.content[0].text) == {
+                        "task_id": "TEST",
+                        "review_id": "review",
+                        "verdict": "APPROVED",
+                        "review_round": 1,
+                        "reviewed_head_sha": HEAD,
+                        "actual_effort": None,
+                    }
+                    claim_operation.execute.assert_called_once_with(
+                        ClaimReviewInput("TEST", HEAD, "http-test-reviewer")
+                    )
+                    submit_operation.execute.assert_called_once_with(
+                        SubmitReviewInput(
+                            Submission.model_validate(data), "http-test-reviewer"
+                        )
+                    )
+                    assert provider.call_count == 2
 
         asyncio.run(exercise())
     finally:

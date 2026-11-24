@@ -11,7 +11,8 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from agent_workflow.budget import check_deadline, operation_timeout
-from agent_workflow.storage.dispatch_repository import (
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
     canonical_repository,
     validate_sha,
@@ -22,7 +23,6 @@ from agent_workflow.storage.postgres_models import (
     AgentExecutionEvidence,
     Task,
 )
-from agent_workflow.storage.repository import WorkflowError
 
 _PRE_LAUNCH = "PRE_LAUNCH"
 _BLOCKED = "Operator reconciliation required; do not retry automatically"
@@ -49,7 +49,7 @@ class PostgresDispatchLedger:
         clock: Callable = time.time,
     ):
         if (role, phase) != ("dev", "code"):
-            raise WorkflowError("unsupported dispatch role or phase")
+            raise BusinessRuleError("unsupported dispatch role or phase")
         self.factory, self.role, self.phase, self.clock = factory, role, phase, clock
 
     @staticmethod
@@ -88,7 +88,7 @@ class PostgresDispatchLedger:
         self, task_ids: set[str], timeout: int, *, track_pre_launch: bool = False
     ) -> dict | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:
-            raise WorkflowError("runtime timeout must be 60..3600 seconds")
+            raise BusinessRuleError("runtime timeout must be 60..3600 seconds")
         with self._transaction() as session:
             # Serialize the empty-slot check across independent host connections.
             session.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
@@ -165,7 +165,9 @@ class PostgresDispatchLedger:
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1 and row.detail == _PRE_LAUNCH:
                 if row.status != "ACTIVE":
-                    raise WorkflowError("could not retire dispatch pre-launch evidence")
+                    raise BusinessRuleError(
+                        "could not retire dispatch pre-launch evidence"
+                    )
                 row.detail = ""
                 self._timeout(session)
                 session.flush()
@@ -196,7 +198,7 @@ class PostgresDispatchLedger:
             or telemetry != "UNVERIFIED"
             or not re.fullmatch(r"[a-f0-9]{64}", tested_digest)
         ):
-            raise WorkflowError("invalid runtime evidence")
+            raise BusinessRuleError("invalid runtime evidence")
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
             if (
@@ -206,7 +208,9 @@ class PostgresDispatchLedger:
                 or row.task_id != task_id
                 or row.input_sha != input_sha
             ):
-                raise WorkflowError("runtime evidence has no active matching dispatch")
+                raise BusinessRuleError(
+                    "runtime evidence has no active matching dispatch"
+                )
             session.add(
                 AgentExecutionEvidence(
                     dispatch_id=dispatch_id,
@@ -231,11 +235,11 @@ class PostgresDispatchLedger:
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
             if row is None or row.status != "ACTIVE" or row.slot != 1:
-                raise WorkflowError("dispatch lease lost")
+                raise BusinessRuleError("dispatch lease lost")
             self._timeout(session)
             evidence = session.get(AgentExecutionEvidence, dispatch_id)
             if evidence is None:
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "runtime evidence required before dispatch completion"
                 )
             if (
@@ -244,9 +248,9 @@ class PostgresDispatchLedger:
                 evidence.task_id,
                 evidence.input_sha,
             ) != ("dev_runtime", "host", row.task_id, row.input_sha):
-                raise WorkflowError("runtime evidence identity mismatch")
+                raise BusinessRuleError("runtime evidence identity mismatch")
             if evidence.published_head_sha != sha:
-                raise WorkflowError("runtime evidence HEAD mismatch")
+                raise BusinessRuleError("runtime evidence HEAD mismatch")
             row.status, row.slot, row.result_sha = "DONE", None, sha
             self._timeout(session)
             session.flush()
@@ -266,7 +270,7 @@ class PostgresDispatchLedger:
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
             if row is None or row.slot != 1:
-                raise WorkflowError("unknown active dispatch")
+                raise BusinessRuleError("unknown active dispatch")
             row.status, row.slot = "ACKNOWLEDGED", None
             if row.detail == _PRE_LAUNCH:
                 row.detail = ""

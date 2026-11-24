@@ -2,14 +2,12 @@
 
 import base64
 import json
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from agent_workflow.domain.service import WorkflowService, encode
 from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
     REPOSITORY,
@@ -49,32 +47,6 @@ def state(tmp_path):
     return service
 
 
-def test_atomic_global_slot_across_connections(state):
-    provision(state, "OTHER")
-
-    def claim(_):
-        service = WorkflowService(state.db_path, require_ci=False)
-        return DispatchLedger(service).claim({"P31", "OTHER"}, 60)
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(claim, range(8)))
-    assert sum(result is not None for result in results) == 1
-    assert state.get_coder_assignment("P31")["completed_review_rounds"] == 0
-
-
-def test_expiry_restart_and_failure_never_auto_redispatch(state):
-    ledger = DispatchLedger(state, clock=lambda: 100)
-    claim = ledger.claim({"P31"}, 60)
-    restarted = DispatchLedger(state, clock=lambda: 99999)
-    assert restarted.claim({"P31"}, 60) is None
-    restarted.block(claim["dispatch_id"])
-    assert restarted.claim({"P31"}, 60) is None
-    restarted.acknowledge(claim["dispatch_id"])
-    # Releasing a safety slot does not clear the idempotency identity.
-    assert restarted.claim({"P31"}, 60) is None
-    assert state.get_coder_assignment("P31")["status"] == "AWAITING_HANDOFF"
-
-
 def test_pre_rename_task_can_handoff_without_rewriting_repository(state):
     with state.repository.read() as db:
         spec = json.loads(state.task(db, "P31")["metadata"])
@@ -106,46 +78,6 @@ def test_pre_rename_task_can_handoff_without_rewriting_repository(state):
         task = state.task(db, "P31")
     assert task["repository"] == LEGACY_REPOSITORY
     assert task["metadata"] == encode(legacy_spec)
-
-
-@pytest.mark.parametrize(
-    "status,rounds",
-    [
-        ("APPROVED", 1),
-        ("ESCALATED", 2),
-        ("READY_IN_REVIEW", 0),
-        ("IN_REVIEW", 0),
-        ("CHANGES_REQUESTED", 2),
-    ],
-)
-def test_review_and_terminal_states_never_dispatch(state, status, rounds):
-    with state.repository.raw_transaction() as db:
-        db.execute(
-            "UPDATE tasks SET status=?,completed_review_rounds=?",
-            (status, rounds),
-        )
-    assert DispatchLedger(state).claim({"P31"}, 60) is None
-
-
-def test_allowlist_and_round_key(state):
-    ledger = DispatchLedger(state)
-    assert ledger.claim({"UNKNOWN"}, 60) is None
-    first = ledger.claim({"P31"}, 60)
-    ledger.finish(first["dispatch_id"], HEAD)
-    with state.repository.raw_transaction() as db:
-        db.execute(
-            "UPDATE tasks SET status='CHANGES_REQUESTED',completed_review_rounds=1,current_head_sha=?",
-            (HEAD,),
-        )
-    second = ledger.claim({"P31"}, 60)
-    assert second["input_sha"] == HEAD and second["round_number"] == 1
-    assert second["dispatch_id"] != first["dispatch_id"]
-
-
-@pytest.mark.parametrize("value", [True, 0, 59, 3601, 1.5])
-def test_invalid_timeout(state, value):
-    with pytest.raises(WorkflowError):
-        DispatchLedger(state).claim({"P31"}, value)
 
 
 @pytest.mark.parametrize(
@@ -496,7 +428,7 @@ def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
 
 
-def test_cleanup_remains_available_after_deadline(monkeypatch, state, tmp_path):
+def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
     import agent_workflow.budget as budget
     import agent_workflow.runners.coder_runtime as runtime
 
