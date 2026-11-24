@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -13,6 +14,7 @@ import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
+from mcp.server.fastmcp.exceptions import ToolError
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
@@ -21,6 +23,9 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_mcp import postgres_mcp_service
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.infrastructure.database.readers.review_queue_reader import (
+    PostgresReviewQueueReader,
+)
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_connection import PostgresFactory
@@ -138,17 +143,16 @@ def ready(service, task_id):
     )
 
 
-def test_mcp_handoff_persists_across_tool_invocations(setup, monkeypatch):
-    service, _, task_id, _ = setup
-    service.provision_task(spec(task_id))
-    assert service.get_review_context(task_id)["current_head_sha"] is None
+@pytest.fixture
+def mcp_postgres(setup, monkeypatch):
     monkeypatch.setenv("PG_RUNTIME_DSN", os.environ["PG_TEST_DSN"])
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_AUTH0_ALLOWED_SUB", "auth0|pg-test")
     monkeypatch.setenv("WFC_AUTH0_SCOPE", "wfc:workflow")
 
-    async def invoke_tools():
+    @contextmanager
+    def authorize():
         token = AccessToken(
             token="synthetic",
             client_id="test",
@@ -157,24 +161,35 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, monkeypatch):
         )
         reset = auth_context_var.set(AuthenticatedUser(token))
         try:
-            handoff = await mcp.call_tool(
-                "register_task_handoff",
-                {
-                    "task_id": task_id,
-                    "repository": REPO,
-                    "branch": "task/test",
-                    "base_sha": BASE,
-                    "new_head_sha": HEAD,
-                    "handoff_file_path": "docs/handoff.md",
-                    "test_summary": "PostgreSQL MCP fixture",
-                },
-            )
-            context = await mcp.call_tool("get_review_context", {"task_id": task_id})
+            yield
         finally:
             auth_context_var.reset(reset)
-        return json.loads(handoff[0].text), json.loads(context[0].text)
 
-    handoff, context = asyncio.run(invoke_tools())
+    def invoke(name, arguments):
+        with authorize():
+            result = asyncio.run(mcp.call_tool(name, arguments))
+        return json.loads(result[0].text)
+
+    return invoke
+
+
+def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
+    service, _, task_id, _ = setup
+    service.provision_task(spec(task_id))
+    assert service.get_review_context(task_id)["current_head_sha"] is None
+    handoff = mcp_postgres(
+        "register_task_handoff",
+        {
+            "task_id": task_id,
+            "repository": REPO,
+            "branch": "task/test",
+            "base_sha": BASE,
+            "new_head_sha": HEAD,
+            "handoff_file_path": "docs/handoff.md",
+            "test_summary": "PostgreSQL MCP fixture",
+        },
+    )
+    context = mcp_postgres("get_review_context", {"task_id": task_id})
     assert handoff == {
         "task_id": task_id,
         "status": "READY_IN_REVIEW",
@@ -184,6 +199,113 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, monkeypatch):
     assert context["current_head_sha"] == HEAD
     assert context["status"] == "READY_IN_REVIEW"
     assert context["events"][-1]["action"] == "HANDOFF"
+    assert context == service.get_review_context(task_id)
+
+
+@pytest.mark.parametrize("verdict", ["APPROVED", "ESCALATED"])
+def test_mcp_context_and_result_match_persisted_history(setup, mcp_postgres, verdict):
+    service, _, task_id, _ = setup
+    arguments = {"task_id": task_id}
+    service.provision_task(
+        {**spec(task_id), "context_paths": ["docs/review context.md"]}
+    )
+
+    def assert_parity():
+        assert mcp_postgres(
+            "get_review_context", arguments
+        ) == service.get_review_context(task_id)
+        assert mcp_postgres(
+            "get_review_result", arguments
+        ) == service.get_review_result(task_id)
+
+    assert_parity()
+    for sha, outcome, resolutions in (
+        (HEAD, "CHANGES_REQUESTED", {}),
+        (NEXT, verdict, {"F-1": "FIXED" if verdict == "APPROVED" else "NOT_FIXED"}),
+    ):
+        service.register_task_handoff(
+            task_id, REPO, "task/test", BASE, sha, "docs/review context.md", "test"
+        )
+        claim = service.claim_review(task_id, sha, "lead")
+        service.submit_review(
+            payload(
+                claim,
+                outcome,
+                prior_resolutions=resolutions,
+                **({"findings": []} if sha == NEXT else {}),
+            ),
+            "lead",
+        )
+        assert_parity()
+
+    for name in ("get_review_context", "get_review_result"):
+        with pytest.raises(ToolError, match="unknown authorized task"):
+            mcp_postgres(name, {"task_id": f"{task_id}-missing"})
+
+
+def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
+    setup,
+    mcp_postgres,
+):
+    service, repo, task_id, factory = setup
+    ready(service, task_id)
+    claim = service.claim_review(task_id, HEAD, "lead")
+    assert service.get_review_context(task_id)["status"] == "IN_REVIEW"
+
+    # Even an effort filter with no matches recovers stale leases.
+    assert mcp_postgres("list_review_queue", {"requested_effort": "invalid"}) == {
+        "tasks": []
+    }
+    with repo.read() as unit:
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "EXPIRED"
+    assert (
+        service.get_review_context(task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
+    )
+
+    assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
+    with factory.transaction() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO controller_ci_tasks (task_id, pr_number, head_sha, verdict)"
+                " VALUES (:id, 7, :sha, 'SUCCESS')"
+            ),
+            {"id": task_id, "sha": NEXT},
+        )
+    assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
+    with factory.transaction() as conn:
+        conn.execute(
+            text("UPDATE controller_ci_tasks SET head_sha=:sha WHERE task_id=:id"),
+            {"id": task_id, "sha": HEAD},
+        )
+    assert mcp_postgres("list_review_queue", {"requested_effort": "high"}) == {
+        "tasks": []
+    }
+    expected = service.list_review_queue("medium")
+    assert [task["task_id"] for task in expected] == [task_id]
+    assert mcp_postgres("list_review_queue", {"requested_effort": "medium"}) == {
+        "tasks": expected
+    }
+
+
+def test_mcp_queue_read_failure_rolls_back_lease_recovery(
+    setup, mcp_postgres, monkeypatch
+):
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    claim = service.claim_review(task_id, HEAD, "lead")
+
+    def fail_read(self, requested_effort):
+        raise RuntimeError("synthetic queue read failure")
+
+    monkeypatch.setattr(PostgresReviewQueueReader, "read", fail_read)
+    with pytest.raises(ToolError, match="synthetic queue read failure"):
+        mcp_postgres("list_review_queue", {})
+
+    with repo.read() as unit:
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
+    context = service.get_review_context(task_id)
+    assert context["status"] == "IN_REVIEW"
+    assert context["events"][-1]["action"] == "CLAIM"
 
 
 def test_service_history_and_replay(setup):
@@ -350,7 +472,7 @@ def test_history_helpers_reject(setup):
             db.delete_synthetic_history(("tasks", "POC-REVIEW-001"))
 
 
-def test_ci_repair_requires_matching_failure_evidence(setup):
+def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monkeypatch):
     service, repo, task_id, factory = setup
     ready(service, task_id)
     with factory.transaction() as conn:
@@ -377,6 +499,8 @@ def test_ci_repair_requires_matching_failure_evidence(setup):
     with repo.read() as db:
         assert not db.ci_approved((task_id, NEXT))
         assert db.find_head_handoff(task_id, NEXT)["action"] == "CI_REPAIR_HANDOFF"
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with pytest.raises(WorkflowError, match="CI"):
         service.claim_review(task_id, NEXT, "lead")
     with factory.transaction() as conn:
@@ -387,6 +511,9 @@ def test_ci_repair_requires_matching_failure_evidence(setup):
     with repo.read() as db:
         assert db.ci_approved((task_id, NEXT))
         assert not db.ci_approved((task_id, HEAD))
+    assert mcp_postgres("list_review_queue", {}) == {
+        "tasks": service.list_review_queue()
+    }
     assert service.claim_review(task_id, NEXT, "lead")["reviewed_sha"] == NEXT
 
 

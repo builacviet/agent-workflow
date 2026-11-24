@@ -1,5 +1,6 @@
 """Compare both review-context readers on one migrated, disposable database."""
 
+import json
 import os
 import time
 import uuid
@@ -126,6 +127,7 @@ def _assert_parity(
     expected = service.get_review_context(task_id)
     actual = use_case.execute(GetReviewContextInput(task_id))
     task = asdict(actual.task)
+    assert json.loads(task.pop("spec_json")) == task_spec(task_id)
     for key, value in task.items():
         assert value == (
             tuple(expected[key]) if key == "context_paths" else expected[key]
@@ -142,6 +144,7 @@ def _assert_parity(
     actual_reviews = []
     for review in actual.previous_reviews:
         record = asdict(review)
+        record["prior_resolutions"] = dict(review.prior_resolutions)
         record["findings"] = [asdict(finding) for finding in review.findings]
         actual_reviews.append(record)
     assert actual_reviews == expected["previous_reviews"]

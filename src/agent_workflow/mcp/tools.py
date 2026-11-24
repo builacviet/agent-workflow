@@ -1,6 +1,9 @@
 """MCP adapters; existing ping/info and transport settings are preserved."""
 
+import json
 from contextlib import contextmanager
+from dataclasses import asdict
+from urllib.parse import quote
 
 from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.server.fastmcp import Context
@@ -8,7 +11,16 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import StrictInt
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextInput,
+    GetReviewContextOutput,
+)
+from agent_workflow.application.review.use_cases.get_review_result import (
+    GetReviewResultOutput,
+)
 from agent_workflow.domain.contracts import Submission
+from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.mcp.security import (
     TECHLEAD_SCOPE,
     TechLeadScopeRequired,
@@ -19,8 +31,72 @@ from agent_workflow.mcp.techlead_github import TechLeadGitHub
 from agent_workflow.mcp.techlead_notion import TechLeadNotion
 
 
-def register_tools(mcp, service_provider):
-    """Use a fresh service context for each authorized workflow tool call."""
+def _review_request(task_id: str) -> GetReviewContextInput:
+    if not task_id.strip():
+        raise WorkflowError("unknown authorized task")
+    return GetReviewContextInput(task_id)
+
+
+def _review_context_response(output: GetReviewContextOutput) -> dict:
+    task = asdict(output.task)
+    # The MCP contract flattens the original task spec, including stored fields
+    # absent from the typed workflow task projection.
+    spec = json.loads(task.pop("spec_json"))
+    task.pop("context_paths")
+    history = []
+    for review in output.previous_reviews:
+        record = asdict(review)
+        record["prior_resolutions"] = dict(review.prior_resolutions)
+        record["findings"] = list(record["findings"])
+        history.append(record)
+
+    root = f"https://github.com/{output.task.repository}"
+    head = output.task.current_head_sha
+    prior = output.previous_reviewed_sha
+    return {
+        **spec,
+        **task,
+        "review_round": output.review_round,
+        "rounds_remaining": output.rounds_remaining,
+        "previous_reviews": history,
+        "previous_reviewed_sha": prior,
+        "previous_verdict": output.previous_verdict,
+        "github_references": {
+            "complete_diff": f"{root}/compare/{output.task.base_sha}...{head}"
+            if head
+            else None,
+            "correction_diff": f"{root}/compare/{prior}...{head}"
+            if prior and head
+            else None,
+            "context_files": {
+                path: f"{root}/blob/{head}/{quote(path, safe='/')}"
+                for path in output.task.context_paths
+            }
+            if head
+            else {},
+        },
+        "events": [asdict(event) for event in output.events],
+    }
+
+
+def _review_result_response(output: GetReviewResultOutput) -> dict:
+    result = _review_context_response(output.context)
+    result.update(
+        latest_reviewed_sha=output.context.previous_reviewed_sha,
+        actual_effort=output.actual_effort,
+        escalation_reason=output.escalation_reason,
+        approval_current=None,
+        remote_verification="not_performed_by_wfc",
+    )
+    if output.context.task.status == WorkflowStatus.APPROVED:
+        result["approval_warning"] = (
+            "Recorded approval covers only the stored SHA; Tech Lead must verify GitHub freshness before merge"
+        )
+    return result
+
+
+def register_tools(mcp, service_provider, review_reads_provider):
+    """Open a fresh scope for each authorized workflow tool call."""
 
     @contextmanager
     def service(ctx):
@@ -31,14 +107,17 @@ def register_tools(mcp, service_provider):
     @mcp.tool()
     def list_review_queue(ctx: Context, requested_effort: str | None = None) -> dict:
         """Authenticated: list reviewable tasks, optionally filtered by requested effort."""
-        with service(ctx) as (engine, _):
-            return {"tasks": engine.list_review_queue(requested_effort)}
+        authorize_context(ctx)
+        with review_reads_provider() as (queue, _, _):
+            return {"tasks": [asdict(item) for item in queue.execute(requested_effort)]}
 
     @mcp.tool()
     def get_review_context(task_id: str, ctx: Context) -> dict:
         """Authenticated: full task, immutable prior reviews/findings and GitHub references."""
-        with service(ctx) as (engine, _):
-            return engine.get_review_context(task_id)
+        authorize_context(ctx)
+        request = _review_request(task_id)
+        with review_reads_provider() as (_, context, _):
+            return _review_context_response(context.execute(request))
 
     @mcp.tool()
     def claim_review(task_id: str, expected_head_sha: str, ctx: Context) -> dict:
@@ -55,8 +134,10 @@ def register_tools(mcp, service_provider):
     @mcp.tool()
     def get_review_result(task_id: str, ctx: Context) -> dict:
         """Authenticated: persisted results, resolution history and approval validity."""
-        with service(ctx) as (engine, _):
-            return engine.get_review_result(task_id)
+        authorize_context(ctx)
+        request = _review_request(task_id)
+        with review_reads_provider() as (_, _, result):
+            return _review_result_response(result.execute(request))
 
     @mcp.tool()
     def register_task_handoff(

@@ -55,6 +55,7 @@ def snapshot() -> ReviewContextSnapshot:
             created_at=1000.0,
             updated_at=1000.0,
             context_paths=("docs/review context.md",),
+            spec_json='{"context_paths":["docs/review context.md"]}',
         ),
         previous_reviews=(),
         events=(
@@ -128,7 +129,7 @@ def test_prior_review_retains_findings_and_caps_round(
         reviewer="tech-lead",
         reviewed_at=1000.0,
         imported_at=None,
-        prior_resolutions={},
+        prior_resolutions=(),
         findings=(finding,),
     )
     last = replace(
@@ -137,7 +138,7 @@ def test_prior_review_retains_findings_and_caps_round(
         round_number=2,
         reviewed_head_sha="c" * 40,
         verdict=WorkflowStatus.APPROVED,
-        prior_resolutions={"F-1": "FIXED"},
+        prior_resolutions=(("F-1", "FIXED"),),
         findings=(),
     )
     snapshot = replace(
@@ -185,6 +186,11 @@ def test_unknown_task_fails_closed(task_id: str) -> None:
     with pytest.raises(WorkflowError, match="^unknown authorized task$"):
         GetReviewContextUseCase(reader).execute(GetReviewContextInput(task_id))
     assert reader.reads == [task_id]
+
+
+def test_non_string_task_id_is_rejected():
+    with pytest.raises(WorkflowError, match="^task_id must be a string$"):
+        GetReviewContextInput(1)
 
 
 def test_invalid_persisted_status_and_read_failure_propagate() -> None:

@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -9,11 +12,46 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
-from test_agent_workflow import BASE, HEAD, REPO, payload
+from test_agent_workflow import BASE, HEAD, REPO, payload, spec
 
+from agent_workflow.application.review.dtos import ReviewQueueItem, ReviewTask
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextInput,
+    GetReviewContextOutput,
+    GetReviewContextUseCase,
+)
+from agent_workflow.application.review.use_cases.get_review_result import (
+    GetReviewResultOutput,
+    GetReviewResultUseCase,
+)
+from agent_workflow.application.review.use_cases.list_review_queue import (
+    ListReviewQueueUseCase,
+)
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_connection import PostgresFactory
+
+
+def test_server_starts_without_postgres_extra():
+    script = """
+import asyncio
+import os
+import sys
+
+os.environ['WFC_AUTH_MODE'] = 'bearer'
+sys.modules["sqlalchemy"] = None
+from agent_workflow.mcp.server import mcp
+
+tools = asyncio.run(mcp.list_tools())
+assert {"ping", "get_server_info", "list_review_queue"} <= {tool.name for tool in tools}
+"""
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1] / "src",
+        check=True,
+    )
+
 
 DSN = "postgresql+psycopg://user:pass@localhost/test"
 SUBJECT = "auth0|workflow-test"
@@ -60,14 +98,6 @@ def authorized_workflow(monkeypatch):
     ("name", "arguments", "service_args", "service_result", "tool_result"),
     [
         (
-            "list_review_queue",
-            {"requested_effort": "medium"},
-            ("medium",),
-            [RECORD],
-            {"tasks": [RECORD]},
-        ),
-        ("get_review_context", TASK, ("TEST",), RECORD, RECORD),
-        (
             "claim_review",
             {**TASK, "expected_head_sha": HEAD},
             ("TEST", HEAD, ACTOR),
@@ -81,7 +111,6 @@ def authorized_workflow(monkeypatch):
             RECORD,
             RECORD,
         ),
-        ("get_review_result", TASK, ("TEST",), RECORD, RECORD),
         (
             "register_task_handoff",
             HANDOFF,
@@ -129,26 +158,189 @@ def test_workflow_paths_authorize_and_close(
     factory.close.assert_called_once_with()
 
 
-def test_exception_and_next_call_use_separate_scopes(monkeypatch, authorized_workflow):
+SPEC = spec()
+CONTEXT = GetReviewContextOutput(
+    task=ReviewTask(
+        task_id="TEST",
+        repository=REPO,
+        branch="task/test",
+        base_sha=BASE,
+        current_head_sha=None,
+        requested_effort="medium",
+        require_verified_effort=0,
+        max_review_rounds=2,
+        completed_review_rounds=0,
+        status=WorkflowStatus.AWAITING_HANDOFF,
+        created_at=1000.0,
+        updated_at=1000.0,
+        context_paths=tuple(SPEC["context_paths"]),
+        spec_json=json.dumps(SPEC),
+    ),
+    review_round=1,
+    rounds_remaining=2,
+    previous_reviewed_sha=None,
+    previous_verdict=None,
+    previous_reviews=(),
+    events=(),
+)
+CONTEXT_WIRE = {
+    **SPEC,
+    "current_head_sha": None,
+    "require_verified_effort": 0,
+    "max_review_rounds": 2,
+    "completed_review_rounds": 0,
+    "status": "AWAITING_HANDOFF",
+    "created_at": 1000.0,
+    "updated_at": 1000.0,
+    "review_round": 1,
+    "rounds_remaining": 2,
+    "previous_reviewed_sha": None,
+    "previous_verdict": None,
+    "previous_reviews": [],
+    "events": [],
+    "github_references": {
+        "complete_diff": None,
+        "correction_diff": None,
+        "context_files": {},
+    },
+}
+QUEUE_ITEM = {
+    "task_id": "TEST",
+    "title": SPEC["title"],
+    "repository": REPO,
+    "branch": "task/test",
+    "head_sha": HEAD,
+    "requested_effort": "medium",
+    "review_round": 1,
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "use_case", "request_arg", "output", "wire"),
+    [
+        (
+            "list_review_queue",
+            {"requested_effort": "medium"},
+            ListReviewQueueUseCase,
+            "medium",
+            (ReviewQueueItem(**QUEUE_ITEM),),
+            {"tasks": [QUEUE_ITEM]},
+        ),
+        (
+            "get_review_context",
+            TASK,
+            GetReviewContextUseCase,
+            GetReviewContextInput("TEST"),
+            CONTEXT,
+            CONTEXT_WIRE,
+        ),
+        (
+            "get_review_result",
+            TASK,
+            GetReviewResultUseCase,
+            GetReviewContextInput("TEST"),
+            GetReviewResultOutput(CONTEXT, None, None),
+            {
+                **CONTEXT_WIRE,
+                "latest_reviewed_sha": None,
+                "actual_effort": None,
+                "escalation_reason": None,
+                "approval_current": None,
+                "remote_verification": "not_performed_by_wfc",
+            },
+        ),
+    ],
+)
+def test_review_reads_authorize_execute_and_close(
+    monkeypatch,
+    authorized_workflow,
+    name,
+    arguments,
+    use_case,
+    request_arg,
+    output,
+    wire,
+):
+    factory = Mock()
+    open_factory = Mock(return_value=factory)
+    execute = Mock(return_value=output)
+    monkeypatch.setattr(PostgresFactory, "open", open_factory)
+    monkeypatch.setattr(use_case, "execute", execute)
+    legacy = Mock(side_effect=AssertionError("read must use the injected use case"))
+    monkeypatch.setattr(WorkflowService, name, legacy)
+
+    reset = auth_context_var.set(None)
+    try:
+        with pytest.raises(ToolError, match="workflow OAuth authorization required"):
+            asyncio.run(mcp.call_tool(name, arguments))
+        open_factory.assert_not_called()
+        execute.assert_not_called()
+    finally:
+        auth_context_var.reset(reset)
+
+    response = asyncio.run(mcp.call_tool(name, arguments))
+    assert json.loads(response[0].text) == wire
+    open_factory.assert_called_once()
+    assert open_factory.call_args.args[0].pg_runtime_dsn == DSN
+    execute.assert_called_once_with(request_arg)
+    factory.close.assert_called_once_with()
+    legacy.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["get_review_context", "get_review_result"])
+def test_invalid_task_id_fails_before_open(monkeypatch, authorized_workflow, name):
+    open_factory = Mock()
+    monkeypatch.setattr(PostgresFactory, "open", open_factory)
+    with pytest.raises(ToolError, match="unknown authorized task"):
+        asyncio.run(mcp.call_tool(name, {"task_id": " \t"}))
+    open_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name", ["list_review_queue", "get_review_context", "get_review_result"]
+)
+def test_exception_and_next_call_use_separate_scopes(
+    monkeypatch, authorized_workflow, name
+):
     failed, successful = Mock(), Mock()
     open_factory = Mock(side_effect=[failed, successful])
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
+    if name == "list_review_queue":
+        arguments, use_case, result = {}, ListReviewQueueUseCase, ()
+    elif name == "get_review_context":
+        arguments, use_case, result = TASK, GetReviewContextUseCase, CONTEXT
+    else:
+        arguments, use_case = TASK, GetReviewResultUseCase
+        result = GetReviewResultOutput(CONTEXT, None, None)
 
-    def get_context(service, task_id):
-        if service.repository.factory is failed:
+    def execute(_request):
+        if open_factory.call_count == 1:
             raise RuntimeError("synthetic operation failed")
         failed.close.assert_called_once_with()
-        assert service.repository.factory is successful
-        return {"task_id": task_id}
+        successful.close.assert_not_called()
+        return result
 
-    monkeypatch.setattr(WorkflowService, "get_review_context", get_context)
+    monkeypatch.setattr(use_case, "execute", staticmethod(execute))
     with pytest.raises(ToolError, match="synthetic operation failed"):
-        asyncio.run(mcp.call_tool("get_review_context", TASK))
+        asyncio.run(mcp.call_tool(name, arguments))
     failed.close.assert_called_once_with()
     successful.close.assert_not_called()
 
-    output = asyncio.run(mcp.call_tool("get_review_context", TASK))
-    assert json.loads(output[0].text) == RECORD
+    output = asyncio.run(mcp.call_tool(name, arguments))
+    assert json.loads(output[0].text) == (
+        {"tasks": []}
+        if name == "list_review_queue"
+        else CONTEXT_WIRE
+        if name == "get_review_context"
+        else {
+            **CONTEXT_WIRE,
+            "latest_reviewed_sha": None,
+            "actual_effort": None,
+            "escalation_reason": None,
+            "approval_current": None,
+            "remote_verification": "not_performed_by_wfc",
+        }
+    )
     assert open_factory.call_count == 2
     successful.close.assert_called_once_with()
 

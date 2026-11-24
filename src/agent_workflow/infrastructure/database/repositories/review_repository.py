@@ -54,7 +54,7 @@ class SqlAlchemyReviewRepository:
             reviewer=row.reviewer,
             reviewed_at=row.reviewed_at,
             imported_at=row.imported_at,
-            prior_resolutions=prior_resolutions,
+            prior_resolutions=tuple(prior_resolutions.items()),
             findings=self._list_findings(row.review_id),
         )
 

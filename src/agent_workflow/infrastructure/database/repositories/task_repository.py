@@ -50,4 +50,5 @@ class SqlAlchemyTaskRepository:
             created_at=row.created_at,
             updated_at=row.updated_at,
             context_paths=context_paths,
+            spec_json=row.metadata_text,
         )

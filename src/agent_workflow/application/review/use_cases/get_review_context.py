@@ -17,6 +17,8 @@ class GetReviewContextInput:
     task_id: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.task_id, str):
+            raise WorkflowError("task_id must be a string")
         if not self.task_id.strip():
             raise WorkflowError("task_id must not be blank")
 

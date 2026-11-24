@@ -8,6 +8,7 @@ from legacy_admin_fixtures import import_history, reset_synthetic, seed_syntheti
 from starlette.requests import Request
 
 from agent_workflow.admin import BASE, REPO, ROUND1, ROUND2
+from agent_workflow.application.review.dtos import ReviewQueueItem
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.security import authorize_request
@@ -460,6 +461,19 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
     monkeypatch.setattr(
         "agent_workflow.composition.postgres_mcp.postgres_mcp_service",
         lambda config: nullcontext(engine),
+    )
+
+    def list_queue(requested_effort):
+        assert requested_effort == "medium"
+        return (
+            ReviewQueueItem(
+                "TEST", "SYNTHETIC test", REPO, "task/test", HEAD, "medium", 1
+            ),
+        )
+
+    monkeypatch.setattr(
+        "agent_workflow.composition.postgres_mcp.postgres_mcp_review_reads",
+        lambda config: nullcontext((SimpleNamespace(execute=list_queue), None, None)),
     )
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
