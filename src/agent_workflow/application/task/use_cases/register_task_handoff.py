@@ -1,12 +1,14 @@
 """Layer: Application
 Responsibility: Coordinate an atomic, authorized task handoff.
-Dependencies: Task handoff port and domain policy.
+Dependencies: Unit of Work port, task handoff port and domain policy.
 """
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import ContextManager, Protocol
+from typing import Protocol
 
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import (
@@ -29,13 +31,9 @@ class IHandoffRepository(Protocol):
         task: HandoffTask,
         request: HandoffRequest,
         action: TaskEventAction,
-        metadata: dict,
+        metadata: dict[str, str | int],
         now: float,
     ) -> None: ...
-
-
-class IHandoffScope(Protocol):
-    def __call__(self) -> ContextManager[IHandoffRepository]: ...
 
 
 @dataclass(frozen=True)
@@ -46,14 +44,23 @@ class HandoffResult:
 
 
 class RegisterTaskHandoffUseCase:
-    def __init__(self, scope: IHandoffScope, *, clock: Callable[[], float]):
-        self.scope, self.clock = scope, clock
+    def __init__(
+        self,
+        uow: IUnitOfWork,
+        repository: IHandoffRepository,
+        *,
+        clock: Callable[[], float],
+    ) -> None:
+        self._uow = uow
+        self._repository = repository
+        self._clock = clock
 
     def execute(self, request: HandoffRequest) -> HandoffResult:
         if not isinstance(request, HandoffRequest):
             raise TypeError("handoff request required")
         request.validate()
-        with self.scope() as repo:
+        repo = self._repository
+        with self._uow:
             task = repo.lock_task(request.task_id)
             if task is None:
                 raise BusinessRuleError("unknown authorized task")
@@ -62,7 +69,7 @@ class RegisterTaskHandoffUseCase:
                 task.task_id, WorkflowStatus.READY_IN_REVIEW, request.new_head_sha
             )
             action = TaskEventAction.HANDOFF
-            metadata = {
+            metadata: dict[str, str | int] = {
                 "handoff_file_path": request.handoff_file_path,
                 "test_summary": request.test_summary,
                 "verification": "reporter_supplied_not_remotely_verified",
@@ -80,5 +87,11 @@ class RegisterTaskHandoffUseCase:
                 )
                 action = TaskEventAction.CI_REPAIR_HANDOFF
                 metadata.update(previous_head_sha=task.head_sha, pr_number=pr_number)
-            repo.record(task, request, action, metadata, self.clock())
+            repo.record(task, request, action, metadata, self._clock())
+            self._uow.commit()
             return result
+
+
+HandoffUseCaseProvider = Callable[
+    [], AbstractContextManager[RegisterTaskHandoffUseCase]
+]

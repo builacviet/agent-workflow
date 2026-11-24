@@ -1,12 +1,13 @@
 """Tests of handoff decisions through the scoped application port."""
 
-from contextlib import contextmanager
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.application.task.use_cases.register_task_handoff import (
+    IHandoffRepository,
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
@@ -36,26 +37,24 @@ TASK = HandoffTask(
 
 
 def setup(task=TASK):
-    repo = Mock()
+    repo = Mock(spec=IHandoffRepository)
+    uow = MagicMock(spec=IUnitOfWork)
     repo.lock_task.return_value = task
     repo.handoff_path.return_value = (False, None)
     repo.advance_failed_ci_head.return_value = 7
 
-    @contextmanager
-    def scope():
-        yield repo
-
-    return RegisterTaskHandoffUseCase(scope, clock=lambda: 123.0), repo
+    return RegisterTaskHandoffUseCase(uow, repo, clock=lambda: 123.0), repo, uow
 
 
 def test_first_handoff_records_atomic_transition():
-    use, repo = setup()
+    use, repo, uow = setup()
     result = use.execute(REQUEST)
     assert (result.task_id, result.status, result.head_sha) == (
         "T",
         WorkflowStatus.READY_IN_REVIEW,
         HEAD,
     )
+    uow.commit.assert_called_once_with()
     task, request, action, metadata, now = repo.record.call_args.args
     assert (task, request, action, now) == (
         TASK,
@@ -78,13 +77,15 @@ def test_first_handoff_records_atomic_transition():
         replace(REQUEST, repository="other/repo"),
         replace(REQUEST, handoff_file_path="other"),
         replace(REQUEST, branch="other"),
+        replace(REQUEST, base_sha=NEW),
     ],
 )
 def test_invalid_request_never_records(invalid_request):
-    use, repo = setup()
+    use, repo, uow = setup()
     with pytest.raises(BusinessRuleError):
         use.execute(invalid_request)
     repo.record.assert_not_called()
+    uow.commit.assert_not_called()
     repo.advance_failed_ci_head.assert_not_called()
 
 
@@ -100,11 +101,12 @@ def test_invalid_request_never_records(invalid_request):
     ],
 )
 def test_invalid_shape_rejected_before_scope(invalid_request):
-    scope = Mock(side_effect=AssertionError("invalid command opened a scope"))
-    use = RegisterTaskHandoffUseCase(scope, clock=lambda: 123.0)
+    use, repo, uow = setup()
     with pytest.raises(BusinessRuleError):
         use.execute(invalid_request)
-    scope.assert_not_called()
+    uow.__enter__.assert_not_called()
+    assert not repo.mock_calls
+    uow.commit.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -116,24 +118,35 @@ def test_invalid_shape_rejected_before_scope(invalid_request):
     ],
 )
 def test_disallowed_state_never_records(task):
-    use, repo = setup(task)
+    use, repo, uow = setup(task)
     with pytest.raises(BusinessRuleError):
         use.execute(REQUEST)
     repo.record.assert_not_called()
+    uow.commit.assert_not_called()
+
+
+def test_unknown_task_never_commits():
+    use, repo, uow = setup(task=None)
+    with pytest.raises(BusinessRuleError, match="unknown authorized task"):
+        use.execute(REQUEST)
+    repo.lock_task.assert_called_once_with(REQUEST.task_id)
+    repo.record.assert_not_called()
+    uow.commit.assert_not_called()
 
 
 def test_same_head_is_idempotent():
-    use, repo = setup(
+    use, repo, uow = setup(
         replace(TASK, status=WorkflowStatus.READY_IN_REVIEW, head_sha=HEAD)
     )
     repo.handoff_path.return_value = (True, REQUEST.handoff_file_path)
     assert use.execute(REQUEST).head_sha == HEAD
     repo.record.assert_not_called()
+    uow.commit.assert_not_called()
     repo.advance_failed_ci_head.assert_not_called()
 
 
 def test_repair_requires_reservation_and_records_metadata():
-    use, repo = setup(
+    use, repo, uow = setup(
         replace(TASK, status=WorkflowStatus.READY_IN_REVIEW, head_sha=HEAD)
     )
     repo.handoff_path.side_effect = [(True, REQUEST.handoff_file_path), (False, None)]
@@ -142,10 +155,11 @@ def test_repair_requires_reservation_and_records_metadata():
     assert repo.record.call_args.args[2] == TaskEventAction.CI_REPAIR_HANDOFF
     assert repo.record.call_args.args[3]["previous_head_sha"] == HEAD
     assert repo.record.call_args.args[3]["pr_number"] == 7
+    uow.commit.assert_called_once_with()
 
 
 def test_failed_reservation_never_records():
-    use, repo = setup(
+    use, repo, uow = setup(
         replace(TASK, status=WorkflowStatus.READY_IN_REVIEW, head_sha=HEAD)
     )
     repo.handoff_path.side_effect = [(True, REQUEST.handoff_file_path), (False, None)]
@@ -153,3 +167,4 @@ def test_failed_reservation_never_records():
     with pytest.raises(BusinessRuleError):
         use.execute(replace(REQUEST, new_head_sha=NEW))
     repo.record.assert_not_called()
+    uow.commit.assert_not_called()

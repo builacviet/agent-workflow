@@ -77,22 +77,20 @@ def test_controller_injects_same_policy_without_docker_launch(
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
     factory = Mock()
     dependencies = Mock()
-    from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
-
-    dependencies.workflow = PostgresWorkflowRepository(factory)
+    dependencies.handoff_provider = postgres_dispatch_deps.PostgresHandoffProvider(
+        factory
+    )
     compose = Mock(return_value=dependencies)
     assignment = Mock()
-    handoff = Mock()
     launch = Mock(side_effect=AssertionError("composition must not launch Worker"))
     monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_controller", compose)
     monkeypatch.setattr(postgres_dispatch_deps, "GetCoderAssignmentUseCase", assignment)
-    monkeypatch.setattr(postgres_dispatch_deps, "RegisterTaskHandoffUseCase", handoff)
     monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_worker", launch)
 
     postgres_dispatch_deps.create_dispatch_use_case({}, AppConfig.from_env(), factory)
     compose.assert_called_once_with(factory)
     assignment.assert_called_once()
-    handoff.assert_called_once()
+    factory.get_scoped_session.assert_not_called()
     launch.assert_not_called()
 
 

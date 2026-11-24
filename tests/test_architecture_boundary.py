@@ -3,6 +3,7 @@
 import inspect
 import json
 import subprocess
+from contextlib import nullcontext
 from unittest.mock import Mock
 
 import pytest
@@ -120,7 +121,7 @@ def injected_runtime(config, state, ledger, *, plugins=()):
     handoff.execute.side_effect = register
     return CoderRuntime(
         config,
-        handoff,
+        lambda: nullcontext(handoff),
         dispatch=ledger,
         ci=Mock(),
         leadership_guard=lambda: True,

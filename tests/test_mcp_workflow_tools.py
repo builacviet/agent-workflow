@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -12,6 +13,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
+from sqlalchemy.orm import Session
 from test_agent_workflow import BASE, HEAD, REPO, finding, payload, spec
 
 from agent_workflow.application.review.dtos import ReviewQueueItem, ReviewTask
@@ -114,6 +116,7 @@ def test_workflow_paths_authorize_and_close(
     open_factory = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
     if name == "register_task_handoff":
+        factory.get_scoped_session.return_value = nullcontext(Session())
         operation = Mock(
             return_value=HandoffResult("TEST", WorkflowStatus.READY_IN_REVIEW, HEAD)
         )
@@ -136,8 +139,10 @@ def test_workflow_paths_authorize_and_close(
     open_factory.assert_called_once()
     factory.close.assert_called_once_with()
     if name == "register_task_handoff":
+        factory.get_scoped_session.assert_called_once_with()
         operation.assert_called_once_with(HandoffRequest(**HANDOFF))
     else:
+        factory.get_scoped_session.assert_not_called()
         operation.assert_called_once_with("TEST")
 
 

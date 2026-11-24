@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
@@ -22,6 +23,9 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 )
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
+)
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
 )
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
@@ -269,7 +273,7 @@ def test_pg_validation_never_inspects_sqlite_database(config):
     entry._validate_worker_config(config)
 
 
-def test_entrypoint_rejects_uncomposed_repository_before_leadership(
+def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
     config, monkeypatch, offline_factory
 ):
     dependencies = compose_postgres_controller(offline_factory)
@@ -283,9 +287,9 @@ def test_entrypoint_rejects_uncomposed_repository_before_leadership(
         "compose_postgres_controller",
         lambda factory: dependencies if factory is offline_factory else forbidden(),
     )
-    dependencies = replace(dependencies, workflow=object())
+    dependencies = replace(dependencies, handoff_provider=object())
 
-    with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
+    with pytest.raises(TypeError, match="composed PostgreSQL handoff provider"):
         run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
 
     acquire.assert_not_called()
@@ -368,7 +372,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
 
     def compose(cfg, service, borrowed, *, leadership_guard):
-        assert borrowed is deps and service.scope.repository is deps.workflow
+        assert borrowed is deps and service is deps.handoff_provider
         assert cfg is config
         leadership_guard()
         events.append("compose_worker")
@@ -565,7 +569,7 @@ def test_pg_once_runs_native_dev_stages(
         deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )
     monkeypatch.setattr(
-        deps_wiring.RegisterTaskHandoffUseCase,
+        RegisterTaskHandoffUseCase,
         "execute",
         lambda _, request: events.handoff(request),
     )
@@ -586,7 +590,27 @@ def test_pg_once_runs_native_dev_stages(
         return None
 
     session.get.side_effect = get_row
-    monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
+    handoff_scope_open = False
+    session_uses = []
+
+    @contextmanager
+    def session_scope():
+        nonlocal handoff_scope_open
+        if not session_uses:
+            assert stage_calls == ["prepare", "code", "test", "publish"]
+            session_uses.append("handoff")
+            with Session() as handoff_session:
+                handoff_scope_open = True
+                try:
+                    yield handoff_session
+                finally:
+                    handoff_scope_open = False
+        else:
+            assert not handoff_scope_open
+            session_uses.append("ci")
+            yield session
+
+    monkeypatch.setattr(factory, "get_scoped_session", session_scope)
     for module in (coder_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")

@@ -6,18 +6,13 @@ Dependencies: Application operations and PostgreSQL adapters.
 from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.composition.postgres_controller import (
     ControllerCiSessionProvider,
     ControllerDependencies,
 )
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
-)
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
@@ -27,12 +22,11 @@ from agent_workflow.infrastructure.postgres_leadership import (
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 def compose_postgres_worker(
     config: dict,
-    handoff: RegisterTaskHandoffUseCase,
+    handoff_provider: PostgresHandoffProvider,
     dependencies: ControllerDependencies,
     *,
     leadership_guard: Callable[[], None],
@@ -45,19 +39,16 @@ def compose_postgres_worker(
     """
     if not isinstance(dependencies, ControllerDependencies):
         raise TypeError("PostgreSQL Controller dependencies are required")
-    workflow = dependencies.workflow
     dispatch = dependencies.dispatch
     ci_tracking = dependencies.ci_tracking
     ci_repository = dependencies.ci_repository
     ci_factory = dependencies.ci_factory
     leadership = dependencies.leadership
     if (
-        not isinstance(workflow, PostgresWorkflowRepository)
-        or not isinstance(handoff, RegisterTaskHandoffUseCase)
-        or type(handoff.scope) is not PostgresHandoffScope
-        or handoff.scope.repository is not workflow
+        type(handoff_provider) is not PostgresHandoffProvider
+        or handoff_provider is not dependencies.handoff_provider
     ):
-        raise TypeError("Worker requires the composed PostgreSQL workflow")
+        raise TypeError("Worker requires the composed PostgreSQL handoff provider")
     if (
         not isinstance(dispatch, PostgresDispatchLedger)
         or (dispatch.role, dispatch.phase) != ("dev", "code")
@@ -73,7 +64,7 @@ def compose_postgres_worker(
             "Worker requires PostgreSQL dispatch, CI state and Controller guard"
         )
 
-    factory = workflow.factory
+    factory = handoff_provider.factory
     ci_scope = ci_repository._session_scope
     if (
         not isinstance(factory, PostgresFactory)
@@ -100,7 +91,7 @@ def compose_postgres_worker(
 
     return CoderRuntime(
         config,
-        handoff,
+        handoff_provider,
         plugins=plugins,
         dispatch=dispatch,
         ci=ci_tracking,

@@ -11,18 +11,12 @@ import pytest
 from sqlalchemy import create_engine
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.composition import worker_deps
 from agent_workflow.composition.postgres_controller import (
     ControllerCiSessionProvider,
     compose_postgres_controller,
 )
 from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
-)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -44,9 +38,7 @@ def wiring(monkeypatch, tmp_path):
     monkeypatch.setattr(PostgresFactory, "assert_schema_ready", lambda self: None)
     factory = PostgresFactory(create_engine("postgresql+psycopg://", creator=forbidden))
     dependencies = compose_postgres_controller(factory)
-    service = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(dependencies.workflow), clock=lambda: 0
-    )
+    service = dependencies.handoff_provider
     return factory, dependencies, service
 
 
@@ -80,7 +72,7 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
         {"database": "legacy.db"}, service, dependencies, leadership_guard=forbidden
     )
 
-    assert runtime.handoff.scope.repository is dependencies.workflow
+    assert runtime.handoff_provider is dependencies.handoff_provider
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
@@ -96,9 +88,7 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
     deferred = partial(open_scope, factory)
     monkeypatch.setattr(factory, "get_scoped_session", deferred)
     dependencies = compose_postgres_controller(factory)
-    service = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(dependencies.workflow), clock=lambda: 0
-    )
+    service = dependencies.handoff_provider
 
     runtime = compose_postgres_worker(
         {}, service, dependencies, leadership_guard=forbidden
@@ -113,7 +103,7 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
 @pytest.mark.parametrize(
     "missing",
     [
-        "workflow",
+        "handoff_provider",
         "dispatch",
         "ci_tracking",
         "ci_repository",
@@ -205,10 +195,8 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
 def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
     factory, dependencies, service = wiring
     other = compose_postgres_controller(factory)
-    unrelated_service = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(other.workflow), clock=lambda: 0
-    )
-    with pytest.raises(TypeError, match="composed PostgreSQL workflow"):
+    unrelated_service = other.handoff_provider
+    with pytest.raises(TypeError, match="composed PostgreSQL handoff provider"):
         compose_postgres_worker(
             {}, unrelated_service, dependencies, leadership_guard=forbidden
         )

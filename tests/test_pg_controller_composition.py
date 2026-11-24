@@ -16,6 +16,7 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
@@ -32,7 +33,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     PostgresLeadershipLock,
 )
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 def _opened_factory() -> PostgresFactory:
@@ -82,8 +82,8 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
     dependencies = composition.compose_postgres_controller(factory)
 
     assert isinstance(dependencies, composition.ControllerDependencies)
-    assert isinstance(dependencies.workflow, PostgresWorkflowRepository)
-    assert dependencies.workflow.factory is factory
+    assert isinstance(dependencies.handoff_provider, PostgresHandoffProvider)
+    assert dependencies.handoff_provider.factory is factory
     assert isinstance(dependencies.dispatch, PostgresDispatchLedger)
     assert (
         dependencies.dispatch.factory,
@@ -108,7 +108,7 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
     for method in ("run", "start", "activate", "close"):
         assert not hasattr(dependencies, method)
     with pytest.raises(FrozenInstanceError):
-        dependencies.workflow = None
+        dependencies.handoff_provider = None
 
     scoped_session = Mock()
     monkeypatch.setattr(factory, "get_scoped_session", scoped_session)
@@ -136,7 +136,7 @@ def test_borrowed_factory_closure_fails_on_later_use():
     factory.close()
 
     with pytest.raises(PostgresUnavailableError, match="factory is closed"):
-        with dependencies.workflow.read():
+        with dependencies.handoff_provider():
             pass
     assert dependencies.leadership._connection is None
 

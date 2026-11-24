@@ -21,6 +21,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.application.review.use_cases.claim_review import ClaimReviewUseCase
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
@@ -32,13 +33,18 @@ from agent_workflow.application.review.use_cases.write_contracts import ClaimRev
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_mcp import postgres_mcp_task_operations
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueReader,
 )
 from agent_workflow.infrastructure.database.repositories.review_writes import (
     PostgresReviewWriteScope,
 )
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffRepository,
+)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.review_assignment_response import review_context_response
@@ -56,8 +62,9 @@ def test_mcp_composition_owns_factory_and_config(require_ci):
     with patch.object(PostgresFactory, "open", return_value=factory) as open_factory:
         with postgres_mcp_task_operations(config) as (handoff, assignment):
             open_factory.assert_called_once_with(config)
-            assert isinstance(handoff.scope.repository, PostgresWorkflowRepository)
-            assert handoff.scope.repository.factory is factory
+            assert isinstance(handoff, PostgresHandoffProvider)
+            assert handoff.factory is factory
+            factory.get_scoped_session.assert_not_called()
             assert assignment.context is not None
             factory.close.assert_not_called()
         factory.close.assert_called_once_with()
@@ -75,7 +82,7 @@ def test_mcp_composition_closes_on_scope_and_construction_errors():
         factory.close.assert_called_once_with()
         factory.reset_mock()
         with patch(
-            "agent_workflow.composition.postgres_mcp.RegisterTaskHandoffUseCase",
+            "agent_workflow.composition.postgres_mcp.PostgresHandoffProvider",
             side_effect=RuntimeError("construction error"),
         ):
             with pytest.raises(RuntimeError, match="construction error"):
@@ -126,7 +133,7 @@ def setup():
 def ready(repo, task_id):
     authorize_task(repo.factory, spec(task_id))
     record_handoff(
-        repo, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
+        repo.factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
     )
 
 
@@ -214,6 +221,12 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
     assert context["current_head_sha"] == HEAD
     assert context["status"] == "READY_IN_REVIEW"
     assert context["events"][-1]["action"] == "HANDOFF"
+    with repo.read() as unit:
+        assert unit.find_head_handoff(task_id, HEAD)["metadata"] == (
+            '{"handoff_file_path":"docs/handoff.md",'
+            '"test_summary":"PostgreSQL MCP fixture",'
+            '"verification":"reporter_supplied_not_remotely_verified"}'
+        )
     assert context["github_references"]["complete_diff"].endswith(BASE + "..." + HEAD)
 
 
@@ -258,15 +271,6 @@ def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres):
 
 
 def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
-    from agent_workflow.application.task.use_cases.register_task_handoff import (
-        RegisterTaskHandoffUseCase,
-    )
-    from agent_workflow.domain.task.handoff import HandoffRequest
-    from agent_workflow.infrastructure.database.repositories.task_handoff import (
-        PostgresHandoffRepository,
-        PostgresHandoffScope,
-    )
-
     repo, task_id, _ = setup
     authorize_task(repo.factory, spec(task_id))
     original = PostgresHandoffRepository.record
@@ -276,17 +280,21 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
         raise RuntimeError("synthetic write failure")
 
     monkeypatch.setattr(PostgresHandoffRepository, "record", fail_after_writes)
-    operation = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(repo), clock=lambda: 1.0
-    )
     with pytest.raises(RuntimeError, match="synthetic write failure"):
-        operation.execute(
-            HandoffRequest(
-                task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "fixture"
-            )
+        record_handoff(
+            repo.factory,
+            task_id,
+            REPO,
+            "task/test",
+            BASE,
+            HEAD,
+            "docs/handoff.md",
+            "fixture",
         )
     with repo.read() as unit:
-        assert unit.find_task((task_id,))["current_head_sha"] is None
+        task = unit.find_task((task_id,))
+        assert task["current_head_sha"] is None
+        assert task["status"] == "AWAITING_HANDOFF"
         assert [event["action"] for event in unit.list_events((task_id,))] == [
             "LOCAL_AUTHORIZATION"
         ]
@@ -325,7 +333,7 @@ def test_mcp_context_and_result_preserve_persisted_history(
         (NEXT, verdict, {"F-1": "FIXED" if verdict == "APPROVED" else "NOT_FIXED"}),
     ):
         record_handoff(
-            repo,
+            repo.factory,
             task_id,
             REPO,
             "task/test",
@@ -558,7 +566,14 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
         )
     with pytest.raises(WorkflowError, match="not authorized"):
         record_handoff(
-            repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
+            repo.factory,
+            task_id,
+            REPO,
+            "task/test",
+            BASE,
+            NEXT,
+            "docs/handoff.md",
+            "repair",
         )
     with factory.transaction() as conn:
         conn.execute(
@@ -568,7 +583,14 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             {"id": task_id, "head": HEAD},
         )
     record_handoff(
-        repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
+        repo.factory,
+        task_id,
+        REPO,
+        "task/test",
+        BASE,
+        NEXT,
+        "docs/handoff.md",
+        "repair",
     )
     with repo.read() as db:
         assert not db.ci_approved((task_id, NEXT))
@@ -663,6 +685,42 @@ def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup):
         assert db.find_task((task_id,))["current_head_sha"] == NEXT
 
 
+def test_handoff_lock_timeout_is_sanitized_and_retry_succeeds(setup):
+    repo, task_id, factory = setup
+    authorize_task(factory, spec(task_id))
+    before = time.monotonic()
+    with factory.transaction() as conn:
+        conn.execute(
+            text("SELECT task_id FROM tasks WHERE task_id = :id FOR UPDATE"),
+            {"id": task_id},
+        )
+        with dispatch_budget(time.time() + 1.5):
+            with pytest.raises(
+                PersistenceUnavailableError, match="PostgreSQL unit of work failed"
+            ) as error:
+                record_handoff(
+                    factory,
+                    task_id,
+                    REPO,
+                    "task/test",
+                    BASE,
+                    HEAD,
+                    "docs/handoff.md",
+                    "passed",
+                )
+    assert error.value.__cause__ is None
+    assert time.monotonic() - before < 6
+    with repo.read() as unit:
+        task = unit.find_task((task_id,))
+        assert task["status"] == "AWAITING_HANDOFF"
+        assert task["current_head_sha"] is None
+        assert len(unit.list_events((task_id,))) == 1
+    result = record_handoff(
+        factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "passed"
+    )
+    assert result.head_sha == HEAD
+
+
 def test_null_handoff_sha_does_not_match(setup):
     repo, task_id, _ = setup
     authorize_task(repo.factory, spec(task_id))
@@ -680,6 +738,35 @@ def test_null_handoff_sha_does_not_match(setup):
         )
         assert db.find_head_handoff(task_id, None) is None
         assert isinstance(db.find_authorization((task_id,))["metadata"], str)
+
+
+def test_handoff_repository_chooses_latest_matching_event_and_ignores_null(setup):
+    repo, task_id, factory = setup
+    ready(repo, task_id)
+    with repo.transaction() as unit:
+        for action, sha, path in (
+            ("CI_REPAIR_HANDOFF", HEAD, "latest"),
+            ("HANDOFF", NEXT, "different head"),
+            ("HANDOFF", None, "null head"),
+            ("LOCAL_AUTHORIZATION", HEAD, "different action"),
+        ):
+            unit.insert_event(
+                (
+                    task_id,
+                    None,
+                    "READY_IN_REVIEW",
+                    action,
+                    sha,
+                    0,
+                    json.dumps({"handoff_file_path": path}),
+                )
+            )
+    with factory.get_scoped_session() as session:
+        handoff = PostgresHandoffRepository(session)
+        with SqlAlchemyUnitOfWork(session):
+            assert handoff.handoff_path(task_id, None) == (False, None)
+            assert handoff.handoff_path(task_id, HEAD) == (True, "latest")
+            assert handoff.handoff_path(task_id, NEXT) == (True, "different head")
 
 
 def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeypatch):
@@ -701,7 +788,7 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     with pytest.raises(ToolError, match="conflicting duplicate"):
         mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
     record_handoff(
-        repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
+        repo.factory, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
     )
     claim2 = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": NEXT}

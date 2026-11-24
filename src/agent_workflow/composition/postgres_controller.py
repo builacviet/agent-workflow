@@ -1,4 +1,7 @@
-"""Prepare PostgreSQL Controller dispatch dependencies without running them."""
+"""Layer: Composition
+Responsibility: Assemble PostgreSQL Controller dependencies on a shared open factory.
+Dependencies: Application operations and PostgreSQL adapters.
+"""
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -7,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.application.ci.ports import ICiWriteRepository
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
@@ -19,7 +23,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     PostgresLeadershipLock,
 )
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,7 @@ class ControllerCiSessionProvider:
 
 @dataclass(frozen=True)
 class ControllerDependencies:
-    workflow: PostgresWorkflowRepository
+    handoff_provider: PostgresHandoffProvider
     dispatch: PostgresDispatchLedger
     ci_tracking: TrackCiTaskUseCase
     ci_repository: ICiWriteRepository
@@ -55,7 +58,7 @@ def compose_postgres_controller(factory: PostgresFactory) -> ControllerDependenc
 
     ci_repository = SqlAlchemyCiStateRepository(ControllerCiSessionProvider(factory))
     return ControllerDependencies(
-        workflow=PostgresWorkflowRepository(factory),
+        handoff_provider=PostgresHandoffProvider(factory),
         dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
         ci_tracking=TrackCiTaskUseCase(ci_repository),
         ci_repository=ci_repository,

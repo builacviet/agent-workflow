@@ -4,7 +4,6 @@ Dependencies: Application operations and PostgreSQL adapters.
 """
 
 from collections.abc import Callable
-from time import time
 from typing import cast
 
 from agent_workflow.app_config import AppConfig
@@ -18,35 +17,25 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
     GetCoderAssignmentUseCase,
 )
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
-)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 def create_dispatch_use_case(
     config: dict, app_config: AppConfig, factory: PostgresFactory
 ) -> RunDispatchPassUseCase:
     dependencies = compose_postgres_controller(factory)
+    handoff_provider = dependencies.handoff_provider
     if (
-        not isinstance(dependencies.workflow, PostgresWorkflowRepository)
-        or dependencies.workflow.factory is not factory
+        type(handoff_provider) is not PostgresHandoffProvider
+        or handoff_provider.factory is not factory
     ):
-        raise TypeError(
-            "Controller assignment must use the composed PostgreSQL workflow"
-        )
+        raise TypeError("Dispatch requires the composed PostgreSQL handoff provider")
     assignment = GetCoderAssignmentUseCase(create_get_review_context_use_case(factory))
-    handoff = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(dependencies.workflow), clock=time
-    )
     runtime = None
 
     def execute_worker(
@@ -57,7 +46,7 @@ def create_dispatch_use_case(
         nonlocal runtime
         guard()
         runtime = compose_postgres_worker(
-            config, handoff, dependencies, leadership_guard=guard
+            config, handoff_provider, dependencies, leadership_guard=guard
         )
         guard()
         return runtime.execute_assignment(claim, cast(DispatchAssignment, context))
