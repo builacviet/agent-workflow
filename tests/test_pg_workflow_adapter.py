@@ -25,7 +25,9 @@ from agent_workflow.application.review.use_cases.claim_review import ClaimReview
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
-from agent_workflow.application.review.use_cases.submit_review import SubmitReviewUseCase
+from agent_workflow.application.review.use_cases.submit_review import (
+    SubmitReviewUseCase,
+)
 from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
     SubmitReviewInput,
@@ -124,10 +126,14 @@ def setup():
 
 def ready(repo, task_id):
     authorize_task(repo.factory, spec(task_id))
-    record_handoff(repo, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test")
+    record_handoff(
+        repo, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
+    )
 
 
-def claim_task(repo, task_id, head, reviewer, *, require_ci=False, clock=None, lease=900):
+def claim_task(
+    repo, task_id, head, reviewer, *, require_ci=False, clock=None, lease=900
+):
     operation = ClaimReviewUseCase(
         PostgresReviewWriteScope(repo),
         clock=clock or (lambda: 1000.0),
@@ -145,7 +151,9 @@ def submit_task(repo, data, reviewer, *, clock=None, require_ci=False):
         token=lambda: uuid.uuid4().hex,
         require_ci=require_ci,
     )
-    return asdict(operation.execute(SubmitReviewInput(Submission.model_validate(data), reviewer)))
+    return asdict(
+        operation.execute(SubmitReviewInput(Submission.model_validate(data), reviewer))
+    )
 
 
 def read_context(repo, task_id):
@@ -288,11 +296,13 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("verdict", ["APPROVED", "ESCALATED"])
-def test_mcp_context_and_result_preserve_persisted_history(setup, mcp_postgres, verdict):
+def test_mcp_context_and_result_preserve_persisted_history(
+    setup, mcp_postgres, verdict
+):
     repo, task_id, _ = setup
     arguments = {"task_id": task_id}
-    authorize_task(repo.factory, 
-        {**spec(task_id), "context_paths": ["docs/review context.md"]}
+    authorize_task(
+        repo.factory, {**spec(task_id), "context_paths": ["docs/review context.md"]}
     )
 
     def assert_history(status, head, rounds):
@@ -317,11 +327,19 @@ def test_mcp_context_and_result_preserve_persisted_history(setup, mcp_postgres, 
         (HEAD, "CHANGES_REQUESTED", {}),
         (NEXT, verdict, {"F-1": "FIXED" if verdict == "APPROVED" else "NOT_FIXED"}),
     ):
-        record_handoff(repo, 
-            task_id, REPO, "task/test", BASE, sha, "docs/review context.md", "test"
+        record_handoff(
+            repo,
+            task_id,
+            REPO,
+            "task/test",
+            BASE,
+            sha,
+            "docs/review context.md",
+            "test",
         )
         claim = claim_task(repo, task_id, sha, "lead")
-        submit_task(repo, 
+        submit_task(
+            repo,
             payload(
                 claim,
                 outcome,
@@ -352,9 +370,7 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
     }
     with repo.read() as unit:
         assert unit.find_claim((claim["claim_token"], task_id))["status"] == "EXPIRED"
-    assert (
-        read_context(repo, task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
-    )
+    assert read_context(repo, task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
 
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with factory.transaction() as conn:
@@ -375,15 +391,17 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
         "tasks": []
     }
     assert mcp_postgres("list_review_queue", {"requested_effort": "medium"}) == {
-        "tasks": [{
-            "task_id": task_id,
-            "title": spec(task_id)["title"],
-            "repository": REPO,
-            "branch": "task/test",
-            "head_sha": HEAD,
-            "requested_effort": "medium",
-            "review_round": 1,
-        }]
+        "tasks": [
+            {
+                "task_id": task_id,
+                "title": spec(task_id)["title"],
+                "repository": REPO,
+                "branch": "task/test",
+                "head_sha": HEAD,
+                "requested_effort": "medium",
+                "review_round": 1,
+            }
+        ]
     }
 
 
@@ -542,8 +560,8 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             {"id": task_id, "head": HEAD},
         )
     with pytest.raises(WorkflowError, match="not authorized"):
-        record_handoff(repo, 
-            task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
+        record_handoff(
+            repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
         )
     with factory.transaction() as conn:
         conn.execute(
@@ -552,8 +570,8 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             ),
             {"id": task_id, "head": HEAD},
         )
-    record_handoff(repo, 
-        task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
+    record_handoff(
+        repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
     )
     with repo.read() as db:
         assert not db.ci_approved((task_id, NEXT))
@@ -685,8 +703,8 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     }
     with pytest.raises(ToolError, match="conflicting duplicate"):
         mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
-    record_handoff(repo, 
-        task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
+    record_handoff(
+        repo, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
     )
     claim2 = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": NEXT}

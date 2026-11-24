@@ -81,7 +81,9 @@ def pg_authorization():
             yield factory, spec
         finally:
             with factory.transaction() as connection:
-                connection.execute(delete(TaskEvent).where(TaskEvent.task_id == task_id))
+                connection.execute(
+                    delete(TaskEvent).where(TaskEvent.task_id == task_id)
+                )
                 connection.execute(delete(Task).where(Task.task_id == task_id))
 
 
@@ -211,10 +213,17 @@ def test_operator_cli_readback_preserves_history(
     RegisterTaskHandoffUseCase(
         PostgresHandoffScope(PostgresWorkflowRepository(factory)),
         clock=lambda: task["updated_at"] + 1,
-    ).execute(HandoffRequest(
-        spec.task_id, REPOSITORY, spec.branch, spec.base_sha, "b" * 40,
-        "docs/handoff.md", "Disposable test",
-    ))
+    ).execute(
+        HandoffRequest(
+            spec.task_id,
+            REPOSITORY,
+            spec.branch,
+            spec.base_sha,
+            "b" * 40,
+            "docs/handoff.md",
+            "Disposable test",
+        )
+    )
     before = read_rows(factory, spec.task_id)
     authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before

@@ -19,6 +19,7 @@ from agent_workflow.composition import (
 )
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
+
 @pytest.mark.parametrize(
     ("env_value", "expected"),
     [(None, True), ("0", False), ("1", True)],

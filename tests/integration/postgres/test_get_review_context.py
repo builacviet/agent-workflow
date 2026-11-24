@@ -90,7 +90,9 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
 ) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
-        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
+        operation.execute(
+            ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command()
+        )
     request = GetReviewContextInput(task_id)
     original_list = SqlAlchemyReviewRepository.list_events
     read_connections: list[Connection] = []
@@ -113,7 +115,11 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
         RegisterTaskHandoffUseCase(
             PostgresHandoffScope(PostgresWorkflowRepository(factory)),
             clock=lambda: 1000.0,
-        ).execute(HandoffRequest(task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"))
+        ).execute(
+            HandoffRequest(
+                task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"
+            )
+        )
         return original_list(repository, requested_task_id)
 
     connection_scope = Mock(wraps=factory.connect_session)
@@ -138,7 +144,9 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
 ) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
-        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
+        operation.execute(
+            ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command()
+        )
     request = GetReviewContextInput(task_id)
     use_case = create_get_review_context_use_case(factory)
     failed_connections: list[Connection] = []
@@ -178,7 +186,9 @@ def test_context_rejects_unknown_persisted_event_status(
 ) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
-        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
+        operation.execute(
+            ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command()
+        )
     with factory.transaction() as connection:
         connection.execute(
             update(TaskEvent)
@@ -196,7 +206,9 @@ def test_context_rejects_invalid_metadata_without_exposing_values(
 ) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
-        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
+        operation.execute(
+            ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command()
+        )
     with factory.transaction() as connection:
         connection.execute(
             update(Task)
