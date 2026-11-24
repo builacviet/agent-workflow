@@ -5,13 +5,14 @@ Dependencies: Domain errors and immutable review facts.
 
 from dataclasses import dataclass
 
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @dataclass(frozen=True)
 class TaskFacts:
     task_id: str
-    status: str
+    status: WorkflowStatus
     head: str | None
     base: str
     rounds: int
@@ -34,7 +35,7 @@ def require_ci(required: bool, handoff: str | None, success: bool) -> bool:
 
 
 def claim_allowed(task: TaskFacts, sha: str, ci_ok: bool, active: bool) -> None:
-    if task.status != "READY_IN_REVIEW" or task.rounds >= 2 or active:
+    if task.status != WorkflowStatus.READY_IN_REVIEW or task.rounds >= 2 or active:
         raise WorkflowError("task is not reviewable")
     if sha != task.head:
         raise WorkflowError("stale claim SHA")
@@ -61,7 +62,7 @@ def submission_allowed(
         return True
     if claim.status != "ACTIVE" or claim.expires_at <= now:
         raise WorkflowError("claim expired; reclaim without consuming a round")
-    if task.status != "IN_REVIEW" or task.rounds >= 2:
+    if task.status != WorkflowStatus.IN_REVIEW or task.rounds >= 2:
         raise WorkflowError("task is not in an active review")
     if sha != task.head or sha != claim.expected_sha:
         raise WorkflowError("stale submission SHA")
@@ -83,15 +84,19 @@ def verdict_allowed(
         raise WorkflowError("all prior findings require explicit resolution")
     if len(set(new_ids)) != len(new_ids) or prior.intersection(new_ids):
         raise WorkflowError("finding identities must be new and unique")
-    failure = "CHANGES_REQUESTED" if round_number == 1 else "ESCALATED"
-    if verdict not in {"APPROVED", failure}:
+    failure = (
+        WorkflowStatus.CHANGES_REQUESTED
+        if round_number == 1
+        else WorkflowStatus.ESCALATED
+    )
+    if verdict not in {WorkflowStatus.APPROVED, failure}:
         raise WorkflowError("verdict violates two-round policy")
     unresolved = any(value != "FIXED" for value in resolutions.values())
-    if verdict == "APPROVED" and (new_ids or unresolved):
+    if verdict == WorkflowStatus.APPROVED and (new_ids or unresolved):
         raise WorkflowError(
             "approval requires no new findings and all prior findings fixed"
         )
-    if verdict != "APPROVED" and not new_ids and not unresolved:
+    if verdict != WorkflowStatus.APPROVED and not new_ids and not unresolved:
         raise WorkflowError(
             "failure verdict requires a code finding; operational limitations are not verdicts"
         )
@@ -101,7 +106,7 @@ def effort_allowed(
     task: TaskFacts, verdict: str, actual: str | None, evidence: str
 ) -> None:
     if (
-        verdict == "APPROVED"
+        verdict == WorkflowStatus.APPROVED
         and task.verified_effort
         and (actual != task.effort or not evidence or evidence == "unverified")
     ):

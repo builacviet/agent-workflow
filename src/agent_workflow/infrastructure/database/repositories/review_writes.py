@@ -9,6 +9,7 @@ from contextlib import contextmanager
 
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.review.policy import ClaimFacts, TaskFacts
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.storage.postgres_workflow import (
     PostgresWorkflowRepository,
     PostgresWorkflowUnit,
@@ -42,7 +43,7 @@ class PostgresReviewWrites:
             return None
         return TaskFacts(
             row["task_id"],
-            row["status"],
+            WorkflowStatus(row["status"]),
             row["current_head_sha"],
             row["base_sha"],
             row["completed_review_rounds"],
@@ -88,7 +89,7 @@ class PostgresReviewWrites:
 
     def expire(self, task: TaskFacts, claim: ClaimFacts, now: float) -> None:
         self.unit.expire_claim((claim.token,))
-        self.transition(task, "READY_IN_REVIEW", "LEASE_EXPIRED", now, {})
+        self.transition(task, WorkflowStatus.READY_IN_REVIEW, "LEASE_EXPIRED", now, {})
 
     def claim(self, task: TaskFacts, claim: ClaimFacts, now: float) -> None:
         self.unit.insert_claim(
@@ -101,7 +102,7 @@ class PostgresReviewWrites:
                 claim.expires_at,
             )
         )
-        self.transition(task, "IN_REVIEW", "CLAIM", now, {})
+        self.transition(task, WorkflowStatus.IN_REVIEW, "CLAIM", now, {})
 
     def submit(
         self,
@@ -151,7 +152,7 @@ class PostgresReviewWrites:
         self.unit.submit_claim((canonical, submission.claim_token))
         self.transition(
             task,
-            submission.verdict,
+            WorkflowStatus(submission.verdict),
             "REVIEW_SUBMITTED",
             now,
             {"review_id": review_id, "round": submission.review_round},

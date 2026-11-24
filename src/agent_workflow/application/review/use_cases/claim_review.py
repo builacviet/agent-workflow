@@ -13,6 +13,7 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ci_allows,
 )
 from agent_workflow.domain.review.policy import ClaimFacts, claim_allowed
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
 
 
@@ -43,7 +44,7 @@ class ClaimReviewUseCase:
             now = self.clock()
             if active and active.expires_at <= now:
                 repo.expire(task, active, now)
-                task = replace(task, status="READY_IN_REVIEW")
+                task = replace(task, status=WorkflowStatus.READY_IN_REVIEW)
                 active = None
             claim_allowed(
                 task,
