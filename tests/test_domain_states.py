@@ -1,7 +1,6 @@
 """Contract tests: new enums must not change existing DB/MCP wire values."""
 
 import json
-import sqlite3
 
 import pytest
 
@@ -40,15 +39,6 @@ def test_states_preserve_exact_string_contract(enum_type, expected):
         }
     with pytest.raises(ValueError):
         enum_type("UNRECOGNIZED")
-
-
-def test_sqlite_binds_enum_as_existing_text_value():
-    with sqlite3.connect(":memory:") as db:
-        db.execute("CREATE TABLE states(status TEXT NOT NULL)")
-        for member in (WorkflowStatus.READY_IN_REVIEW, CiVerdict.BLOCKED):
-            db.execute("INSERT INTO states VALUES(?)", (member,))
-        rows = db.execute("SELECT status FROM states ORDER BY rowid").fetchall()
-    assert rows == [("READY_IN_REVIEW",), ("BLOCKED",)]
 
 
 def test_escalated_is_a_valid_status_not_a_terminality_policy():

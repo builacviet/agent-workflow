@@ -36,18 +36,26 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
 from agent_workflow.composition.ci_deps import create_ci_state_adapters
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
+)
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffRepository,
+    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
@@ -526,14 +534,6 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     record = RecordCiEvidenceUseCase(repository).execute
-    from agent_workflow.application.task.use_cases.register_task_handoff import (
-        RegisterTaskHandoffUseCase,
-    )
-    from agent_workflow.domain.task.handoff import HandoffRequest
-    from agent_workflow.infrastructure.database.repositories.task_handoff import (
-        PostgresHandoffScope,
-    )
-
     operation = RegisterTaskHandoffUseCase(
         PostgresHandoffScope(service.repository), clock=lambda: 1000.0
     )
@@ -575,6 +575,92 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
         NEXT,
         previous,
     ]
+
+
+@pytest.fixture
+def failed_handoff(setup):
+    config, factory, service, task_id, _ = setup
+    operation = RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(service.repository), clock=lambda: 1000.0
+    )
+    request = HandoffRequest(
+        task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
+    )
+    operation.execute(request)
+    _, repository = create_ci_state_adapters(factory)
+    TrackCiTaskUseCase(repository).execute(task_id, PR, HEAD)
+    RecordCiEvidenceUseCase(repository).execute(evidence(task_id, "FAILURE"))
+    return config, operation, request
+
+
+def test_conflicting_repairs_commit_only_one_head(failed_handoff):
+    config, operation, request = failed_handoff
+
+    def propose(head):
+        try:
+            operation.execute(replace(request, new_head_sha=head))
+        except WorkflowError as exc:
+            assert "repair" in str(exc).lower()
+            return
+        winners.append(head)
+
+    winners = []
+    run_race(lambda: propose(NEXT), lambda: propose("c" * 40))
+    assert len(winners) == 1
+    winner = winners[0]
+    with PostgresFactory.open(config) as restarted:
+        reader, _ = create_ci_state_adapters(restarted)
+        assert reader.tracked() == (
+            CiTrackedTaskSnapshot(request.task_id, PR, winner, "BLOCKED", 1),
+        )
+        with PostgresWorkflowRepository(restarted).read() as unit:
+            assert unit.find_task((request.task_id,))["current_head_sha"] == winner
+            actions = [
+                event["action"] for event in unit.list_events((request.task_id,))
+            ]
+            assert actions == [
+                "LOCAL_AUTHORIZATION",
+                "HANDOFF",
+                "CI_REPAIR_HANDOFF",
+            ]
+
+
+def test_failed_repair_rolls_back_head_event_and_ci_binding(failed_handoff, monkeypatch):
+    config, operation, request = failed_handoff
+    original = PostgresHandoffRepository.record
+
+    def fail_after_writes(self, *args):
+        original(self, *args)
+        raise RuntimeError("synthetic repair write failure")
+
+    correction = replace(request, new_head_sha=NEXT)
+    with monkeypatch.context() as patch:
+        patch.setattr(PostgresHandoffRepository, "record", fail_after_writes)
+        with pytest.raises(RuntimeError, match="synthetic repair write failure"):
+            operation.execute(correction)
+    with PostgresFactory.open(config) as restarted:
+        reader, _ = create_ci_state_adapters(restarted)
+        assert reader.tracked() == (
+            CiTrackedTaskSnapshot(request.task_id, PR, HEAD, "FAILURE", 0),
+        )
+        assert reader.previous_failure(request.task_id, HEAD)
+        with PostgresWorkflowRepository(restarted).read() as unit:
+            assert unit.find_task((request.task_id,))["current_head_sha"] == HEAD
+            actions = [
+                event["action"] for event in unit.list_events((request.task_id,))
+            ]
+            assert actions == [
+                "LOCAL_AUTHORIZATION",
+                "HANDOFF",
+            ]
+        retry = RegisterTaskHandoffUseCase(
+            PostgresHandoffScope(PostgresWorkflowRepository(restarted)),
+            clock=lambda: 1000.0,
+        )
+        assert retry.execute(correction).head_sha == NEXT
+        assert reader.tracked() == (
+            CiTrackedTaskSnapshot(request.task_id, PR, NEXT, "BLOCKED", 1),
+        )
 
 
 def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):

@@ -20,16 +20,15 @@ from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
-from agent_workflow.storage.repository import WorkflowError
 
 
 @pytest.fixture
@@ -98,11 +97,11 @@ def test_concurrent_claim_block_restart_and_replay(setup):
     assert not restarted.is_pre_launch(claim["dispatch_id"])
     restarted.block(claim["dispatch_id"])
     assert restarted.claim({task_id}, 60) is None
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         restarted.finish(claim["dispatch_id"], HEAD)
     restarted.acknowledge(claim["dispatch_id"])
     assert restarted.claim({task_id}, 60) is None
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         restarted.acknowledge(claim["dispatch_id"])
 
 
@@ -156,7 +155,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         dispatch_id = claim["dispatch_id"]
         ledger.retire_pre_launch(dispatch_id)
         if fault == "uncertain-publish":
-            raise WorkflowError(diagnostic)
+            raise BusinessRuleError(diagnostic)
         ledger.record_runtime_evidence(
             dispatch_id,
             task_id,
@@ -185,7 +184,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
             dispatch.execute({task_id}, 60)
     else:
-        with pytest.raises(WorkflowError, match=diagnostic):
+        with pytest.raises(BusinessRuleError, match=diagnostic):
             dispatch.execute({task_id}, 60)
 
     with PostgresFactory.open(
@@ -232,16 +231,16 @@ def test_evidence_identity_and_finish(setup):
         "d" * 64,
         HEAD,
     )
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         ledger.record_runtime_evidence(
             claim["dispatch_id"], task_id, NEXT, *evidence[3:]
         )
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         ledger.record_runtime_evidence(claim["dispatch_id"], "wrong", *evidence[2:])
     ledger.record_runtime_evidence(*evidence)
     with pytest.raises(IntegrityError):
         ledger.record_runtime_evidence(*evidence)
-    with pytest.raises(WorkflowError, match="HEAD mismatch"):
+    with pytest.raises(BusinessRuleError, match="HEAD mismatch"):
         ledger.finish(claim["dispatch_id"], NEXT)
     assert ledger.claim({task_id}, 60) is None
     ledger.finish(claim["dispatch_id"], HEAD)
@@ -251,12 +250,32 @@ def test_evidence_identity_and_finish(setup):
 def test_unsupported_role_and_invalid_timeout(setup):
     ledger, _, factory, task_id = setup
     for role, phase in [("reviewer", "code"), ("dev", "test"), ("", "")]:
-        with pytest.raises(WorkflowError):
+        with pytest.raises(BusinessRuleError):
             PostgresDispatchLedger(factory, role=role, phase=phase)
-    for timeout in (0, 3601, True):
-        with pytest.raises(WorkflowError):
+    for timeout in (0, 59, 3601, True, 1.5):
+        with pytest.raises(BusinessRuleError):
             ledger.claim({task_id}, timeout)
     assert ledger.claim({task_id}, 60) is not None
+
+
+def test_claim_rejects_ineligible_status_round_and_task(setup):
+    ledger, _, factory, task_id = setup
+    assert ledger.claim({"UNKNOWN"}, 60) is None
+    for status, rounds in (
+        ("APPROVED", 1),
+        ("ESCALATED", 2),
+        ("READY_IN_REVIEW", 0),
+        ("IN_REVIEW", 0),
+        ("CHANGES_REQUESTED", 2),
+    ):
+        with factory.transaction() as conn:
+            conn.execute(
+                text(
+                    "UPDATE tasks SET status=:status, completed_review_rounds=:rounds WHERE task_id=:task"
+                ),
+                {"status": status, "rounds": rounds, "task": task_id},
+            )
+        assert ledger.claim({task_id}, 60) is None
 
 
 def test_lock_wait_is_bounded_and_retries(setup):
@@ -298,35 +317,6 @@ def test_new_round_and_sha_are_new_identity(setup):
     assert second["dispatch_id"] != first["dispatch_id"]
 
 
-def test_sqlite_postgres_claim_parity_and_restart(setup, tmp_path):
-    ledger, _, _, task_id = setup
-    sqlite_service = WorkflowService(
-        tmp_path / "dispatch.sqlite", require_ci=False, clock=lambda: 1000.0
-    )
-    sqlite_service.provision_task(spec(task_id))
-    sqlite = DispatchLedger(sqlite_service, clock=lambda: 1000.0)
-    pg_claim = ledger.claim({task_id}, 60, track_pre_launch=True)
-    sqlite_claim = sqlite.claim({task_id}, 60, track_pre_launch=True)
-    for claim in (pg_claim, sqlite_claim):
-        claim.pop("dispatch_id")
-    assert pg_claim == sqlite_claim
-    dsn = os.environ["PG_TEST_DSN"]
-    with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as restarted_factory:
-        restarted = PostgresDispatchLedger(restarted_factory, role="dev", phase="code")
-        assert restarted.claim({task_id}, 60) is None
-        with restarted_factory.transaction() as connection:
-            dispatch_id = connection.execute(
-                text("SELECT dispatch_id FROM agent_dispatches WHERE task_id=:task"),
-                {"task": task_id},
-            ).scalar_one()
-        restarted.block(dispatch_id)
-    with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as restarted_factory:
-        restarted = PostgresDispatchLedger(restarted_factory, role="dev", phase="code")
-        assert restarted.claim({task_id}, 60) is None
-        restarted.acknowledge(dispatch_id)
-        assert restarted.claim({task_id}, 60) is None
-
-
 def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
     ledger, _, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
@@ -340,16 +330,16 @@ def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
         "d" * 64,
         HEAD,
     )
-    with pytest.raises(WorkflowError, match="no active matching dispatch"):
+    with pytest.raises(BusinessRuleError, match="no active matching dispatch"):
         ledger.record_runtime_evidence("f" * 32, *evidence)
     with factory.transaction() as conn:
         conn.execute(
             text("UPDATE agent_dispatches SET role='other' WHERE dispatch_id=:id"),
             {"id": claim["dispatch_id"]},
         )
-    with pytest.raises(WorkflowError, match="no active matching dispatch"):
+    with pytest.raises(BusinessRuleError, match="no active matching dispatch"):
         ledger.record_runtime_evidence(claim["dispatch_id"], *evidence)
-    with pytest.raises(WorkflowError, match="lease lost"):
+    with pytest.raises(BusinessRuleError, match="lease lost"):
         ledger.finish(claim["dispatch_id"], HEAD)
     with factory.transaction() as conn:
         assert (
@@ -419,7 +409,7 @@ def test_claim_deadline_before_outer_commit_releases_slot(
 def test_finish_without_evidence_fails_and_retains_slot(setup):
     ledger, _, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
-    with pytest.raises(WorkflowError, match="runtime evidence required"):
+    with pytest.raises(BusinessRuleError, match="runtime evidence required"):
         ledger.finish(claim["dispatch_id"], HEAD)
     with factory.transaction() as conn:
         row = conn.execute(
@@ -473,7 +463,7 @@ def test_tampered_evidence_identity_keeps_slot(setup):
             ),
             {"sha": NEXT, "id": claim["dispatch_id"]},
         )
-    with pytest.raises(WorkflowError, match="identity mismatch"):
+    with pytest.raises(BusinessRuleError, match="identity mismatch"):
         ledger.finish(claim["dispatch_id"], HEAD)
     assert ledger.claim({task_id}, 60) is None
 
@@ -613,7 +603,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
     try:
         if fault:
-            with pytest.raises((RuntimeError, WorkflowError, PermissionError)):
+            with pytest.raises((RuntimeError, BusinessRuleError, PermissionError)):
                 run_dispatch()
         else:
             assert run_dispatch()
