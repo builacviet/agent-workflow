@@ -4,6 +4,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import HEAD, NEXT, spec
 
+from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import dispatch_budget
@@ -31,13 +33,14 @@ from agent_workflow.storage.repository import WorkflowError
 
 
 @pytest.fixture
-def setup():
+def setup(request):
     dsn = os.environ.get("PG_TEST_DSN")
     if not dsn:
         pytest.skip("disposable PG_TEST_DSN not supplied")
     if make_url(dsn).database not in {"workflow_test", "workflow_ci"}:
         pytest.fail("dispatch tests require workflow_test or workflow_ci")
     task_id = "PG02C-" + uuid.uuid4().hex
+    task_keys = {"task": task_id, "other": task_id + "-NEXT"}
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
         service = WorkflowService(
             repository=PostgresWorkflowRepository(factory),
@@ -49,25 +52,30 @@ def setup():
             factory, role="dev", phase="code", clock=lambda: 1000.0
         )
         try:
+            if getattr(request, "param", False):
+                service.provision_task(spec(task_keys["other"]))
             yield ledger, service, factory, task_id
         finally:
             with factory.transaction() as conn:
                 conn.execute(
                     text(
-                        "DELETE FROM agent_execution_evidence WHERE dispatch_id IN (SELECT dispatch_id FROM agent_dispatches WHERE task_id=:task)"
+                        "DELETE FROM agent_execution_evidence WHERE dispatch_id IN (SELECT dispatch_id FROM agent_dispatches WHERE task_id IN (:task, :other))"
                     ),
-                    {"task": task_id},
+                    task_keys,
                 )
                 conn.execute(
-                    text("DELETE FROM agent_dispatches WHERE task_id=:task"),
-                    {"task": task_id},
+                    text(
+                        "DELETE FROM agent_dispatches WHERE task_id IN (:task, :other)"
+                    ),
+                    task_keys,
                 )
                 conn.execute(
-                    text("DELETE FROM task_events WHERE task_id=:task"),
-                    {"task": task_id},
+                    text("DELETE FROM task_events WHERE task_id IN (:task, :other)"),
+                    task_keys,
                 )
                 conn.execute(
-                    text("DELETE FROM tasks WHERE task_id=:task"), {"task": task_id}
+                    text("DELETE FROM tasks WHERE task_id IN (:task, :other)"),
+                    task_keys,
                 )
 
 
@@ -131,6 +139,83 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
     ledger.acknowledge(claim["dispatch_id"])
     assert not next_owner_attempt()
     simulated_publish.assert_not_called()
+
+
+@pytest.mark.parametrize("setup", [True], indirect=True)
+@pytest.mark.parametrize("fault", ["uncertain-publish", "late-result"])
+def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, fault):
+    _, service, factory, task_id = setup
+    ledger = PostgresDispatchLedger(factory, role="dev", phase="code")
+    leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
+    finish_cleanup = Mock()
+    diagnostic = "private publication diagnostic"
+
+    def execute(claim, context, guard):
+        assert context["task_id"] == task_id
+        guard()
+        dispatch_id = claim["dispatch_id"]
+        ledger.retire_pre_launch(dispatch_id)
+        if fault == "uncertain-publish":
+            raise WorkflowError(diagnostic)
+        ledger.record_runtime_evidence(
+            dispatch_id,
+            task_id,
+            claim["input_sha"],
+            "codex",
+            "1.0",
+            None,
+            "UNVERIFIED",
+            "d" * 64,
+            HEAD,
+        )
+        monkeypatch.setattr(
+            budget,
+            "time",
+            SimpleNamespace(
+                time=lambda: claim["deadline"] + 1, monotonic=time.monotonic
+            ),
+        )
+        return HEAD
+
+    worker = Mock(side_effect=execute)
+    dispatch = RunDispatchPassUseCase(
+        leadership, ledger, service, worker, on_finished=finish_cleanup
+    )
+    if fault == "late-result":
+        with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
+            dispatch.execute({task_id}, 60)
+    else:
+        with pytest.raises(WorkflowError, match=diagnostic):
+            dispatch.execute({task_id}, 60)
+
+    with PostgresFactory.open(
+        AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
+    ) as fresh:
+        successor = RunDispatchPassUseCase(
+            PostgresLeadershipLock(fresh, LeadershipDomain.CONTROLLER),
+            PostgresDispatchLedger(fresh, role="dev", phase="code"),
+            service,
+            worker,
+            on_finished=finish_cleanup,
+        )
+        with fresh.transaction() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT status, slot, result_sha, detail FROM agent_dispatches "
+                    "WHERE task_id=:task_id"
+                ),
+                {"task_id": task_id},
+            ).one()
+        assert tuple(row[:3]) == ("BLOCKED", 1, None)
+        assert diagnostic not in row.detail
+        assert not successor.execute({task_id}, 60)
+        assert not successor.execute({task_id + "-NEXT"}, 60)
+
+    context = service.get_review_context(task_id)
+    assert context["status"] == "AWAITING_HANDOFF"
+    assert [event["action"] for event in context["events"]] == ["LOCAL_AUTHORIZATION"]
+    worker.assert_called_once()
+    finish_cleanup.assert_not_called()
 
 
 def test_evidence_identity_and_finish(setup):

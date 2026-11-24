@@ -3,17 +3,22 @@
 Tests never access live GitHub, Docker, credentials or production state.
 """
 
-from argparse import Namespace
+import json
+import sys
 from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.bootstrap import controller_entrypoint as controller
 from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
+from agent_workflow.composition import (
+    postgres_dispatch_deps,
+    postgres_dispatch_entrypoint,
+)
 from agent_workflow.domain.service import WorkflowService, default_service
 from agent_workflow.integrations.github import REPOSITORY
-from agent_workflow.orchestration import controller
 from agent_workflow.storage.postgres_connection import PostgresFactory
 
 BASE = "a" * 40
@@ -120,67 +125,57 @@ def test_direct_service_is_fail_closed_even_when_env_requests_bypass(
     [(None, True), ("0", False), ("1", True)],
 )
 def test_controller_injects_same_policy_without_docker_launch(
-    tmp_path,
-    monkeypatch,
-    env_value,
-    expected,
+    monkeypatch, env_value, expected
 ):
-    from agent_workflow.runners import coder_runtime
-
     if env_value is None:
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
-    seen = []
+    factory = Mock()
+    dependencies = Mock()
+    compose = Mock(return_value=dependencies)
+    service = Mock(wraps=WorkflowService)
+    launch = Mock(side_effect=AssertionError("composition must not launch Worker"))
+    monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_controller", compose)
+    monkeypatch.setattr(postgres_dispatch_deps, "WorkflowService", service)
+    monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_worker", launch)
 
-    class StubRuntime:
-        def __init__(self, config, service):
-            pass
+    postgres_dispatch_deps.create_dispatch_use_case({}, AppConfig.from_env(), factory)
 
-        def execute(self, claim, context):
-            raise AssertionError("fake Controller never executes Docker")
-
-        def release_engine(self, dispatch_id):
-            raise AssertionError("fake Controller never releases engines")
-
-    def fake_run_once(service, ledger, task_ids, execute, timeout, **kwargs):
-        seen.append(service.require_ci)
-        return False
-
-    monkeypatch.setattr(coder_runtime, "CoderRuntime", StubRuntime)
-    monkeypatch.setattr(controller, "run_once", fake_run_once)
-    controller.operate(
-        {"database": str(tmp_path / "controller.db"), "tasks": []},
-        Namespace(ci_once=False, ci_watch=False, acknowledge=None, once=True),
+    compose.assert_called_once_with(factory)
+    service.assert_called_once_with(
+        repository=dependencies.workflow, require_ci=expected
     )
-    assert seen == [expected]
+    launch.assert_not_called()
 
 
 def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch, capsys
 ):
-    from agent_workflow.runners import coder_runtime
-
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "false")
     monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
-    path = tmp_path / "controller.db"
-    monkeypatch.setenv("WFC_DB_PATH", str(path))
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@localhost/test"
+    )
+    open_database = Mock(side_effect=AssertionError("database must not open"))
+    monkeypatch.setattr(PostgresFactory, "open", open_database)
+    compose = Mock(side_effect=AssertionError("invalid config must not compose"))
+    monkeypatch.setattr(
+        postgres_dispatch_entrypoint, "compose_dispatch_execution", compose
+    )
+    config = tmp_path / "controller.json"
+    config.write_text(json.dumps({}))
+    monkeypatch.setattr(sys, "argv", ["controller", str(config), "--once"])
+
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
         postgres_workflow_provider()
-    assert not path.exists()
+    with pytest.raises(SystemExit) as error:
+        controller.main()
 
-    class MustNotLaunch:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("invalid config must not launch worker")
-
-    monkeypatch.setattr(coder_runtime, "CoderRuntime", MustNotLaunch)
-    with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
-        controller.operate(
-            {"database": str(path), "tasks": []},
-            Namespace(ci_once=False, ci_watch=False, acknowledge=None, once=True),
-        )
-    assert not path.exists()
+    assert error.value.code == 1
+    assert "configuration" in capsys.readouterr().err
+    open_database.assert_not_called()
+    compose.assert_not_called()
 
 
 @pytest.mark.parametrize("invalid", [None, "true", "0", 1, 0, [], {}])

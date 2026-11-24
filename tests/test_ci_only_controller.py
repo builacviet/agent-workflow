@@ -1,11 +1,9 @@
 """V1-03C: CI-only entry point cannot dispatch agents or require worker PEM."""
 
 import json
-import runpy
 import subprocess
 import sys
 import textwrap
-from argparse import Namespace
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -14,11 +12,10 @@ import pytest
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import ApplicationError
+from agent_workflow.bootstrap import controller_entrypoint as controller
 from agent_workflow.composition import postgres_ci_entrypoint
-from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
-from agent_workflow.orchestration import controller
 
 
 def _evidence(observed_count, blocked_count):
@@ -34,27 +31,16 @@ def test_ci_mode_requires_postgres_before_any_fallback(monkeypatch, tmp_path, mo
     config_file.write_text("{}")
     monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
-    monkeypatch.setattr(
-        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
-    )
-    monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
 
     with pytest.raises(SystemExit) as error:
         controller.main()
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("flag", ["ci_once", "ci_watch"])
-def test_legacy_operate_refuses_ci_only_modes(flag):
-    with pytest.raises(WorkflowError, match="require the PostgreSQL CLI entrypoint"):
-        controller.operate({"database": "unused"}, Namespace(**{flag: True}))
-
-
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
 @pytest.mark.parametrize("failure", [None, PermissionError("leadership lost")])
-@pytest.mark.parametrize("pg_only", [False, True])
 def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
-    monkeypatch, tmp_path, mode, failure, pg_only
+    monkeypatch, tmp_path, mode, failure
 ):
     config_file = tmp_path / "controller.json"
     config = {"controller_github_app": {}}
@@ -62,10 +48,6 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     dsn = "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     monkeypatch.setenv("PG_RUNTIME_DSN", dsn)
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
-    monkeypatch.setattr(
-        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
-    )
-    monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
     calls = []
     reconcile = Mock()
 
@@ -100,19 +82,11 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         ci_cli, "run_ci_watch", lambda operation: run_handler("watch", operation)
     )
 
-    def launch():
-        if pg_only:
-            runpy.run_module(
-                "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
-            )
-        else:
-            controller.main()
-
     if failure is None:
-        launch()
+        controller.main()
     else:
         with pytest.raises(SystemExit) as error:
-            launch()
+            controller.main()
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
@@ -159,9 +133,10 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
-    # Other tests import the legacy Controller, so use a fresh interpreter.
+    # A fresh interpreter exposes every attempted import during CLI startup.
     script = textwrap.dedent("""
         import runpy
+        import sqlite3
         import sys
         from contextlib import contextmanager
         from functools import partial
@@ -183,6 +158,11 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
         assert not blocked.intersection(sys.modules)
         sys.meta_path.insert(0, BlockDispatchImports())
 
+        def no_sqlite(*args, **kwargs):
+            raise AssertionError("CI tried to connect to SQLite")
+
+        sqlite3.connect = no_sqlite
+
         from agent_workflow.composition import postgres_ci_entrypoint
         from agent_workflow.interfaces.cli import ci_controller
 
@@ -202,7 +182,7 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
             ci_controller.run_ci_watch, stop=lambda: bool(requests)
         )
         runpy.run_module(
-            "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
+            "agent_workflow.controller", run_name="__main__"
         )
         assert requests == [ci_controller.CiRunRequest(startup=True)]
         assert not blocked.intersection(sys.modules)
@@ -241,16 +221,10 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags, c
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), *flags])
-    monkeypatch.setattr(
-        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
-    )
     with pytest.raises(SystemExit) as error:
         controller.main()
-    if "--ci-once" in flags or "--ci-watch" in flags:
-        assert error.value.code == 2
-    else:
-        assert error.value.code == 1
-        assert "PostgreSQL supports only" in capsys.readouterr().err
+    assert error.value.code == 2
+    assert "exactly one supported mode" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
@@ -259,9 +233,6 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     config_file.write_text("{}")
     monkeypatch.setenv("PG_RUNTIME_DSN", "")
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
-    monkeypatch.setattr(
-        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
-    )
     with pytest.raises(SystemExit) as error:
         controller.main()
     assert error.value.code == 2
@@ -291,10 +262,6 @@ def test_invalid_controller_app_config_exits_two_without_database_or_sqlite(
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--ci-once"])
-    monkeypatch.setattr(
-        controller, "process_lock", lambda *_: pytest.fail("SQLite lock")
-    )
-    monkeypatch.setattr(controller, "operate", lambda *_: pytest.fail("SQLite route"))
     open_database = Mock(side_effect=AssertionError("database must not open"))
     monkeypatch.setattr(postgres_ci_entrypoint.PostgresFactory, "open", open_database)
 

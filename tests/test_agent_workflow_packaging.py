@@ -50,7 +50,6 @@ def test_installed_default_preserves_legacy_state_path(monkeypatch, tmp_path):
         ("service", "domain"),
         ("dispatch_repository", "storage"),
         ("repository", "storage"),
-        ("controller", "orchestration"),
         ("coder_runtime", "runners"),
         ("github", "integrations"),
         ("auth0_oauth", "mcp"),

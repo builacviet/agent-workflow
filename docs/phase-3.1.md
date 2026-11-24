@@ -1,6 +1,13 @@
 # Phase 3.1: worker owns GitHub, WFC owns workflow state
 
-CURRENT source/runbook architecture: approved 2026-11-05 and merged as [Phase 3.1 PR #5](https://github.com/builacviet/agent-workflow/pull/5), squash `e09a054e96d56cec1e24590e959bff3ec1a990e3`. Requested effort high; actual model/effort unverified. This replaces older Controller-push/MCP-remote-verifier instructions. **Merge is not evidence a deployment is live or production-approved**; operator activation and actual environment remain separate checks.
+Historical Phase 3.1 architecture: approved 2026-11-05 and merged as [Phase 3.1 PR #5](https://github.com/builacviet/agent-workflow/pull/5), squash `e09a054e96d56cec1e24590e959bff3ec1a990e3`. Requested effort high; actual model/effort unverified. This replaces older Controller-push/MCP-remote-verifier instructions. **Merge is not evidence a deployment is live or production-approved**; operator activation and actual environment remain separate checks.
+
+The DEVELOPMENT Controller now runs through the PostgreSQL Bootstrap with
+`python -m agent_workflow.controller CONFIG --once`. Use an explicit
+`PG_RUNTIME_DSN` and a config without the SQLite `database` field. CI-only
+runs use `--ci-once` or `--ci-watch`. See the
+[Controller recovery guide](guides/dispatch-recovery.md) for the evidence to
+preserve after a failed pass.
 
 ## Responsibilities
 
@@ -43,14 +50,17 @@ Configure `WFC_SANDBOX_STATE_DIR` in the **trusted host Controller process envir
 
 Path validation is a preflight only: operator-controlled parent ACLs/mounts must remain trusted after startup. This change does not migrate records, release blocked slots, authorize additional Docker privileges or deploy PostgreSQL.
 
-## Live operator setup (not performed by Coder)
+## Historical SQLite operator setup
 
 - Configure `.runtime/controller.json` from its example: explicit task IDs, canonical dedicated linked worktrees, write/handoff paths, same physical DB, image, model, timeout, App/installation IDs and ignored credential paths. Use the configured GitHub App PEM and `codex_auth_volume=techlead-review-poc_codex_auth`; no OpenAI API key is used. Controller mounts them only in their relevant phases; it does not read private contents or mint tokens. Never reuse v2 auth/data/images/volumes.
 - Provision a new synthetic task locally via WorkflowService.provision_task, using its authorized branch/base/context paths. Create that remote branch through worker/operator GitHub access. Do not reopen TASK-001. Existing task authorization and two-round caps remain mandatory.
 - Optional MCP: copy `.runtime/controller-mcp.env.example` to the ignored `.runtime/controller-mcp.env`, restore verified Auth0 OAuth settings (default for this controller-stack template), create `data/controller` with UID 10001 permissions and run `docker compose -f compose.yaml up -d --build mcp`. Static Bearer is available only by explicitly changing `WFC_AUTH_MODE` and setting a 32+-character token plus reviewer identity. See the [.runtime inventory](../.runtime/README.md).
-- Run `python -m agent_workflow.controller .runtime/controller.json --once`, inspect bot commit/draft PR/result/handoff. For continuous polling omit --once. Stop before reconciliation.
 - Tech Lead independently checks GitHub before claim/verdict. `approval_current` is always unknown rather than an online freshness check. Branch movement outside the workflow requires operator/Tech Lead action; WFC cannot detect it autonomously.
-- **After timeout, crash or lost Docker CLI/daemon connection:** consult the [CURRENT recovery matrix, evidence limitations and post-reconciliation dispositions](guides/dispatch-recovery.md) **before** any operator acknowledgement. Caught exceptions can mark a dispatch `BLOCKED`; abrupt process death may leave `ACTIVE`. **Both retain the global slot.** Confirm the correct workflow DB/dispatch row and Docker endpoint, compare the derived container name, dispatch workspace mount and engine-reported creation metadata, and independently check exact remote branch/PR head, body, owner and WFC handoff. **CURRENT does not persist container IDs or prove ownership from names/labels; inability to establish a safe identity or exclude late create means STOP and escalate, not acknowledge.** The `--reconciled` CLI flag is solely an operator assertion; cleanup by name runs **before** the dispatch row is checked and does not validate remote effects. Only if an Owner-authorized operator has independently verified and recorded all preconditions may they consider `python -m agent_workflow.controller .runtime/controller.json --acknowledge DISPATCH_ID --reconciled`. This **only releases the slot**; the original task/round/input SHA key remains spent. After a successful handoff, WFC may already have progressed from `READY_IN_REVIEW` to `IN_REVIEW` or later verdict states **while the dispatch slot is still held**; check the exact-SHA `HANDOFF` event and review history, not just the current WFC task status. A failure of final container cleanup **after** the handoff can also prevent dispatch `DONE` without invalidating the handoff; inspect engine evidence separately. If publish/handoff is missing or inconsistent, there is **no authorized automatic or manual replay/repair path** in this runbook: keep the block, preserve evidence, request a separately approved remedy. Never edit the DB, fabricate input SHA, manually register handoff, or advance review rounds to force recovery.
+- **After timeout, crash or lost Docker CLI/daemon connection**, preserve the
+  dispatch row, engine and exact-SHA publication/handoff evidence. A dispatch
+  may remain `ACTIVE` or `BLOCKED` with the slot held. The historical SQLite
+  acknowledgement flags have been removed. Escalate unresolved outcomes via
+  the [recovery guide](guides/dispatch-recovery.md).
 
 The persisted ChatGPT session is accessible to its code phase; do not share its volume with another project. Separate test phase has none. Live App mint/push/PR, model cycle and authenticated Desktop review integration remain unverified until operator-run synthetic acceptance. Coder test evidence is not independent Tech Lead approval.
 

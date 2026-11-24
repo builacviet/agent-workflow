@@ -49,12 +49,14 @@ approved, disposable PostgreSQL environment.
 
 Start CI-only consumption in a trusted host terminal (no Codex worker is dispatched):
 
-    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-once
-    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-watch
+    python -m agent_workflow.controller .runtime/controller-ci.json --ci-once
+    python -m agent_workflow.controller .runtime/controller-ci.json --ci-watch
 
 Run exactly one of the commands above. Both modes read the durable webhook inbox
-from PostgreSQL through `PG_RUNTIME_DSN`. At startup they can recheck a bounded
-set of tracked PRs. After startup, watch mode checks PostgreSQL for pending
+from PostgreSQL through `PG_RUNTIME_DSN`. Use a config containing
+`controller_github_app` with the read-only App settings and omit the historical
+SQLite `database` field. At startup the Controller can recheck a bounded set
+of tracked PRs. After startup, watch mode checks PostgreSQL for pending
 notifications and queries GitHub when pending work needs reconciliation. A pass
 with an empty inbox after startup makes no GitHub requests.
 
