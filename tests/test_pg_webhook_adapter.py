@@ -25,16 +25,13 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
 from agent_workflow.storage.postgres_connection import (
     PostgresFactory,
-)
-from agent_workflow.storage.webhook_inbox import (
-    InboxResult,
-    WebhookInbox,
-    WebhookNotification,
 )
 
 
@@ -206,48 +203,27 @@ def _digest(notification, suffix=""):
     return sha256((notification.delivery_id + suffix).encode()).hexdigest()
 
 
-def test_restart_replay_matches_sqlite(config, delivery, tmp_path):
+def test_restart_replay(config, delivery):
     alternate = _alternate(delivery)
     first, second = _digest(delivery), _digest(delivery, "changed")
-    sqlite = WebhookInbox(tmp_path / "inbox.sqlite")
     with PostgresFactory.open(config) as factory:
         pg = _SessionInbox(factory)
         assert pg.get(delivery.delivery_id) is None
-        assert (
-            pg.record(delivery, first)
-            is sqlite.record(delivery, first)
-            is InboxResult.INSERTED
-        )
+        assert pg.record(delivery, first) is InboxResult.INSERTED
 
     with PostgresFactory.open(config) as restarted:
         pg = _SessionInbox(restarted)
-        assert (
-            pg.get(delivery.delivery_id) == sqlite.get(delivery.delivery_id) == delivery
-        )
+        assert pg.get(delivery.delivery_id) == delivery
         for notification, digest, expected in [
             (delivery, first, InboxResult.DUPLICATE),
             (delivery, second, InboxResult.CONFLICT),
             (alternate, first, InboxResult.DUPLICATE),
         ]:
-            assert (
-                pg.record(notification, digest)
-                is sqlite.record(notification, digest)
-                is expected
-            )
-        assert (
-            pg.get(alternate.delivery_id) is sqlite.get(alternate.delivery_id) is None
-        )
-        assert (
-            pg.record(alternate, second)
-            is sqlite.record(alternate, second)
-            is InboxResult.INSERTED
-        )
-        # Delivery ID conflict wins even when another delivery owns the supplied digest.
-        assert (
-            pg.record(delivery, second)
-            is sqlite.record(delivery, second)
-            is InboxResult.CONFLICT
-        )
+            assert pg.record(notification, digest) is expected
+        assert pg.get(alternate.delivery_id) is None
+        assert pg.record(alternate, second) is InboxResult.INSERTED
+        # Delivery ID conflict wins even when another delivery owns the digest.
+        assert pg.record(delivery, second) is InboxResult.CONFLICT
 
 
 @pytest.mark.parametrize(

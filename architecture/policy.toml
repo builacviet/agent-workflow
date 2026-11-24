@@ -80,16 +80,6 @@ module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
 
 [[legacy_imports]]
-path = "src/agent_workflow/integrations/github_webhook.py"
-module = "agent_workflow.storage.webhook_inbox"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/integrations/webhook_http.py"
-module = "agent_workflow.storage.webhook_inbox"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
 path = "src/agent_workflow/runners/coder_runtime.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"

@@ -8,28 +8,30 @@ import uuid
 from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.composition import webhook_entrypoint
 from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
-from agent_workflow.integrations.github_webhook import GitHubWebhookReceiver
-from agent_workflow.integrations.webhook_http import WebhookHTTPServer
+from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
+from agent_workflow.interfaces.webhook.http_server import WebhookHTTPServer
 from agent_workflow.storage.postgres_connection import PostgresUnavailableError
-from agent_workflow.storage.webhook_inbox import InboxResult, WebhookInbox
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 @contextmanager
-def endpoint(tmp_path, *, max_body=1024):
+def endpoint(*, max_body=1024, outcomes=(InboxResult.INSERTED,)):
+    inbox = Mock()
+    inbox.record.side_effect = outcomes
     receiver = GitHubWebhookReceiver(
-        WebhookInbox(tmp_path / "test.db"),
+        inbox,
         secret=b"z" * 32,
         installation_id=17,
     )
@@ -74,15 +76,15 @@ def payload():
     ).encode()
 
 
-def test_real_http_accepts_signed_replay_once(tmp_path):
-    with endpoint(tmp_path) as port:
+def test_real_http_accepts_signed_replay_once():
+    with endpoint(outcomes=(InboxResult.INSERTED, InboxResult.DUPLICATE)) as port:
         body = payload()
         assert send(port, body=body, headers=signed(body)) == 202
         assert send(port, body=body, headers=signed(body)) == 200
 
 
-def test_rejects_bad_signature_wrong_path_and_big_body(tmp_path):
-    with endpoint(tmp_path) as port:
+def test_rejects_bad_signature_wrong_path_and_big_body():
+    with endpoint() as port:
         body = payload()
         headers = signed(body)
         headers["X-Hub-Signature-256"] = "sha256=" + "a" * 64
@@ -91,8 +93,8 @@ def test_rejects_bad_signature_wrong_path_and_big_body(tmp_path):
         assert send(port, body=None, headers={"Content-Length": "2048"}) == 413
 
 
-def test_http_method_never_forwards_to_mcp(tmp_path):
-    with endpoint(tmp_path) as port:
+def test_http_method_never_forwards_to_mcp():
+    with endpoint() as port:
         assert send(port, method="GET", body=b"") == HTTPStatus.METHOD_NOT_ALLOWED
 
 
