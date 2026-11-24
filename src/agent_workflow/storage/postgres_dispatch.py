@@ -165,7 +165,9 @@ class PostgresDispatchLedger:
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1 and row.detail == _PRE_LAUNCH:
                 if row.status != "ACTIVE":
-                    raise BusinessRuleError("could not retire dispatch pre-launch evidence")
+                    raise BusinessRuleError(
+                        "could not retire dispatch pre-launch evidence"
+                    )
                 row.detail = ""
                 self._timeout(session)
                 session.flush()
@@ -206,7 +208,9 @@ class PostgresDispatchLedger:
                 or row.task_id != task_id
                 or row.input_sha != input_sha
             ):
-                raise BusinessRuleError("runtime evidence has no active matching dispatch")
+                raise BusinessRuleError(
+                    "runtime evidence has no active matching dispatch"
+                )
             session.add(
                 AgentExecutionEvidence(
                     dispatch_id=dispatch_id,

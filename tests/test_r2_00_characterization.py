@@ -21,7 +21,6 @@ from agent_workflow.runners.runtime_plugins import (
     WorkerResult,
 )
 
-
 BASE, HEAD = "a" * 40, "b" * 40
 IMAGE_ID = "sha256:" + "d" * 64
 BRANCH = "codex/r2-00-fixture"
@@ -76,9 +75,7 @@ def test_runtime_adapter_contract_is_replaceable_without_provider_fallback():
         required_capabilities=frozenset({"workspace-write"}),
     )
     assert registry.plan(request).command == ("synthetic-exec", "fixture-model")
-    result = registry.result(
-        request, b"synthetic-result", observed_image_id=IMAGE_ID
-    )
+    result = registry.result(request, b"synthetic-result", observed_image_id=IMAGE_ID)
     assert result.observed_image_id == IMAGE_ID
     assert result.telemetry == "UNVERIFIED"
     with pytest.raises(WorkflowError, match="Dev code phase"):
@@ -86,21 +83,40 @@ def test_runtime_adapter_contract_is_replaceable_without_provider_fallback():
     with pytest.raises(WorkflowError, match="unsupported runtime capability"):
         registry.plan(replace(request, required_capabilities=frozenset({"host-shell"})))
     with pytest.raises(WorkflowError, match="differs from approved pin"):
-        registry.result(request, b"synthetic-result", observed_image_id="sha256:" + "e" * 64)
+        registry.result(
+            request, b"synthetic-result", observed_image_id="sha256:" + "e" * 64
+        )
 
 
 def test_public_workflow_contract_field_names_remain_stable():
     """R2 may move models but cannot silently mutate MCP DTO field names."""
     assert set(TaskSpec.model_fields) == {
-        "task_id", "title", "description", "acceptance_criteria",
-        "definition_of_done", "repository", "branch", "base_sha",
-        "requested_effort", "risk_level", "require_verified_effort",
-        "context_paths", "synthetic",
+        "task_id",
+        "title",
+        "description",
+        "acceptance_criteria",
+        "definition_of_done",
+        "repository",
+        "branch",
+        "base_sha",
+        "requested_effort",
+        "risk_level",
+        "require_verified_effort",
+        "context_paths",
+        "synthetic",
     }
     assert set(Submission.model_fields) == {
-        "task_id", "claim_token", "reviewed_head_sha", "review_round",
-        "verdict", "summary", "findings", "prior_resolutions",
-        "requested_effort", "actual_effort", "verification_evidence",
+        "task_id",
+        "claim_token",
+        "reviewed_head_sha",
+        "review_round",
+        "verdict",
+        "summary",
+        "findings",
+        "prior_resolutions",
+        "requested_effort",
+        "actual_effort",
+        "verification_evidence",
     }
     with pytest.raises(ValidationError):
         TaskSpec.model_validate({**task_spec(), "unapproved_extension": True})

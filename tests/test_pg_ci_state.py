@@ -625,7 +625,9 @@ def test_conflicting_repairs_commit_only_one_head(failed_handoff):
             ]
 
 
-def test_failed_repair_rolls_back_head_event_and_ci_binding(failed_handoff, monkeypatch):
+def test_failed_repair_rolls_back_head_event_and_ci_binding(
+    failed_handoff, monkeypatch
+):
     config, operation, request = failed_handoff
     original = PostgresHandoffRepository.record
 
