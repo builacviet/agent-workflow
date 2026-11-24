@@ -463,6 +463,31 @@ def test_http_mcp_boundary_and_complete_tool_contract(env, monkeypatch):
         lambda config: nullcontext(engine),
     )
 
+    # Exercise the actual write use cases against the existing disposable fixture.
+    from uuid import uuid4
+
+    from agent_workflow.application.review.use_cases.claim_review import (
+        ClaimReviewUseCase,
+    )
+    from agent_workflow.application.review.use_cases.submit_review import (
+        SubmitReviewUseCase,
+    )
+    from agent_workflow.infrastructure.database.repositories.review_writes import (
+        PostgresReviewWriteScope,
+    )
+
+    scope = PostgresReviewWriteScope(engine.repository)
+    options = {"clock": engine.clock, "token": lambda: uuid4().hex, "require_ci": True}
+    monkeypatch.setattr(
+        "agent_workflow.composition.postgres_mcp.postgres_mcp_review_writes",
+        lambda config: nullcontext(
+            (
+                ClaimReviewUseCase(scope, **options),
+                SubmitReviewUseCase(scope, **options),
+            )
+        ),
+    )
+
     def list_queue(requested_effort):
         assert requested_effort == "medium"
         return (
