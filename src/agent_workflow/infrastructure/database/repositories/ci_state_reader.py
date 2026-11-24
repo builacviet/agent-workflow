@@ -17,15 +17,15 @@ from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiApprovalSnapshot
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
-from agent_workflow.infrastructure.database.session_factory import (
-    _set_repository_transaction_options,
-)
-from agent_workflow.storage.postgres_models import (
+from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
     CITask,
     Task,
     WebhookInboxRow,
+)
+from agent_workflow.infrastructure.database.session_factory import (
+    _set_repository_transaction_options,
 )
 
 _OPERATION_ERROR = "PostgreSQL Controller CI operation failed"

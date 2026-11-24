@@ -28,8 +28,8 @@ from agent_workflow.application.review.use_cases.list_review_queue import (
     ListReviewQueueUseCase,
 )
 from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.mcp.server import mcp
-from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
 def test_server_starts_without_postgres_extra():

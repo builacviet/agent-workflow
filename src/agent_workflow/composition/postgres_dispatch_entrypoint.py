@@ -8,11 +8,11 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.composition.postgres_dispatch_deps import create_dispatch_use_case
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.integrations.github_app_checks import ControllerAppToken
 from agent_workflow.runners.coder_runtime import validate_config
 from agent_workflow.runners.runtime_plugins import CodexCLIPlugin
-from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
 

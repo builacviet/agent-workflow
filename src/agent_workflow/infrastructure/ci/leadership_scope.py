@@ -9,11 +9,11 @@ from contextvars import ContextVar
 from typing import Iterator
 
 from agent_workflow.application.exceptions import ApplicationError
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
 class PostgresCiLeadershipScope:

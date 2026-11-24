@@ -29,11 +29,11 @@ from agent_workflow.composition.postgres_controller import (
 )
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 

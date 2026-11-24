@@ -20,11 +20,11 @@ from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
     GuardedCiReader,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
 )
 from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
-from agent_workflow.storage.postgres_connection import PostgresFactory
 
 REPO = "builacviet/agent-workflow"
 SHA = "b" * 40

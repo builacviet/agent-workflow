@@ -19,9 +19,11 @@ from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresUnavailableError,
+)
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 from agent_workflow.interfaces.webhook.http_server import WebhookHTTPServer
-from agent_workflow.storage.postgres_connection import PostgresUnavailableError
 
 ROOT = Path(__file__).resolve().parents[1]
 

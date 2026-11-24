@@ -42,10 +42,10 @@ from agent_workflow.infrastructure.database.readers.review_queue_reader import (
 from agent_workflow.infrastructure.database.repositories.review_writes import (
     PostgresReviewWriteScope,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.review_assignment_response import review_context_response
 from agent_workflow.mcp.server import mcp
-from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
@@ -90,7 +90,9 @@ def test_mcp_composition_closes_on_scope_and_construction_errors():
 @pytest.mark.parametrize("dsn", [None, "sqlite:///fallback.db", "invalid"])
 def test_mcp_composition_rejects_missing_or_invalid_dsn(dsn):
     config = AppConfig.model_construct(pg_runtime_dsn=dsn)
-    with patch("agent_workflow.storage.postgres_connection.create_engine") as engine:
+    with patch(
+        "agent_workflow.infrastructure.database.session_factory.create_engine"
+    ) as engine:
         with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
             with postgres_mcp_task_operations(config):
                 pytest.fail("operation must not be yielded")

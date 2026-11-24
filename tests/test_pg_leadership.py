@@ -10,13 +10,13 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, make_url
 
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
-)
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
 )
 
 

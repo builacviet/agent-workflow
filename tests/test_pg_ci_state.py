@@ -47,6 +47,15 @@ from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.webhook.inbox import InboxResult
+from agent_workflow.infrastructure.database.models import (
+    CIObservation,
+    CIProcessedDelivery,
+    CITask,
+    ReviewAttempt,
+    Task,
+    TaskEvent,
+    WebhookInboxRow,
+)
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
 )
@@ -60,6 +69,7 @@ from agent_workflow.infrastructure.database.repositories.task_handoff import (
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     _WORKFLOW_NAMESPACE,
     LeadershipDomain,
@@ -72,16 +82,6 @@ from agent_workflow.interfaces.cli.ci_controller import (
     CiRunResponse,
     run_ci_once,
     run_ci_watch,
-)
-from agent_workflow.storage.postgres_connection import PostgresFactory
-from agent_workflow.storage.postgres_models import (
-    CIObservation,
-    CIProcessedDelivery,
-    CITask,
-    ReviewAttempt,
-    Task,
-    TaskEvent,
-    WebhookInboxRow,
 )
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 

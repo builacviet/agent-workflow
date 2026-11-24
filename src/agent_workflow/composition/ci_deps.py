@@ -24,7 +24,7 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 
 
 def create_ci_state_adapters(

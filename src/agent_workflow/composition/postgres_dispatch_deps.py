@@ -27,8 +27,8 @@ from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffScope,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 

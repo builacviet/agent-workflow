@@ -23,13 +23,13 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
-)
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
 )
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository

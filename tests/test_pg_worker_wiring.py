@@ -23,13 +23,13 @@ from agent_workflow.composition.worker_deps import compose_postgres_worker
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffScope,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.runners import coder_runtime
-from agent_workflow.storage.postgres_connection import PostgresFactory
 
 DISPATCH = "a" * 32
 INPUT = "b" * 40
