@@ -4,16 +4,17 @@ import inspect
 import json
 import socket
 import subprocess
-from argparse import Namespace
 from contextlib import contextmanager
+from unittest.mock import Mock
 
 import pytest
 from test_agent_workflow import payload, spec
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
+from agent_workflow.application.dispatch import run_dispatch_pass
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.orchestration.controller import operate, run_once
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime, LegacySqliteCoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
@@ -60,9 +61,7 @@ def test_service_has_no_sql_or_external_adapter():
     assert (
         "verify_remote" not in text and "agent_workflow.workers.trusted_git" not in text
     )
-    import agent_workflow.orchestration.controller as controller
-
-    assert "GitHubApp" not in inspect.getsource(controller)
+    assert "GitHubApp" not in inspect.getsource(run_dispatch_pass)
     assert not hasattr(CoderRuntime, "publish")
 
 
@@ -135,7 +134,7 @@ def test_service_accepts_repository_interface_without_sqlite(tmp_path):
         ("unsupported effort", "codex"),
     ],
 )
-def test_controller_only_launches_phases_and_receives_result(
+def test_dispatch_pass_only_launches_phases_and_receives_result(
     tmp_path, monkeypatch, failure, runtime_name
 ):
     service = WorkflowService(tmp_path / "state.db", require_ci=False)
@@ -220,6 +219,7 @@ def test_controller_only_launches_phases_and_receives_result(
     monkeypatch.setattr(runtime, "docker", docker)
     monkeypatch.setattr(runtime.sandbox, "run", sandbox_run)
     ledger = DispatchLedger(service)
+    dispatch = _dispatch_pass(service, ledger, runtime.execute, runtime.release_engine)
     if failure and failure.startswith("unsupported"):
         message = (
             "unsupported runtime$"
@@ -227,23 +227,17 @@ def test_controller_only_launches_phases_and_receives_result(
             else "unsupported runtime provider, model or effort"
         )
         with pytest.raises(WorkflowError, match=message):
-            run_once(service, ledger, {"TEST"}, runtime.execute)
+            dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
         assert calls == []
         assert not (tmp_path / ".runtime").exists()
         return
     if failure:
         with pytest.raises(WorkflowError):
-            run_once(service, ledger, {"TEST"}, runtime.execute)
+            dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
     else:
-        assert run_once(
-            service,
-            ledger,
-            {"TEST"},
-            runtime.execute,
-            on_finished=runtime.release_engine,
-        )
+        assert dispatch.execute({"TEST"})
         assert not list((tmp_path / "state.db.sandbox-fences").glob("*.engine"))
         assert service.get_review_context("TEST")["status"] == "READY_IN_REVIEW"
         assert [x for x in calls if x != "stop"] == [
@@ -275,12 +269,21 @@ def _blocked_dispatch(service):
     return row["dispatch_id"]
 
 
-def _acknowledge(config, dispatch_id):
-    operate(config, Namespace(acknowledge=dispatch_id, reconciled=True, once=True))
+def _dispatch_pass(service, ledger, execute, on_finished=None):
+    leadership = Mock()
+    leadership.try_acquire.return_value = True
+    leadership.is_held.return_value = True
+    return RunDispatchPassUseCase(
+        leadership,
+        ledger,
+        service,
+        lambda claim, context, _guard: execute(claim, context),
+        on_finished=on_finished,
+    )
 
 
 @pytest.mark.parametrize("failure", ["invalid-model", "docker-unavailable"])
-def test_operator_can_acknowledge_proven_pre_launch(
+def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
     recovery_dispatch, monkeypatch, failure
 ):
     config, service, ledger = recovery_dispatch
@@ -304,12 +307,17 @@ def test_operator_can_acknowledge_proven_pre_launch(
 
         monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
 
-    with pytest.raises(WorkflowError, match="Controller attempt failed"):
-        operate(config, Namespace(acknowledge=None, once=True))
+    runtime = LegacySqliteCoderRuntime(config, service)
+    with pytest.raises(
+        WorkflowError, match="unsupported runtime|synthetic Docker outage"
+    ):
+        _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
     dispatch_id = _blocked_dispatch(service)
     assert ledger.is_pre_launch(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
-    _acknowledge(config, dispatch_id)
+    runtime.reconcile(dispatch_id)
+    assert ledger.claim({"NEXT"}, 60) is None
+    ledger.acknowledge(dispatch_id)
     assert not ledger.is_pre_launch(dispatch_id)
     assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
 
@@ -336,24 +344,25 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
 
     monkeypatch.setattr(sandbox.SandboxManager, "record_engine", record_pin)
     monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
-    with pytest.raises(WorkflowError, match="Controller attempt failed"):
-        operate(config, Namespace(acknowledge=None, once=True))
+    with pytest.raises((OSError, WorkflowError), match="synthetic"):
+        _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
     dispatch_id = _blocked_dispatch(service)
     if pin_written:
         runtime.sandbox._engine_path(dispatch_id).unlink()
     assert not ledger.is_pre_launch(dispatch_id)
     with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
-        _acknowledge(config, dispatch_id)
+        runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
 
 def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
-    config, _, ledger = recovery_dispatch
+    config, service, ledger = recovery_dispatch
+    runtime = LegacySqliteCoderRuntime(config, service)
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim["dispatch_id"]
     ledger.block(dispatch_id)
     with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
-        _acknowledge(config, dispatch_id)
+        runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
 
@@ -371,7 +380,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     with pytest.raises(
         WorkflowError, match="pre-launch evidence conflicts with Docker records"
     ):
-        _acknowledge(config, dispatch_id)
+        runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
 
@@ -426,6 +435,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     def execute(claim, _context):
         nonlocal dispatch_id
         dispatch_id = claim["dispatch_id"]
+        ledger.retire_pre_launch(dispatch_id)
         runtime.sandbox.record_engine(
             dispatch_id, "unix:///fixture.sock", "fixture-daemon-a"
         )
@@ -440,19 +450,21 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         pytest.fail("an uncertain create must never start a workload")
 
     with pytest.raises(WorkflowError):
-        run_once(service, ledger, {"TEST"}, execute)
+        _dispatch_pass(service, ledger, execute).execute({"TEST"})
     assert name is not None
-    args = Namespace(acknowledge=dispatch_id, reconciled=True, once=True)
     assert ledger.claim({"NEXT"}, 60) is None
     if not definitive:
         # Empty inventory is not proof an accepted request cannot appear later.
         with pytest.raises(WorkflowError, match="create remains uncertain"):
-            operate(config, args)
+            runtime.reconcile(dispatch_id)
         assert ledger.claim({"NEXT"}, 60) is None
         visible = True
     # Operator acknowledgment is still required even for definitive rejection.
-    operate(config, args)
+    runtime.reconcile(dispatch_id)
     assert not visible
+    assert ledger.claim({"NEXT"}, 60) is None
+    ledger.acknowledge(dispatch_id)
+    runtime.release_engine(dispatch_id)
     assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
 
 

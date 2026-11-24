@@ -8,14 +8,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, call
 
 import pytest
 
+from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import cleanup_budget, dispatch_budget
-from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.orchestration.controller import run_once
-from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.workers.trusted_git import app_auth
 
 
@@ -136,31 +135,31 @@ def test_fast_response_and_redirect_refusal(loopback):
     assert all(process.poll() is not None for process in loopback.processes)
 
 
-def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
-    service = WorkflowService(tmp_path / "workflow.sqlite3", require_ci=False)
-    service.provision_task(
-        {
-            "task_id": "HTTP-DEADLINE",
-            "title": "Synthetic HTTP test",
-            "description": "Loopback only",
-            "acceptance_criteria": ["AC4"],
-            "definition_of_done": "No unbounded IO",
-            "repository": app_auth.REPOSITORY,
-            "branch": "codex/http-fixture",
-            "base_sha": "a" * 40,
-            "requested_effort": "high",
-            "risk_level": "high",
-            "require_verified_effort": True,
-            "context_paths": ["docs/handoff.md"],
-            "synthetic": True,
-        }
-    )
+def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback):
+    task_id = "HTTP-DEADLINE"
+    sha = "a" * 40
+    ports = Mock()
+    ports.leadership.try_acquire.return_value = True
+    ports.leadership.is_held.return_value = True
+    ports.ledger.claim.return_value = {
+        "dispatch_id": "dispatch",
+        "task_id": task_id,
+        "round_number": 0,
+        "input_sha": sha,
+        "deadline": time.time() + 5,
+    }
+    ports.assignment.get_coder_assignment.return_value = {
+        "task_id": task_id,
+        "status": "AWAITING_HANDOFF",
+        "completed_review_rounds": 0,
+        "current_head_sha": None,
+        "base_sha": sha,
+    }
     effects = []
-    # A normal 60s dispatch whose remaining budget is deliberately 1.5s.
-    ledger = DispatchLedger(service, clock=lambda: time.time() - 55)
 
-    def execute(claim, context):
+    def execute(_claim, _context, guard):
         try:
+            guard()
             app_auth.request_json("GET", "/trickle", "synthetic-only")
             effects.extend(["ref", "pr", "handoff"])
             return "b" * 40
@@ -168,20 +167,21 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback, tmp_path):
             with cleanup_budget():
                 effects.append("cleanup")
 
+    dispatch = RunDispatchPassUseCase(
+        ports.leadership, ports.ledger, ports.assignment, execute
+    )
     started = time.monotonic()
     with pytest.raises(WorkflowError):
-        run_once(service, ledger, {"HTTP-DEADLINE"}, execute, timeout=60)
+        dispatch.execute({task_id}, timeout=60)
     assert time.monotonic() - started < 8
     assert loopback.headers.is_set()
     assert effects == ["cleanup"]
     assert all(process.poll() is not None for process in loopback.processes)
-    with service.repository.raw_connection() as db:
-        dispatch = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
-    assert dispatch["status"] == "BLOCKED" and dispatch["slot"] == 1
-    context = service.get_review_context("HTTP-DEADLINE")
-    assert context["status"] == "AWAITING_HANDOFF"
-    assert context["completed_review_rounds"] == 0
-    assert not run_once(service, ledger, {"HTTP-DEADLINE"}, execute)
+    ports.ledger.finish.assert_not_called()
+    ports.ledger.block.assert_called_once_with("dispatch")
+    assert ports.mock_calls.index(
+        call.ledger.block("dispatch")
+    ) < ports.mock_calls.index(call.leadership.release())
 
 
 @pytest.mark.parametrize("endpoint", ["/invalid", "/oversize"])

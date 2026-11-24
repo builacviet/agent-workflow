@@ -22,14 +22,13 @@ from agent_workflow.composition.postgres_controller import compose_postgres_cont
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
-from agent_workflow.orchestration import controller
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import CITask, Task
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
-PG_CONTROLLER = "agent_workflow.bootstrap.controller_entrypoint"
+PG_CONTROLLER = "agent_workflow.controller"
 INPUT = "b" * 40
 HEAD = "c" * 40
 
@@ -84,16 +83,12 @@ def run_dispatch(config, app_config):
     ).worker_completed
 
 
-@pytest.mark.parametrize("pg_only", [False, True])
-def test_pg_once_cli_routes_without_sqlite(
-    config, tmp_path, monkeypatch, capsys, pg_only
-):
+def test_pg_once_cli_routes_without_sqlite(config, tmp_path, monkeypatch, capsys):
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config))
     monkeypatch.setenv("PG_RUNTIME_DSN", DSN)
     monkeypatch.setattr(sys, "argv", ["controller", str(path), "--once"])
-    monkeypatch.setattr(controller, "process_lock", forbidden)
-    monkeypatch.setattr(controller, "operate", forbidden)
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
     execute = Mock(return_value=False)
 
     @contextmanager
@@ -103,10 +98,7 @@ def test_pg_once_cli_routes_without_sqlite(
         yield SimpleNamespace(execute=execute)
 
     monkeypatch.setattr(entry, "compose_dispatch_execution", compose)
-    if pg_only:
-        runpy.run_module(PG_CONTROLLER, run_name="__main__")
-    else:
-        controller.main()
+    runpy.run_module(PG_CONTROLLER, run_name="__main__")
     execute.assert_called_once_with({"T"}, 1800)
     assert capsys.readouterr().out == "PostgreSQL dispatch: no work claimed.\n"
 
@@ -171,47 +163,6 @@ def test_pg_only_cli_rejects_invalid_dsn_or_stale_config_before_resources(
     assert not sqlite_path.exists()
 
 
-def test_legacy_once_launcher_honors_explicit_sqlite_database(
-    config, tmp_path, monkeypatch
-):
-    monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
-    path = tmp_path / "config.json"
-    config["database"] = str(tmp_path / "legacy.sqlite")
-    path.write_text(json.dumps(config))
-    monkeypatch.setattr(sys, "argv", ["controller", str(path), "--once"])
-    monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
-    lock = Mock(return_value=nullcontext())
-    operate = Mock()
-    monkeypatch.setattr(controller, "process_lock", lock)
-    monkeypatch.setattr(controller, "operate", operate)
-
-    controller.main()
-
-    lock.assert_called_once_with(tmp_path / "legacy.controller.lock")
-    operate.assert_called_once()
-    assert operate.call_args.args[0] == config
-    assert operate.call_args.args[1].once
-
-
-def test_legacy_operate_explicitly_selects_sqlite(config, tmp_path, monkeypatch):
-    monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
-    path = tmp_path / "legacy.sqlite"
-    run_once = Mock()
-    monkeypatch.setattr(controller, "run_once", run_once)
-    controller.operate(
-        config | {"database": str(path)},
-        SimpleNamespace(once=True, acknowledge=None),
-    )
-    run_once.assert_called_once()
-    service, ledger, _, execute, _ = run_once.call_args.args
-    runtime = execute.__self__
-    assert isinstance(runtime, coder_runtime.LegacySqliteCoderRuntime)
-    assert runtime.service is ledger.service is service
-    assert runtime.agent_runtime.dispatch.service is service
-    assert runtime.agent_runtime.ci.service is service
-    assert path.is_file()
-
-
 @pytest.mark.parametrize("dsn", [None, ""])
 def test_pg_once_cli_without_dsn_never_calls_legacy(
     config, tmp_path, monkeypatch, capsys, dsn
@@ -225,11 +176,10 @@ def test_pg_once_cli_without_dsn_never_calls_legacy(
         monkeypatch.setenv("PG_RUNTIME_DSN", dsn)
     path.write_text(json.dumps(config))
     monkeypatch.setattr(sys, "argv", ["controller", str(path), "--once"])
-    monkeypatch.setattr(controller, "process_lock", forbidden)
-    monkeypatch.setattr(controller, "operate", forbidden)
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(PG_CONTROLLER, run_name="__main__")
     assert error.value.code == 1
     assert "PG_RUNTIME_DSN" in capsys.readouterr().err
     assert not sqlite_path.exists()

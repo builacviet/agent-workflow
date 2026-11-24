@@ -1,7 +1,9 @@
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
 
+from agent_workflow import budget
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
@@ -143,6 +145,42 @@ def test_expired_claim_stops_before_assignment_and_releases_budget(ports):
     ports.cleanup.assert_not_called()
     ports.dispatch.block.assert_called_once_with("pass")
     ports.leadership.release.assert_called_once()
+    assert operation_timeout(10.0) == 10.0
+
+
+def test_worker_deadline_allows_cleanup_and_blocks_before_release(ports, monkeypatch):
+    clock = SimpleNamespace(wall=100.0, monotonic=10.0)
+    monkeypatch.setattr(
+        budget,
+        "time",
+        SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.monotonic),
+    )
+    ports.dispatch.claim.return_value["deadline"] = 105.0
+
+    def worker(*_):
+        assert operation_timeout(10.0) == 5.0
+        clock.monotonic += 6.0
+        try:
+            budget.check_deadline()
+        finally:
+            with budget.cleanup_budget():
+                assert operation_timeout(10.0) == 10.0
+                ports.worker_cleanup()
+
+    ports.worker.side_effect = worker
+    with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
+        use_case(ports).execute({"T"})
+
+    ports.dispatch.finish.assert_not_called()
+    ports.cleanup.assert_not_called()
+    assert ports.mock_calls[-6:] == [
+        call.worker_cleanup(),
+        call.leadership.is_held(),
+        call.leadership.is_held(),
+        call.dispatch.block("pass"),
+        call.leadership.is_held(),
+        call.leadership.release(),
+    ]
     assert operation_timeout(10.0) == 10.0
 
 

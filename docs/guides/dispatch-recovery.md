@@ -1,17 +1,21 @@
-# Phase 3.1 CURRENT — dispatch timeout and uncertain GitHub effects
+# Controller recovery after uncertain dispatch
 
-**Status:** source-linked **read-only investigation aid** for the existing Phase 3.1 Controller/Docker/Worker workflow, as observed at DOC-02 **Owner-merged baseline** `2048ea9383509bf389aff6bdb2a3f02fb2e922ef` (2026-11-07; earlier `3c096d06124a5c5a40f9328ec6e28109d4dbefe3` was the **pre-DOC-02 PR base**, not its merged revision). **Not** a new tested recovery procedure, automation, Linux-host Executor implementation or permission to operate a live system. Validate actual deployment, exact source SHA and operator authority before acting.
+This guide describes evidence to preserve after a Controller timeout or uncertain
+publication. The historical Phase 3.1 analysis below comes from the DOC-02
+baseline `2048ea9383509bf389aff6bdb2a3f02fb2e922ef`. Confirm the deployed
+revision and operator authority before taking any action.
 
-Start with [AGENTS rules](../../AGENTS.md) and the authorized incident/task. This guide routes an agent to the source/test evidence for a specific timeout/disconnect scenario. Do **not** read all historical documentation. **CURRENT has no Controller→Worker network RPC:** the Controller starts Docker CLI processes and passes worker input through stdin; a "disconnect" here may be Docker CLI↔daemon uncertainty or Worker↔GitHub HTTPS request loss, **not** an implemented Executor IPC failure.
-
-## PostgreSQL Controller and retirement gate
+## PostgreSQL Controller
 
 The PostgreSQL-only development command is
-`python -m agent_workflow.bootstrap.controller_entrypoint CONFIG --once`.
+`python -m agent_workflow.controller CONFIG --once`.
 It requires an explicit `PG_RUNTIME_DSN` and a config without a SQLite `database`
-field. The same entry point offers `--ci-once` and `--ci-watch` for CI only.
-The legacy module names remain available. SQLite acknowledgement requires the
-legacy SQLite configuration and the existing operator authority described below.
+field. The tracked Phase 3.1 example configs contain that historical field.
+CI-only runs (`--ci-once` and `--ci-watch`) use the read-only Controller App
+settings. Full dispatch also requires separate Worker credentials and dispatch
+options.
+The legacy SQLite Controller and its `--acknowledge` and `--reconciled` options
+were removed in RET-05B.
 
 The [PostgreSQL dispatch pass](../../src/agent_workflow/application/dispatch/run_dispatch_pass.py)
 can leave the active slot held after leadership loss or leave an engine pin
@@ -22,23 +26,21 @@ PostgreSQL CLI exposes no operator acknowledgement or recovery command.
 SQLite rollback requires a separately verified operator procedure. If a
 PostgreSQL incident or rollback depends on unverified recovery steps, preserve
 the dispatch, engine, task and remote publication evidence and escalate to
-the Owner and Tech Lead. The legacy retirement gate remains
-`BLOCKED_LEGACY_CUTOVER_PROOF` until they verify zero active legacy callers
-and PostgreSQL recovery and rollback readiness.
+the Owner and Tech Lead.
 
-## Minimal call path: where to inspect
+## Historical Phase 3.1 call path
 
-| Checkpoint | CURRENT source and symbols | Focused existing tests |
+| Checkpoint | Historical implementation and related source | Focused existing tests |
 | --- | --- | --- |
-| Admission/claim and failure | [`src/agent_workflow/orchestration/controller.py`](../../src/agent_workflow/orchestration/controller.py): `run_once`, `operate`; [`src/agent_workflow/storage/dispatch_repository.py`](../../src/agent_workflow/storage/dispatch_repository.py): `DispatchLedger.claim/block/finish/acknowledge` | [`tests/test_phase31.py`](../../tests/test_phase31.py): `test_atomic_global_slot_across_connections`, `test_expiry_restart_and_failure_never_auto_redispatch`, `test_runtime_exception_blocks_slot_and_sanitizes_ledger` |
-| Docker lifecycle and staged result | [`src/agent_workflow/runners/coder_runtime.py`](../../src/agent_workflow/runners/coder_runtime.py): `run_container`, `CoderRuntime.stop/docker/execute` | [`tests/test_architecture_boundary.py`](../../tests/test_architecture_boundary.py): `test_controller_only_launches_phases_and_receives_result` (stage contract/mock runtime); [`tests/test_phase31.py`](../../tests/test_phase31.py): `test_cleanup_remains_available_after_deadline`, `test_expired_completion_never_marks_dispatch_done` (deadline and cleanup) |
+| Admission/claim and failure | Retired SQLite Controller (`run_once`, `operate`); [`src/agent_workflow/storage/dispatch_repository.py`](../../src/agent_workflow/storage/dispatch_repository.py): `DispatchLedger.claim/block/finish/acknowledge` | [`tests/test_phase31.py`](../../tests/test_phase31.py): `test_atomic_global_slot_across_connections`, `test_expiry_restart_and_failure_never_auto_redispatch`; [PostgreSQL dispatch tests](../../tests/test_pg_dispatch_adapter.py) cover durable blocking and diagnostic sanitization |
+| Docker lifecycle and staged result | [`src/agent_workflow/runners/coder_runtime.py`](../../src/agent_workflow/runners/coder_runtime.py): `run_container`, `CoderRuntime.stop/docker/execute` | [`tests/test_architecture_boundary.py`](../../tests/test_architecture_boundary.py): `test_dispatch_pass_only_launches_phases_and_receives_result` (stage contract/mock runtime); [`tests/test_phase31.py`](../../tests/test_phase31.py): `test_cleanup_remains_available_after_deadline`; [PostgreSQL dispatch tests](../../tests/test_pg_dispatch_adapter.py) cover late completion |
 | External commit / push / draft PR | [`src/agent_workflow/workers/trusted_git/main.py`](../../src/agent_workflow/workers/trusted_git/main.py): `publish`; [`src/agent_workflow/workers/trusted_git/app_auth.py`](../../src/agent_workflow/workers/trusted_git/app_auth.py): HTTP lifecycle | [`tests/test_architecture_boundary.py`](../../tests/test_architecture_boundary.py): `test_worker_owns_bot_commit_ordinary_push_and_draft` (fake GitHub App), `test_worker_real_git_push_to_disposable_bare_remote` (local Git remote). [`tests/test_http_deadline.py`](../../tests/test_http_deadline.py): `test_http_total_deadline_kills_and_reaps_request_worker`, `test_trickle_timeout_runs_cleanup_and_blocks_dispatch` (synthetic GET and request process expiry only; **not** GitHub POST/PATCH uncertainty proof) |
-| Local handoff vs dispatch completion | [`src/agent_workflow/domain/service.py`](../../src/agent_workflow/domain/service.py): `register_task_handoff`; [`src/agent_workflow/storage/dispatch_repository.py`](../../src/agent_workflow/storage/dispatch_repository.py): `finish` | [`tests/test_phase31.py`](../../tests/test_phase31.py): `test_success_handoff_and_idempotency` |
+| Local handoff vs dispatch completion | [`src/agent_workflow/domain/service.py`](../../src/agent_workflow/domain/service.py): `register_task_handoff`; [`src/agent_workflow/storage/dispatch_repository.py`](../../src/agent_workflow/storage/dispatch_repository.py): `finish` | [PostgreSQL dispatch lifecycle tests](../../tests/test_pg_dispatch_adapter.py) cover handoff, completion and no replay |
 | Clock and transaction mechanics | [`src/agent_workflow/budget.py`](../../src/agent_workflow/budget.py); [`src/agent_workflow/storage/repository.py`](../../src/agent_workflow/storage/repository.py): `raw_transaction` | Read only when deadline/transaction semantics are under investigation |
 
 **Ordering established from code:** Controller acquires persistent `ACTIVE` dispatch slot → runs Prepare/Code/Test/Publish → Publish may commit/push/create or update a Draft PR on GitHub **before** writing `result.json` → Controller validates local result → `WorkflowService.register_task_handoff()` commits a separate transaction → **`CoderRuntime.execute()` performs final `stop()` in `finally`, which may raise after handoff** → `DispatchLedger.finish()` sets `DONE` and releases slot in another transaction. `run_once` attempts to mark `BLOCKED` on exception; abrupt process death may leave `ACTIVE`. The persisted dispatch key is `(task_id, round_number, input_sha)`; same-key automatic re-dispatch is suppressed. Neither ledger nor local handoff alone proves the current remote GitHub outcome.
 
-## Uncertain-outcome matrix — evidence to reconcile (NOT a recovery command recipe)
+## Historical SQLite uncertain-outcome matrix
 
 **Universal safety rule:** Stop/pause new Controller dispatch before inspection. Identify the **correct physical workflow SQLite DB and Docker endpoint/context**, then inspect the dispatch row with `slot=1` (status `ACTIVE` or `BLOCKED`), task/round/input SHA and relevant engine state. CURRENT container evidence is **only correlational**: derived name `my-wfc-{dispatch_id}-{phase}`, shared label `my-wfc.phase=3.1`, the bind-mounted dispatch workspace path `WORKTREE/.runtime/dispatch/{dispatch_id}` (or its `source` subdirectory for Code/Test), and engine-reported creation/time/mount metadata. The label does **not** encode the dispatch ID, and **no immutable container ID is persisted in the dispatch ledger**. Names, labels, paths and creation time **do not independently prove ownership** or that a delayed Docker create has completed. `CoderRuntime.stop()` removes by derived **name**, not by checked container ID/label. If an operator cannot establish container identity and daemon completion from sufficient trusted external evidence, **the condition is unproven: retain the slot and escalate; do not run acknowledgement**. Verify remote branch head, PR head/body/author/base and local handoff/DB state; never automatically replay a potentially published job.
 
@@ -56,16 +58,20 @@ and PostgreSQL recovery and rollback readiness.
 | After handoff commit, before dispatch `DONE` commit | WFC may have an exact-SHA `HANDOFF` event and `READY_IN_REVIEW`, **or have advanced to `IN_REVIEW` / a later review status** while dispatch remains `ACTIVE`/`BLOCKED` | Remote branch/PR may already exist | Check **both** SQLite handoff events (event type `HANDOFF`, associated task and current head SHA), task/head, review claims/history/verdict, dispatch row and exact GitHub SHA; do not classify a progressed review as missing handoff or republish solely because ledger is not `DONE` |
 | Final `stop()` fails **after handoff commit but before `finish()`** | Handoff and potentially review history exist; `run_once` can mark dispatch `BLOCKED` with slot retained, despite successful WFC handoff | Remote branch/PR and handoff can be valid; failure is in cleanup before dispatch completion | Distinguish a **final cleanup exception** from a failure to commit `finish()`. Inspect engine/owned-container and late-create uncertainty separately, plus exact handoff/review evidence; do not infer the handoff failed, manually replay or acknowledge without complete operator proof |
 
-**What the built-in acknowledgement does and does NOT do:** The existing operator CLI `python -m agent_workflow.controller CONFIG --acknowledge DISPATCH_ID --reconciled` (see [Phase 3.1 runbook](../phase-3.1.md)) obtains the process lock for the configured DB and requires an operator to **assert** prior reconciliation. **It calls `CoderRuntime.stop()` (removal by derived container names) *before* `DispatchLedger.acknowledge()` validates that dispatch ID holds a slot**; the CLI does not validate DB/dispatch identity before cleanup, prove container ownership, rule out late daemon create, or inspect GitHub/WFC. The ledger then sets `ACKNOWLEDGED`, releases the global slot and retains the original unique `(task_id, round_number, input_sha)` key. There is **no durable operator identity/evidence field recorded by this acknowledgement API**, **no automatic retry of the same key**, and **no automatic handoff, verdict or terminal business-task outcome**. Do **not** use this command from an agent, or on live infrastructure without separately documented Owner/operator authority and verified evidence. If any precondition remains unknown, retain `ACTIVE`/`BLOCKED` and escalate; do not acknowledge.
+**Historical acknowledgement behavior.** The retired SQLite CLI required an
+operator assertion of prior reconciliation. It called Worker reconciliation
+before updating the ledger. The ledger released the slot, retained the unique
+`(task_id, round_number, input_sha)` key and recorded no durable operator
+identity or evidence. Preserve unresolved `ACTIVE` or `BLOCKED` state and
+escalate for a separately authorized procedure.
 
+## Historical SQLite reconciliation outcomes
 
-## After reconciliation: documented disposition, not a new recovery API
-
-The CLI's `ACKNOWLEDGED` status means **only** that a slot was released after an operator assertion. It does **not** mean that the business task is finished, that GitHub changes are safe, that credentials were revoked, or that the old dispatch can run again. Before any authorized acknowledgement, capture an **operator-controlled incident record outside the ledger** identifying the correct DB/dispatch/task/round/input SHA, environment/engine evidence, remote branch and PR head/body/owner/base/draft, WFC task/handoff status, unresolved uncertainties and Owner's specific decision. The CURRENT ledger has no field proving who inspected it.
+The historical SQLite ledger's `ACKNOWLEDGED` status means **only** that a slot was released after an operator assertion. It does **not** mean that the business task is finished, that GitHub changes are safe, that credentials were revoked, or that the old dispatch can run again. Before any authorized acknowledgement, capture an **operator-controlled incident record outside the ledger** identifying the correct DB/dispatch/task/round/input SHA, environment/engine evidence, remote branch and PR head/body/owner/base/draft, WFC task/handoff status, unresolved uncertainties and Owner's specific decision. The CURRENT ledger has no field proving who inspected it.
 
 | Verified investigation outcome | What CURRENT can support without inventing a recovery command | Boundary / next decision |
 | --- | --- | --- |
-| Published remotely **and** a matching local WFC `HANDOFF` event is verified for the exact task/head SHA, whether task state is `READY_IN_REVIEW`, already `IN_REVIEW` or has since advanced through review | Independently compare the event sequence, current head, review claim/history/verdict and remote PR SHA; a later state is **not evidence that handoff was absent**. Only if all engine/container termination and late-create preconditions are independently proven may an **Owner-authorized operator** consider the documented acknowledgement gate | Acknowledgement alone does not approve/merge, reset a review lease, undo a verdict, consume another review round or certify runtime safety. Never overwrite advanced review state merely to reconcile dispatch |
+| Published remotely **and** a matching local WFC `HANDOFF` event is verified for the exact task/head SHA, whether task state is `READY_IN_REVIEW`, already `IN_REVIEW` or has since advanced through review | Independently compare the event sequence, current head, review claim/history/verdict and remote PR SHA; a later state is **not evidence that handoff was absent**. Record engine/container termination and late-create evidence for an Owner-authorized decision | Acknowledgement alone does not approve/merge, reset a review lease, undo a verdict, consume another review round or certify runtime safety. Never overwrite advanced review state merely to reconcile dispatch |
 | Remote push/PR verified, **but handoff absent or conflicting** | **No general built-in repair flow is authorized by this guide**; retain the blocked dispatch and preserve source/remote evidence | Escalate for explicit task-specific Owner approval and independently reviewed repair method; do not call `register_task_handoff` manually, rewrite the ledger or replay publish based on this document |
 | Independently observed **no publish**, with worker/container fully settled | Acknowledgement still leaves the **original key consumed** and the WFC task potentially `AWAITING_HANDOFF`/`CHANGES_REQUESTED` | No sanctioned same-key retry is implemented; escalate for a new Owner-approved continuation/recovery design. Do not edit SQLite, forge a new input SHA or burn a review round to force redispatch |
 | Any remote/local/engine result **UNKNOWN** or contradictory | `ACTIVE` or `BLOCKED` remains a fail-closed operational stop | Do not acknowledge, retry, cleanup by guessed name, manually register a handoff or mutate task state. Escalate with evidence and missing checks |
@@ -76,7 +82,6 @@ The CLI's `ACKNOWLEDGED` status means **only** that a slot was released after an
 | --- | --- |
 | Existing bot Draft PR `PATCH`, unexpected existing PR, closed PR, or post-push validation failure | Cited [worker publish tests](../../tests/test_architecture_boundary.py) use a fake GitHub App with empty PR lookup for the tested happy path; no cited test proves these branches safe |
 | Lost/ambiguous `POST` or `PATCH` response, non-success Git push after remote ref update | Cited [HTTP deadline tests](../../tests/test_http_deadline.py) exercise synthetic GET/request process expiry, **not** a real or fault-injected remote GitHub mutation |
-| Operator `--acknowledge --reconciled` command from entrypoint through cleanup and ledger update; invalid row / wrong Docker endpoint | [Phase 3.1 tests](../../tests/test_phase31.py) cover selected ledger and budget operations; no cited end-to-end test proves the CLI validates safe ownership (it currently does not) |
 | Real container `stop()` sequence, delayed daemon create, wrong-name/ownership collision, result present but cleanup fails | [`tests/test_phase31.py`](../../tests/test_phase31.py) cleanup budget unit test **mocks** `docker_command`. A separate [`tests/live_phase31_smoke.py`](../../tests/live_phase31_smoke.py) **does exercise a real Docker engine** in a synthetic probe/test/timeout flow and removes containers by derived name; [historical coder handoff](../history/handoff-log.md) **reports** it passed with `TIMEOUT_STOP_CONFIRMED` in its earlier environment. **Not rerun at this PR HEAD.** That smoke catches generic `WorkflowError` and does **not** prove immutable ownership, late daemon create exclusion, or that the specific child self-timeout path occurred |
 | Revoke failure after `result.json`, final `stop()` failure after handoff, `register_task_handoff` success followed by `finish` failure, or review advancing while dispatch slot remains | Not established by the cited focused tests; requires explicit synthetic stage-finalization, engine failure, parallel review and two-transaction crash tests |
 

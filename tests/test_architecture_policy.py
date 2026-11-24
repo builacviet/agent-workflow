@@ -381,8 +381,6 @@ def test_nested_trusted_git_package_is_classified():
 # admin.py was clean at the approved base and still participates in the scan.
 _LEGACY_R2_AST_INVENTORY = """\
 src/agent_workflow/bootstrap/mcp_runtime.py|inline-import|postgres_workflow_provider|agent_workflow.composition.postgres_mcp.postgres_mcp_service|1
-src/agent_workflow/controller.py|inline-import|<module>|agent_workflow.orchestration.controller|1
-src/agent_workflow/controller.py|inline-import|<module>|agent_workflow.orchestration.controller.main|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.BaseModel|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.ConfigDict|1
 src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.Field|1
@@ -402,12 +400,6 @@ src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.mcp.auth0_oauth.load_auth0_config|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_ci_entrypoint.compose_ci_execution|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.composition.postgres_dispatch_entrypoint.compose_dispatch_execution|1
-src/agent_workflow/orchestration/controller.py|inline-import|main|agent_workflow.runners.coder_runtime.validate_config|1
-src/agent_workflow/orchestration/controller.py|inline-import|operate|agent_workflow.runners.coder_runtime.CoderRuntime|1
-src/agent_workflow/orchestration/controller.py|inline-import|process_lock|fcntl|1
-src/agent_workflow/orchestration/controller.py|inline-import|process_lock|msvcrt|1
 src/agent_workflow/runners/coder_runtime.py|inline-import|CoderRuntime._validated_result|agent_workflow.integrations.github.validate_sha|1
 src/agent_workflow/runners/coder_runtime.py|inline-import|_SqliteCiTracking.track|agent_workflow.storage.ci_state.ControllerCiState|1
 src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1

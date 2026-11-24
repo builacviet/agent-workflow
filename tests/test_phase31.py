@@ -8,7 +8,6 @@ import pytest
 
 from agent_workflow.domain.service import WorkflowService, encode
 from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
-from agent_workflow.orchestration.controller import run_once
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.storage.dispatch_repository import DispatchLedger
 from agent_workflow.workers.trusted_git.app_auth import (
@@ -76,28 +75,7 @@ def test_expiry_restart_and_failure_never_auto_redispatch(state):
     assert state.get_coder_assignment("P31")["status"] == "AWAITING_HANDOFF"
 
 
-def test_success_handoff_and_idempotency(state):
-    ledger = DispatchLedger(state)
-
-    def execute(claim, context):
-        state.register_task_handoff(
-            "P31",
-            REPOSITORY,
-            "codex/test",
-            BASE,
-            HEAD,
-            "docs/handoff.md",
-            "synthetic tests",
-        )
-        return HEAD
-
-    assert run_once(state, ledger, {"P31"}, execute)
-    assert not run_once(state, ledger, {"P31"}, execute)
-    assert state.get_review_context("P31")["status"] == "READY_IN_REVIEW"
-    assert state.get_review_context("P31")["completed_review_rounds"] == 0
-
-
-def test_pre_rename_task_can_dispatch_and_handoff_without_rewriting_repository(state):
+def test_pre_rename_task_can_handoff_without_rewriting_repository(state):
     with state.repository.read() as db:
         spec = json.loads(state.task(db, "P31")["metadata"])
     legacy_spec = spec | {"repository": LEGACY_REPOSITORY}
@@ -109,20 +87,16 @@ def test_pre_rename_task_can_dispatch_and_handoff_without_rewriting_repository(s
 
     state.provision_task(spec)
 
-    def execute(claim, context):
-        assert context["repository"] == REPOSITORY
-        state.register_task_handoff(
-            "P31",
-            LEGACY_REPOSITORY,
-            "codex/test",
-            BASE,
-            HEAD,
-            "docs/handoff.md",
-            "synthetic tests",
-        )
-        return HEAD
-
-    assert run_once(state, DispatchLedger(state), {"P31"}, execute)
+    assert state.get_coder_assignment("P31")["repository"] == REPOSITORY
+    state.register_task_handoff(
+        "P31",
+        LEGACY_REPOSITORY,
+        "codex/test",
+        BASE,
+        HEAD,
+        "docs/handoff.md",
+        "synthetic tests",
+    )
     assert state.list_review_queue()[0]["repository"] == REPOSITORY
     context = state.get_review_context("P31")
     assert context["github_references"]["complete_diff"] == (
@@ -132,18 +106,6 @@ def test_pre_rename_task_can_dispatch_and_handoff_without_rewriting_repository(s
         task = state.task(db, "P31")
     assert task["repository"] == LEGACY_REPOSITORY
     assert task["metadata"] == encode(legacy_spec)
-
-
-def test_runtime_exception_blocks_slot_and_sanitizes_ledger(state):
-    def fail(*args):
-        raise RuntimeError("sensitive diagnostic")
-
-    with pytest.raises(RuntimeError):
-        run_once(state, DispatchLedger(state), {"P31"}, fail)
-    with state.repository.raw_connection() as db:
-        row = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
-    assert row["status"] == "BLOCKED" and row["slot"] == 1
-    assert "sensitive" not in row["detail"]
 
 
 @pytest.mark.parametrize(
@@ -383,18 +345,6 @@ def test_snapshot_real_baseline_includes_safe_templates(tmp_path):
     assert not (stage / ".secret").exists()
 
 
-def test_controller_process_lock_excludes_reconciliation(tmp_path):
-    from agent_workflow.orchestration.controller import process_lock
-
-    lock = tmp_path / "controller.lock"
-    with process_lock(lock):
-        with pytest.raises(WorkflowError):
-            with process_lock(lock):
-                pytest.fail("second controller acquired lock")
-    with process_lock(lock):
-        pass
-
-
 def test_malformed_and_expired_installation_tokens(app):
     client, transport, _ = app
     original = transport.__call__
@@ -571,30 +521,6 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, state, tmp_path):
         controller_runtime.stop("a" * 32)
         with pytest.raises(TimeoutError):
             budget.check_deadline()
-
-
-def test_expired_completion_never_marks_dispatch_done(state, monkeypatch):
-    import agent_workflow.budget as budget
-
-    now = [1000]
-    monkeypatch.setattr(budget.time, "time", lambda: now[0])
-
-    def execute(claim, context):
-        now[0] = 1061
-        return HEAD
-
-    with pytest.raises(TimeoutError):
-        run_once(
-            state,
-            DispatchLedger(state, clock=lambda: now[0]),
-            {"P31"},
-            execute,
-            timeout=60,
-        )
-    with state.repository.raw_connection() as db:
-        row = dict(db.execute("SELECT * FROM coder_dispatches").fetchone())
-    assert row["status"] == "BLOCKED" and row["slot"] == 1
-    assert row["result_sha"] is None
 
 
 def test_wall_clock_rollback_does_not_extend_budget(monkeypatch):
