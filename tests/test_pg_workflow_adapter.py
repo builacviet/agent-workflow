@@ -654,3 +654,166 @@ def test_null_handoff_sha_does_not_match(setup):
         )
         assert db.find_head_handoff(task_id, None) is None
         assert isinstance(db.find_authorization((task_id,))["metadata"], str)
+
+
+def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeypatch):
+    service, repo, task_id, factory = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    monkeypatch.setattr(
+        WorkflowService,
+        "claim_review",
+        lambda *args: pytest.fail("legacy claim called"),
+    )
+    monkeypatch.setattr(
+        WorkflowService,
+        "submit_review",
+        lambda *args: pytest.fail("legacy submit called"),
+    )
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+    first = payload(claim)
+    result = mcp_postgres("submit_review", {"submission": first})
+    assert result["verdict"] == "CHANGES_REQUESTED" and result["review_round"] == 1
+    assert mcp_postgres("submit_review", {"submission": first}) == {
+        "task_id": task_id,
+        "duplicate": True,
+        "reviewed_head_sha": HEAD,
+        "verdict": "CHANGES_REQUESTED",
+    }
+    with pytest.raises(ToolError, match="conflicting duplicate"):
+        mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
+    service.register_task_handoff(
+        task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
+    )
+    claim2 = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": NEXT}
+    )
+    second = payload(claim2, "APPROVED", prior_resolutions={"F-1": "FIXED"})
+    result2 = mcp_postgres("submit_review", {"submission": second})
+    assert result2["verdict"] == "APPROVED" and result2["review_round"] == 2
+    assert mcp_postgres(
+        "get_review_context", {"task_id": task_id}
+    ) == service.get_review_context(task_id)
+    assert mcp_postgres(
+        "get_review_result", {"task_id": task_id}
+    ) == service.get_review_result(task_id)
+    assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
+    with repo.read() as unit:
+        assert len(unit.list_reviews((task_id,))) == 2
+
+
+def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
+    from agent_workflow.infrastructure.database.repositories.review_writes import (
+        PostgresReviewWrites,
+    )
+
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+    original = PostgresReviewWrites.transition
+
+    def fail(self, task, status, action, now, metadata):
+        if action == "REVIEW_SUBMITTED":
+            raise RuntimeError("injected persistence failure")
+        return original(self, task, status, action, now, metadata)
+
+    monkeypatch.setattr(PostgresReviewWrites, "transition", fail)
+    with pytest.raises(ToolError, match="injected persistence failure"):
+        mcp_postgres("submit_review", {"submission": payload(claim)})
+    with repo.read() as unit:
+        assert unit.list_reviews((task_id,)) == []
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
+        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
+        assert unit.find_task((task_id,))["status"] == "IN_REVIEW"
+
+
+def test_mcp_submit_deadline_failure_rolls_back(setup, mcp_postgres, monkeypatch):
+    import agent_workflow.storage.postgres_workflow as workflow_storage
+
+    service, repo, task_id, _ = setup
+    ready(service, task_id)
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    claim = mcp_postgres(
+        "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
+    )
+
+    def expired():
+        raise TimeoutError("injected deadline")
+
+    monkeypatch.setattr(workflow_storage, "check_deadline", expired)
+    with pytest.raises(ToolError, match="injected deadline"):
+        mcp_postgres("submit_review", {"submission": payload(claim)})
+    monkeypatch.undo()
+    with repo.read() as unit:
+        assert unit.list_reviews((task_id,)) == []
+        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
+        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
+
+
+def test_mcp_writes_match_legacy_in_two_rounds(setup, mcp_postgres, monkeypatch):
+    service, _, task_id, factory = setup
+    legacy_id = task_id + "-legacy"
+    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
+    actor = "auth0:auth0|pg-test"
+    try:
+        ready(service, task_id)
+        ready(service, legacy_id)
+        for sha, verdict, resolutions in (
+            (HEAD, "CHANGES_REQUESTED", {}),
+            (NEXT, "APPROVED", {"F-1": "FIXED"}),
+        ):
+            if sha == NEXT:
+                for current_id in (task_id, legacy_id):
+                    service.register_task_handoff(
+                        current_id,
+                        REPO,
+                        "task/test",
+                        BASE,
+                        sha,
+                        "docs/handoff.md",
+                        "test",
+                    )
+            legacy_claim = service.claim_review(legacy_id, sha, actor)
+            new_claim = mcp_postgres(
+                "claim_review", {"task_id": task_id, "expected_head_sha": sha}
+            )
+            assert {k: legacy_claim[k] for k in ("reviewed_sha", "review_round")} == {
+                k: new_claim[k] for k in ("reviewed_sha", "review_round")
+            }
+            old_data = payload(legacy_claim, verdict, prior_resolutions=resolutions)
+            new_data = payload(new_claim, verdict, prior_resolutions=resolutions)
+            old_result = service.submit_review(old_data, actor)
+            new_result = mcp_postgres("submit_review", {"submission": new_data})
+            fields = ("verdict", "review_round", "reviewed_head_sha", "actual_effort")
+            assert {k: old_result[k] for k in fields} == {
+                k: new_result[k] for k in fields
+            }
+            old_duplicate = service.submit_review(old_data, actor)
+            new_duplicate = mcp_postgres("submit_review", {"submission": new_data})
+            assert {
+                k: old_duplicate[k]
+                for k in ("duplicate", "reviewed_head_sha", "verdict")
+            } == {
+                k: new_duplicate[k]
+                for k in ("duplicate", "reviewed_head_sha", "verdict")
+            }
+    finally:
+        with factory.transaction() as conn:
+            for table in (
+                "review_findings",
+                "reviews",
+                "review_attempts",
+                "task_events",
+                "controller_ci_observations",
+                "controller_ci_tasks",
+                "tasks",
+            ):
+                conn.execute(
+                    text(f"DELETE FROM {table} WHERE task_id=:task_id"),
+                    {"task_id": legacy_id},
+                )

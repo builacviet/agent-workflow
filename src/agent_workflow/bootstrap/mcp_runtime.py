@@ -33,3 +33,13 @@ def postgres_workflow_provider():
     from agent_workflow.composition.postgres_mcp import postgres_mcp_service
 
     return postgres_mcp_service(config)
+
+
+def postgres_review_writes_provider():
+    """Load settings for one authorized review command."""
+    config = AppConfig.from_env()
+    if config.pg_runtime_dsn is None:
+        raise ValueError("PG_RUNTIME_DSN is required")
+    if postgres_mcp is None:
+        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    return postgres_mcp.postgres_mcp_review_writes(config)
