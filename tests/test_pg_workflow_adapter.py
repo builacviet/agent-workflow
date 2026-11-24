@@ -28,14 +28,10 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 from agent_workflow.application.review.use_cases.submit_review import (
     SubmitReviewUseCase,
 )
-from agent_workflow.application.review.use_cases.write_contracts import (
-    ClaimReviewInput,
-    SubmitReviewInput,
-)
+from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_mcp import postgres_mcp_task_operations
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
-from agent_workflow.domain.contracts import Submission
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueReader,
 )
@@ -44,6 +40,7 @@ from agent_workflow.infrastructure.database.repositories.review_writes import (
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.review_assignment_response import review_context_response
 from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
@@ -153,9 +150,7 @@ def submit_task(repo, data, reviewer, *, clock=None, require_ci=False):
         token=lambda: uuid.uuid4().hex,
         require_ci=require_ci,
     )
-    return asdict(
-        operation.execute(SubmitReviewInput(Submission.model_validate(data), reviewer))
-    )
+    return asdict(operation.execute(Submission.model_validate(data).to_input(reviewer)))
 
 
 def read_context(repo, task_id):

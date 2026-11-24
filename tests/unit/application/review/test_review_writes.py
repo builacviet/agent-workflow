@@ -9,15 +9,16 @@ from agent_workflow.application.review.use_cases.submit_review import (
 )
 from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
+    ReviewSubmission,
     SubmitReviewInput,
 )
-from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.review.policy import (
     ClaimFacts,
     TaskFacts,
     require_ci,
     verdict_allowed,
 )
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
 
 HEAD = "a" * 40
@@ -33,20 +34,18 @@ def scope_for(repo):
 
 
 def submission(**updates):
-    return Submission.model_validate(
-        {
-            "task_id": "T",
-            "claim_token": "token",
-            "reviewed_head_sha": HEAD,
-            "review_round": 1,
-            "verdict": "APPROVED",
-            "summary": "ok",
-            "findings": [],
-            "prior_resolutions": {},
-            "requested_effort": "medium",
-            **updates,
-        }
-    )
+    fields = {
+        "task_id": "T",
+        "claim_token": "token",
+        "reviewed_head_sha": HEAD,
+        "review_round": 1,
+        "verdict": WorkflowStatus.APPROVED,
+        "summary": "ok",
+        "findings": (),
+        "prior_resolutions": {},
+        "requested_effort": "medium",
+    }
+    return ReviewSubmission(**(fields | updates))
 
 
 def claim_checks_ci_and_commits_only_after_validation():

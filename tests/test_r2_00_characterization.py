@@ -9,8 +9,9 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from agent_workflow.domain.contracts import Submission, TaskSpec
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
+from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.runners.runtime_plugins import (
     CodexCLIPlugin,
     RuntimeManifest,
@@ -90,7 +91,7 @@ def test_runtime_adapter_contract_is_replaceable_without_provider_fallback():
 
 def test_public_workflow_contract_field_names_remain_stable():
     """R2 may move models but cannot silently mutate MCP DTO field names."""
-    assert set(TaskSpec.model_fields) == {
+    assert set(ProvisionTaskSpec.model_fields) == {
         "task_id",
         "title",
         "description",
@@ -119,4 +120,15 @@ def test_public_workflow_contract_field_names_remain_stable():
         "verification_evidence",
     }
     with pytest.raises(ValidationError):
-        TaskSpec.model_validate({**task_spec(), "unapproved_extension": True})
+        ProvisionTaskSpec.model_validate({**task_spec(), "unapproved_extension": True})
+
+
+def test_provision_task_transport_defaults_are_preserved():
+    data = task_spec()
+    del data["require_verified_effort"]
+    del data["synthetic"]
+    command = ProvisionTaskSpec.model_validate(data).to_command()
+    assert command.spec.require_verified_effort is True
+    assert command.spec.synthetic is False
+    assert command.spec.acceptance_criteria == ("preserve contract",)
+    assert command.spec.context_paths == (HANDOFF,)

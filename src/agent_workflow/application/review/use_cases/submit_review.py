@@ -8,18 +8,18 @@ from collections.abc import Callable
 
 from agent_workflow.application.review.use_cases.write_contracts import (
     IReviewWriteScope,
+    ReviewSubmission,
     SubmitReviewInput,
     SubmitReviewOutput,
     ci_allows,
 )
-from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.review.policy import (
     TaskFacts,
     effort_allowed,
     submission_allowed,
     verdict_allowed,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
+from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 class SubmitReviewUseCase:
@@ -31,7 +31,7 @@ class SubmitReviewUseCase:
         token: Callable[[], str],
         require_ci: bool,
         effort_verifier: Callable[
-            [str, TaskFacts, Submission], tuple[str | None, str] | None
+            [str, TaskFacts, ReviewSubmission], tuple[str | None, str] | None
         ]
         | None = None,
     ):
@@ -45,14 +45,35 @@ class SubmitReviewUseCase:
         self.effort_verifier = effort_verifier
 
     def execute(self, request: SubmitReviewInput) -> SubmitReviewOutput:
-        submission = Submission.model_validate(request.submission)
-        if not submission.task_id.strip() or not submission.claim_token.strip():
-            raise WorkflowError("unknown claim or claim owner mismatch")
-        if not isinstance(request.reviewer, str) or not request.reviewer.strip():
-            raise WorkflowError("invalid reviewer")
-        validate_sha(submission.reviewed_head_sha)
+        submission = request.submission
+        resolutions = dict(submission.prior_resolutions)
+        # These keys and defaults are part of the persisted idempotency identity.
         canonical = json.dumps(
-            submission.model_dump(),
+            {
+                "task_id": submission.task_id,
+                "claim_token": submission.claim_token,
+                "reviewed_head_sha": submission.reviewed_head_sha,
+                "review_round": submission.review_round,
+                "verdict": submission.verdict.value,
+                "summary": submission.summary,
+                "findings": [
+                    {
+                        "finding_id": finding.finding_id,
+                        "severity": finding.severity,
+                        "acceptance_criterion": finding.acceptance_criterion,
+                        "file_path": finding.file_path,
+                        "line": finding.line,
+                        "description": finding.description,
+                        "suggested_correction": finding.suggested_correction,
+                        "required_verification": finding.required_verification,
+                    }
+                    for finding in submission.findings
+                ],
+                "prior_resolutions": resolutions,
+                "requested_effort": submission.requested_effort,
+                "actual_effort": submission.actual_effort,
+                "verification_evidence": submission.verification_evidence,
+            },
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
@@ -80,7 +101,7 @@ class SubmitReviewUseCase:
             if duplicate:
                 return SubmitReviewOutput(
                     task.task_id,
-                    submission.verdict,
+                    submission.verdict.value,
                     submission.reviewed_head_sha,
                     duplicate=True,
                 )
@@ -88,7 +109,7 @@ class SubmitReviewUseCase:
                 submission.review_round,
                 submission.verdict,
                 repo.prior_findings(task.task_id),
-                submission.prior_resolutions,
+                resolutions,
                 [f.finding_id for f in submission.findings],
             )
             actual, evidence = None, "unverified"
@@ -110,7 +131,7 @@ class SubmitReviewUseCase:
             )
             return SubmitReviewOutput(
                 task.task_id,
-                submission.verdict,
+                submission.verdict.value,
                 submission.reviewed_head_sha,
                 review_id=review_id,
                 review_round=submission.review_round,

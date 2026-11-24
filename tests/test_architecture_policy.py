@@ -380,11 +380,6 @@ def test_nested_trusted_git_package_is_classified():
 # never exemptions. Repeated identical violations are counted per symbol.
 # admin.py was clean at the approved base and still participates in the scan.
 _LEGACY_R2_AST_INVENTORY = """\
-src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.BaseModel|1
-src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.ConfigDict|1
-src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.Field|1
-src/agent_workflow/domain/contracts.py|core-import|<module>|pydantic.StrictStr|1
-src/agent_workflow/domain/contracts.py|domain-base|StrictModel|pydantic.BaseModel|1
 src/agent_workflow/integrations/github_app_checks.py|inline-import|ControllerAppToken.__call__|jwt|1
 src/agent_workflow/mcp/security.py|inline-import|authorize_context|mcp.server.auth.middleware.auth_context.get_access_token|1
 src/agent_workflow/mcp/security.py|inline-import|authorize_techlead|mcp.server.auth.middleware.auth_context.get_access_token|1

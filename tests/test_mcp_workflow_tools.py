@@ -12,7 +12,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
-from test_agent_workflow import BASE, HEAD, REPO, payload, spec
+from test_agent_workflow import BASE, HEAD, REPO, finding, payload, spec
 
 from agent_workflow.application.review.dtos import ReviewQueueItem, ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
@@ -447,3 +447,42 @@ def test_review_writes_use_cases_authorize_and_close(
     assert execute.call_args.args[0].reviewer == ACTOR
     opened.assert_called_once()
     factory.close.assert_called_once()
+
+
+def test_submit_review_fastmcp_schema_matches_baseline():
+    expected = Path(__file__).with_name("fixtures") / "submit_review_input_schema.json"
+    tool = next(
+        tool for tool in asyncio.run(mcp.list_tools()) if tool.name == "submit_review"
+    )
+    assert tool.inputSchema == json.loads(expected.read_text(encoding="ascii"))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"task_id": 123}, "task_id"),
+        ({"review_round": "1"}, "review_round"),
+        ({"review_round": True}, "review_round"),
+        ({"review_round": 3}, "review_round"),
+        ({"verdict": "IN_REVIEW"}, "verdict"),
+        ({"summary": ""}, "summary"),
+        ({"findings": [finding() | {"line": "1"}]}, "line"),
+        ({"findings": [finding() | {"line": 0}]}, "line"),
+        ({"findings": [finding() | {"severity": "unknown"}]}, "severity"),
+        ({"findings": [finding() | {"extra": True}]}, "extra"),
+        ({"prior_resolutions": {"F": "unknown"}}, "prior_resolutions"),
+        ({"extra": True}, "extra"),
+        ({"claim_token": " "}, "unknown claim"),
+        ({"reviewed_head_sha": "short"}, "full lowercase"),
+    ],
+)
+def test_invalid_review_submission_does_not_open_provider(
+    monkeypatch, authorized_workflow, overrides, error
+):
+    opened = Mock()
+    monkeypatch.setattr(PostgresFactory, "open", opened)
+    with pytest.raises(ToolError, match=error):
+        asyncio.run(
+            mcp.call_tool("submit_review", {"submission": SUBMISSION | overrides})
+        )
+    opened.assert_not_called()
