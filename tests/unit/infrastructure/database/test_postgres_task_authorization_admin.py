@@ -15,7 +15,6 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.composition import task_deps
-from agent_workflow.domain import service as legacy_service
 from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
 from agent_workflow.interfaces.cli.task_spec import (
@@ -58,9 +57,7 @@ def spec_file(tmp_path):
 def entrypoint(monkeypatch, spec_file):
     monkeypatch.delenv("PGHOSTADDR", raising=False)
     monkeypatch.delenv("PGSERVICE", raising=False)
-    legacy = Mock()
     open_factory = Mock()
-    monkeypatch.setattr(legacy_service, "default_service", legacy)
     monkeypatch.setattr(task_deps.PostgresFactory, "open", open_factory)
 
     def run(action="provision", *, postgres=False):
@@ -70,7 +67,7 @@ def entrypoint(monkeypatch, spec_file):
         monkeypatch.setattr(sys, "argv", argv)
         admin.main()
 
-    return run, legacy, open_factory
+    return run, open_factory
 
 
 def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
@@ -86,7 +83,7 @@ def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
 def test_bad_command_line_arguments_do_not_echo_submitted_values(
     entrypoint, monkeypatch, capsys, arguments
 ):
-    _, _, open_factory = entrypoint
+    _, open_factory = entrypoint
     monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", *arguments])
     with pytest.raises(SystemExit) as error:
         admin.main()
@@ -101,7 +98,7 @@ def test_bad_command_line_arguments_do_not_echo_submitted_values(
 def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
     entrypoint, monkeypatch, postgres
 ):
-    run, legacy, open_factory = entrypoint
+    run, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
     open_factory.return_value = MagicMock()
     build = MagicMock()
@@ -111,7 +108,6 @@ def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
 
     open_factory.assert_called_once()
     build.return_value.__enter__.return_value.execute.assert_called_once()
-    legacy.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -121,7 +117,7 @@ def test_deprecated_postgres_flag_does_not_select_backend_for_provision(
 def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
     entrypoint, monkeypatch, action, postgres
 ):
-    run, legacy, _ = entrypoint
+    run, _ = entrypoint
     scope = MagicMock()
     monkeypatch.setattr(admin, "admin_seed_scope", scope)
 
@@ -129,7 +125,6 @@ def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
 
     scope.assert_called_once_with(action)
     scope.return_value.__enter__.return_value.execute.assert_called_once()
-    legacy.assert_not_called()
 
 
 def test_admin_seed_scope_has_typed_use_case_contract():
@@ -144,7 +139,7 @@ def test_admin_seed_scope_has_typed_use_case_contract():
 def test_missing_invalid_or_remote_dsn_fails_closed(
     entrypoint, dsn, monkeypatch, capsys
 ):
-    run, legacy, open_factory = entrypoint
+    run, open_factory = entrypoint
     if dsn is None:
         monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
     else:
@@ -157,13 +152,12 @@ def test_missing_invalid_or_remote_dsn_fails_closed(
     stderr = capsys.readouterr().err
     assert "PG_RUNTIME_DSN" in stderr
     assert "disposable@" not in stderr
-    legacy.assert_not_called()
     open_factory.assert_not_called()
 
 
 @pytest.mark.parametrize("override", ["PGHOSTADDR", "PGSERVICE"])
 def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, override):
-    run, legacy, open_factory = entrypoint
+    run, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
     monkeypatch.setenv(override, "unexpected")
     with pytest.raises(SystemExit) as error:
@@ -171,7 +165,6 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
 
     assert error.value.code == 2
     assert "PGHOSTADDR and PGSERVICE are unsupported" in capsys.readouterr().err
-    legacy.assert_not_called()
     open_factory.assert_not_called()
 
 
@@ -191,7 +184,7 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
 def test_bad_transport_or_business_input_does_not_open_database(
     entrypoint, spec_file, updates, message, monkeypatch, capsys
 ):
-    run, legacy, open_factory = entrypoint
+    run, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
     payload = json.loads(spec_file.read_text(encoding="utf-8"))
     spec_file.write_text(json.dumps(payload | updates), encoding="utf-8")
@@ -205,7 +198,6 @@ def test_bad_transport_or_business_input_does_not_open_database(
     assert SECRET not in stderr
     assert "input_value" not in stderr
     assert "Traceback" not in stderr
-    legacy.assert_not_called()
     open_factory.assert_not_called()
 
 
@@ -251,7 +243,7 @@ def test_safe_validation_formatter_discards_validator_context_and_input():
 def test_cli_reports_malformed_json_without_echoing_contents(
     entrypoint, spec_file, capsys
 ):
-    run, _, open_factory = entrypoint
+    run, open_factory = entrypoint
     spec_file.write_text(f'{{"{SECRET}":', encoding="utf-8")
     with pytest.raises(SystemExit) as error:
         run()
@@ -278,7 +270,7 @@ def test_cli_reports_malformed_json_without_echoing_contents(
 def test_provision_passes_validated_command_and_closes_factory(
     entrypoint, monkeypatch, failure, exit_code, message, capsys
 ):
-    run, legacy, open_factory = entrypoint
+    run, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
     monkeypatch.setenv("CORRELATION_ID", "cli-failure-test")
     factory_context = MagicMock()
@@ -324,7 +316,6 @@ def test_provision_passes_validated_command_and_closes_factory(
     assert command.spec.repository == REPOSITORY
     assert command.spec.context_paths == ("AGENTS.md",)
     factory_context.__exit__.assert_called_once()
-    legacy.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -333,7 +324,7 @@ def test_provision_passes_validated_command_and_closes_factory(
 def test_cli_regenerates_correlation_and_logs_once_per_call(
     entrypoint, monkeypatch, capsys, invalid_id
 ):
-    run, _, open_factory = entrypoint
+    run, open_factory = entrypoint
     monkeypatch.setenv("PG_RUNTIME_DSN", LOCAL_DSN)
     monkeypatch.setenv("CORRELATION_ID", invalid_id)
     seen = []
