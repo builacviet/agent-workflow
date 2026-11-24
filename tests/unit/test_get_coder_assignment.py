@@ -18,7 +18,9 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.interfaces.review_assignment_response import coder_assignment_response
+from agent_workflow.interfaces.review_assignment_response import (
+    coder_assignment_response,
+)
 
 
 def test_latest_resolution_filters_findings_and_preserves_wire_context():

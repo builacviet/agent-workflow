@@ -31,7 +31,9 @@ from agent_workflow.integrations.github import (
     WorkflowError,
     canonical_repository,
 )
-from agent_workflow.interfaces.review_assignment_response import coder_assignment_response
+from agent_workflow.interfaces.review_assignment_response import (
+    coder_assignment_response,
+)
 from agent_workflow.runners.agent_runtime import (
     AgentRuntime,
     CiTracking,
