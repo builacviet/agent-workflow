@@ -1,9 +1,12 @@
 """V1-03C: CI-only entry point cannot dispatch agents or require worker PEM."""
 
 import json
+import runpy
+import subprocess
 import sys
+import textwrap
 from argparse import Namespace
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -14,6 +17,7 @@ from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
+from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
 from agent_workflow.orchestration import controller
 
 
@@ -48,8 +52,9 @@ def test_legacy_operate_refuses_ci_only_modes(flag):
 
 @pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
 @pytest.mark.parametrize("failure", [None, PermissionError("leadership lost")])
+@pytest.mark.parametrize("pg_only", [False, True])
 def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
-    monkeypatch, tmp_path, mode, failure
+    monkeypatch, tmp_path, mode, failure, pg_only
 ):
     config_file = tmp_path / "controller.json"
     config = {"controller_github_app": {}}
@@ -95,14 +100,123 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         ci_cli, "run_ci_watch", lambda operation: run_handler("watch", operation)
     )
 
+    def launch():
+        if pg_only:
+            runpy.run_module(
+                "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
+            )
+        else:
+            controller.main()
+
     if failure is None:
-        controller.main()
+        launch()
     else:
         with pytest.raises(SystemExit) as error:
-            controller.main()
+            launch()
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
+
+
+def test_pg_ci_cli_uses_injected_app_config(monkeypatch, tmp_path, capsys):
+    config = tmp_path / "controller-ci.json"
+    config.write_text("{}")
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/unused"
+    )
+    monkeypatch.setattr(sys, "argv", ["controller", str(config), "--ci-once"])
+    monkeypatch.setattr(
+        AppConfig, "from_env", Mock(side_effect=AssertionError("read process settings"))
+    )
+    settings = AppConfig(pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/ci")
+    load_app_config = Mock(return_value=settings)
+    reconcile = Mock(return_value=ci_cli.CiRunResponse(0, 0))
+    compose_ci = Mock(return_value=nullcontext(reconcile))
+    compose_dispatch = Mock(side_effect=AssertionError("dispatch selected in CI mode"))
+
+    run_controller_cli(
+        compose_ci=compose_ci,
+        compose_dispatch=compose_dispatch,
+        load_app_config=load_app_config,
+        log_scope=nullcontext,
+    )
+
+    AppConfig.from_env.assert_not_called()
+    load_app_config.assert_called_once_with()
+    compose_ci.assert_called_once_with({}, settings)
+    compose_dispatch.assert_not_called()
+    reconcile.assert_called_once_with(ci_cli.CiRunRequest(startup=True))
+    assert capsys.readouterr().out == "CI reconciliation: 0 tracked observations\n"
+
+
+@pytest.mark.parametrize("mode", ["--ci-once", "--ci-watch"])
+def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
+    monkeypatch, tmp_path, mode
+):
+    config = tmp_path / "controller-ci.json"
+    config.write_text("{}")
+    monkeypatch.setenv(
+        "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
+    )
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
+    # Other tests import the legacy Controller, so use a fresh interpreter.
+    script = textwrap.dedent("""
+        import runpy
+        import sys
+        from contextlib import contextmanager
+        from functools import partial
+        from importlib.abc import MetaPathFinder
+
+        blocked = {
+            "agent_workflow.composition.postgres_dispatch_entrypoint",
+            "agent_workflow.composition.postgres_dispatch_deps",
+            "agent_workflow.runners.coder_runtime",
+            "agent_workflow.runners.sandbox",
+            "agent_workflow.storage.dispatch_repository",
+        }
+
+        class BlockDispatchImports(MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname in blocked:
+                    raise AssertionError(f"CI tried to load {fullname}")
+
+        assert not blocked.intersection(sys.modules)
+        sys.meta_path.insert(0, BlockDispatchImports())
+
+        from agent_workflow.composition import postgres_ci_entrypoint
+        from agent_workflow.interfaces.cli import ci_controller
+
+        requests = []
+
+        def reconcile(request):
+            requests.append(request)
+            return ci_controller.CiRunResponse(observed_count=0, blocked_count=0)
+
+        @contextmanager
+        def compose(config, app_config):
+            assert config == {}
+            yield reconcile
+
+        postgres_ci_entrypoint.compose_ci_execution = compose
+        ci_controller.run_ci_watch = partial(
+            ci_controller.run_ci_watch, stop=lambda: bool(requests)
+        )
+        runpy.run_module(
+            "agent_workflow.bootstrap.controller_entrypoint", run_name="__main__"
+        )
+        assert requests == [ci_controller.CiRunRequest(startup=True)]
+        assert not blocked.intersection(sys.modules)
+    """)
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(config), mode],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

@@ -148,16 +148,18 @@ def test_dispatch_adapter_imports_only_cli_and_application_dependencies():
     tree = ast.parse(Path(cli.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            assert all(
-                alias.name in {"argparse", "json", "sys"} for alias in node.names
-            )
+            assert all(alias.name in {"argparse", "sys"} for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             assert node.level == 0 and node.module
+            if node.module == "agent_workflow.interfaces.cli.controller_config":
+                assert [alias.name for alias in node.names] == [
+                    "read_controller_config"
+                ]
+                continue
             assert node.module in {
                 "collections.abc",
                 "contextlib",
                 "dataclasses",
-                "pathlib",
                 "typing",
                 "agent_workflow.app_config",
             } or node.module.startswith("agent_workflow.application.")

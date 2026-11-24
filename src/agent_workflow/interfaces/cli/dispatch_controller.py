@@ -1,17 +1,18 @@
 """Presentation for a single PostgreSQL Dispatch pass."""
 
 import argparse
-import json
 import sys
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import NoReturn
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.interfaces.cli.controller_config import (
+    read_controller_config as read_controller_config,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,10 +34,6 @@ ComposeDispatch = Callable[
 def add_dispatch_argument(parser: argparse.ArgumentParser) -> None:
     """Register the shared one-shot flag for PostgreSQL and legacy callers."""
     parser.add_argument("--once", action="store_true")
-
-
-def read_controller_config(path: Path) -> object:
-    return json.loads(path.resolve(strict=True).read_text(encoding="utf-8-sig"))
 
 
 def run_dispatch_pass(

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import runpy
 import sqlite3
 import sys
 from contextlib import contextmanager, nullcontext
@@ -14,10 +15,12 @@ from sqlalchemy import create_engine
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
 from agent_workflow.composition import postgres_dispatch_entrypoint as entry
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.orchestration import controller
 from agent_workflow.runners import coder_runtime, sandbox
@@ -26,6 +29,7 @@ from agent_workflow.storage.postgres_models import CITask, Task
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
+PG_CONTROLLER = "agent_workflow.bootstrap.controller_entrypoint"
 INPUT = "b" * 40
 HEAD = "c" * 40
 
@@ -80,7 +84,10 @@ def run_dispatch(config, app_config):
     ).worker_completed
 
 
-def test_pg_once_cli_routes_without_sqlite(config, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("pg_only", [False, True])
+def test_pg_once_cli_routes_without_sqlite(
+    config, tmp_path, monkeypatch, capsys, pg_only
+):
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config))
     monkeypatch.setenv("PG_RUNTIME_DSN", DSN)
@@ -96,9 +103,72 @@ def test_pg_once_cli_routes_without_sqlite(config, tmp_path, monkeypatch, capsys
         yield SimpleNamespace(execute=execute)
 
     monkeypatch.setattr(entry, "compose_dispatch_execution", compose)
-    controller.main()
+    if pg_only:
+        runpy.run_module(PG_CONTROLLER, run_name="__main__")
+    else:
+        controller.main()
     execute.assert_called_once_with({"T"}, 1800)
     assert capsys.readouterr().out == "PostgreSQL dispatch: no work claimed.\n"
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        [],
+        ["--ci-once", "--ci-watch"],
+        ["--once", "--ci-watch"],
+        ["--ci-w"],
+        ["--acknowledge", "private-dispatch-id", "--reconciled"],
+        ["--once", "--acknowledge", "private-dispatch-id"],
+        ["--ci-once", "--reconciled"],
+    ],
+)
+def test_pg_only_cli_rejects_unsupported_flags_before_config(
+    monkeypatch, capsys, flags
+):
+    monkeypatch.setattr(sys, "argv", ["controller", "config.json", *flags])
+    monkeypatch.setattr(controller_cli, "read_controller_config", forbidden)
+    monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
+    monkeypatch.setattr(postgres_ci_entrypoint, "compose_ci_execution", forbidden)
+
+    with pytest.raises(SystemExit) as error:
+        runpy.run_module(PG_CONTROLLER, run_name="__main__")
+
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert not output.out
+    assert "exactly one supported mode" in output.err
+    assert "private-dispatch-id" not in output.err
+
+
+@pytest.mark.parametrize("mode", ["--once", "--ci-once", "--ci-watch"])
+@pytest.mark.parametrize("dsn", [None, "", "sqlite:///private-dsn.sqlite", DSN])
+def test_pg_only_cli_rejects_invalid_dsn_or_stale_config_before_resources(
+    config, tmp_path, monkeypatch, capsys, mode, dsn
+):
+    if dsn is None:
+        monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
+    else:
+        monkeypatch.setenv("PG_RUNTIME_DSN", dsn)
+    sqlite_path = tmp_path / "private-legacy.sqlite"
+    if dsn == DSN:
+        config["database"] = str(sqlite_path)
+    path = tmp_path / "controller.json"
+    path.write_text(json.dumps(config))
+    monkeypatch.setattr(sys, "argv", ["controller", str(path), mode])
+    monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
+    monkeypatch.setattr(postgres_ci_entrypoint, "compose_ci_execution", forbidden)
+    monkeypatch.setattr(sqlite3, "connect", forbidden)
+
+    with pytest.raises(SystemExit) as error:
+        runpy.run_module(PG_CONTROLLER, run_name="__main__")
+
+    assert error.value.code == (1 if mode == "--once" else 2)
+    output = capsys.readouterr()
+    assert not output.out
+    assert "configuration" in output.err or "PG_RUNTIME_DSN" in output.err
+    assert "private-" not in output.err
+    assert not sqlite_path.exists()
 
 
 def test_legacy_once_launcher_honors_explicit_sqlite_database(
@@ -677,7 +747,11 @@ def test_pg_once_runs_native_dev_stages(
         ]
         events.block.assert_called_once_with(dispatch_id)
     else:
-        assert run_dispatch(config, app_config)
+        config_file = tmp_path / "controller.json"
+        config_file.write_text(json.dumps(config))
+        monkeypatch.setenv("PG_RUNTIME_DSN", DSN)
+        monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--once"])
+        runpy.run_module(PG_CONTROLLER, run_name="__main__")
         assert [call[0] for call in events.mock_calls] == [
             "retire",
             "push",

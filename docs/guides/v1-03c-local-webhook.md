@@ -1,6 +1,6 @@
 # V1-03C — historical local webhook/CI test (not production)
 
-> **Dated Phase 3.1 runbook — inspect before running (2026-11-20).** The steps below configure a legacy local **SQLite-backed** Controller CI watcher and a tracked root Compose stack that still mounts SQLite. They are not the new PostgreSQL-first admin/Task/Review path and do **not** demonstrate a complete PostgreSQL MCP/Controller deployment. Verify the active host, credentials, schema, tasks and current source before any live operator action. For PostgreSQL-first R2 guidance use the [as-built architecture](../architecture.md), [runtime factory](postgres-connection.md) and [migration runbook](postgres-alembic.md). Keep this historical runbook for dated webhook and auth evidence; do not infer that it is the recommended current cutover procedure.
+> **Historical Phase 3.1 runbook (2026-11-20).** The tracked root Compose stack still has SQLite configuration. The CI-only command below uses the PostgreSQL-only launcher. This mixed-stack guide is historical webhook and auth evidence. Use the [as-built architecture](../architecture.md), [runtime factory](postgres-connection.md), [migration runbook](postgres-alembic.md) and [dispatch recovery gate](dispatch-recovery.md#postgresql-controller-and-retirement-gate) to evaluate a separately approved cutover.
 
 The repository's Compose `webhook` service now starts the PostgreSQL-only
 composition from `docker/webhook.Dockerfile`. Set `PG_RUNTIME_DSN` in the
@@ -13,7 +13,7 @@ approved live cutover.
 
 - nginx router: /webhooks/github to isolated webhook receiver, all other paths including /mcp and OAuth discovery to the existing MCP service.
 - Webhook receiver checks raw-body HMAC, expected repo and Controller App installation. HTTP 202 is notification receipt, never proof of CI success.
-- Trusted Controller CI-only watcher consumes durable SQLite notifications and uses a separate read-only GitHub App to recheck current PR HEAD and complete named Python tests Checks.
+- The PostgreSQL Controller CI-only watcher consumes durable PostgreSQL notifications and uses a separate read-only GitHub App to recheck the current PR HEAD and completed Python tests check.
 - WFC_CI_GATE_REQUIRED=1 on both worker and MCP enables exact-head review gating. Without it, the old development workflow remains unchanged.
 - Real credentialed Codex dispatch is separate from this smoke test and not authorized by V1-03C.
 
@@ -33,23 +33,30 @@ See [.runtime configuration inventory](../../.runtime/README.md) for the active 
 
 1. On the trusted host, copy .runtime/controller-webhook.env.example to .runtime/controller-webhook.env and set the PostgreSQL runtime DSN and Controller App Installation ID.
 2. Keep the local webhook secret file at .secret/controller-webhook-secret (exact configured secret, no extra spaces).
-3. Copy .runtime/controller-ci.json.example to .runtime/controller-ci.json and set DB path, Controller App ID / Installation ID and absolute PEM path. This CI-only config does NOT require worker credentials.
+3. Copy `.runtime/controller-ci.json.example` to `.runtime/controller-ci.json`, remove its legacy `database` field, and set the Controller App ID, Installation ID and absolute PEM path. CI-only mode uses only Controller App credentials.
 4. Configure .runtime/controller-mcp.env and .runtime/ngrok.env. New controller-stack MCP templates select Auth0 OAuth, but copying the template alone is insufficient: restore the verified Auth0 issuer, allowed subject, and ChatGPT CIMD client identity from the existing trusted setup. Do not use a short-lived Bearer workaround for an OAuth deployment.
-5. Verify `.runtime/controller-ci.json` uses the same physical SQLite database as the Compose services (`./data/controller/workflow.sqlite3` in this checkout), with host-absolute paths for the DB and Controller App PEM. If testing CI reviewer gating, configure WFC_CI_GATE_REQUIRED=1 for the MCP process and the trusted Dev Controller process. A task must have a trusted PR handoff and ControllerCiState tracking first; no unregistered task can pass CI.
+5. In the trusted host Controller environment, set `PG_RUNTIME_DSN` to the same PostgreSQL database used by the webhook receiver. For CI reviewer gating, MCP must also use that database and both MCP and Controller need `WFC_CI_GATE_REQUIRED=1`. Verify the tracked task has a trusted PR handoff and CI tracking before testing the reviewer gate.
 
 ## Local Compose and CI-only process
 
-Run from the repository root. Use a disposable local database first and back up current state before testing new SQLite migrations.
+These commands describe the historical root Compose stack, which still includes
+legacy SQLite configuration. They do not establish a complete PostgreSQL
+deployment or verify live cutover. A PostgreSQL smoke test requires a separately
+approved, disposable PostgreSQL environment.
 
     docker compose -f compose.yaml config --quiet
     docker compose -f compose.yaml up -d --build mcp webhook router
 
 Start CI-only consumption in a trusted host terminal (no Codex worker is dispatched):
 
-    python -m agent_workflow.orchestration.controller .runtime/controller-ci.json --ci-once
-    python -m agent_workflow.orchestration.controller .runtime/controller-ci.json --ci-watch
+    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-once
+    python -m agent_workflow.bootstrap.controller_entrypoint .runtime/controller-ci.json --ci-watch
 
-Run exactly one of the above commands, not both concurrently. The watcher scans local inbox only; it calls GitHub API on new events and bounded startup recovery, not global periodic CI polling.
+Run exactly one of the commands above. Both modes read the durable webhook inbox
+from PostgreSQL through `PG_RUNTIME_DSN`. At startup they can recheck a bounded
+set of tracked PRs. After startup, watch mode checks PostgreSQL for pending
+notifications and queries GitHub when pending work needs reconciliation. A pass
+with an empty inbox after startup makes no GitHub requests.
 
 Only after local processes have passed their checks, stop any older tunnel using the same reserved hostname and start ngrok:
 
