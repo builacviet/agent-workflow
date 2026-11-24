@@ -51,11 +51,10 @@ def fixture(acquired=True):
     dispatch = Mock()
     dispatch.claim.return_value = CLAIM.copy()
     assignment = Mock()
-    assignment.repository = deps_workflow = Mock()
     assignment.get_coder_assignment.return_value = ASSIGNMENT.copy()
     execute = Mock(return_value=SHA)
     deps = ControllerDependencies(
-        workflow=deps_workflow,
+        handoff_provider=Mock(),
         dispatch=dispatch,
         ci_tracking=Mock(),
         ci_repository=Mock(),

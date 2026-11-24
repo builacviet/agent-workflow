@@ -143,7 +143,10 @@ def register_tools(
             handoff_file_path,
             test_summary,
         )
-        with task_operations_provider() as (handoff, _):
+        with (
+            task_operations_provider() as (handoff_provider, _),
+            handoff_provider() as handoff,
+        ):
             return asdict(handoff.execute(request))
 
     @mcp.tool()

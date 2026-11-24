@@ -25,18 +25,13 @@ from agent_workflow.application.review.use_cases.submit_review import (
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueScope,
 )
 from agent_workflow.infrastructure.database.repositories.review_writes import (
     PostgresReviewWriteScope,
-)
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
@@ -62,12 +57,13 @@ def postgres_mcp_review_reads(
 
 
 @contextmanager
-def postgres_mcp_task_operations(app_config: AppConfig):
+def postgres_mcp_task_operations(
+    app_config: AppConfig,
+) -> Iterator[tuple[PostgresHandoffProvider, GetCoderAssignmentUseCase]]:
     factory = PostgresFactory.open(app_config)
     try:
-        repository = PostgresWorkflowRepository(factory)
         yield (
-            RegisterTaskHandoffUseCase(PostgresHandoffScope(repository), clock=time),
+            PostgresHandoffProvider(factory),
             GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
         )
     finally:

@@ -15,9 +15,11 @@ from pg_task_fixtures import authorize_task, record_handoff
 from sqlalchemy import create_engine, delete, event, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 from test_agent_workflow import BASE, HEAD, NEXT, REPO, spec
 
+from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
@@ -37,12 +39,10 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
 from agent_workflow.composition.ci_deps import create_ci_state_adapters
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.task.handoff import HandoffRequest
@@ -64,7 +64,6 @@ from agent_workflow.infrastructure.database.repositories.ci_state_repository imp
 )
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffRepository,
-    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
@@ -295,9 +294,9 @@ def mcp_provider_env(setup, monkeypatch):
     monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
 
 
-def handoff(repository, task_id, head):
+def handoff(factory, task_id, head):
     record_handoff(
-        repository, task_id, REPO, "task/test", BASE, head, "docs/handoff.md", "test"
+        factory, task_id, REPO, "task/test", BASE, head, "docs/handoff.md", "test"
     )
 
 
@@ -360,14 +359,14 @@ def run_race(*operations):
 
 
 def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
-    _, factory, workflow, task_id, _ = setup
+    _, factory, _, task_id, _ = setup
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
     record = RecordCiEvidenceUseCase(repository).execute
     with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
         track(task_id, PR, HEAD)
-    handoff(workflow, task_id, HEAD)
+    handoff(factory, task_id, HEAD)
     for invalid_task, invalid_pr, invalid_head, error_type in [
         ("unknown", PR, HEAD, WorkflowError),
         (task_id, True, HEAD, InvalidApplicationRequestError),
@@ -458,8 +457,8 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
 def test_mcp_provider_claims_require_exact_head_ci(
     setup, mcp_provider_env, monkeypatch, ci_required
 ):
-    _, factory, workflow, task_id, _ = setup
-    handoff(workflow, task_id, HEAD)
+    _, factory, _, task_id, _ = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -486,8 +485,8 @@ def test_mcp_provider_claims_require_exact_head_ci(
 
 
 def test_concurrent_observations_keep_sticky_failure_and_history(setup):
-    config, factory, workflow, task_id, _ = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, _ = setup
+    handoff(factory, task_id, HEAD)
     _, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     record = RecordCiEvidenceUseCase(repository).execute
@@ -530,20 +529,19 @@ def test_concurrent_observations_keep_sticky_failure_and_history(setup):
 
 
 def test_repair_limit_uses_existing_workflow_authorization(setup):
-    _, factory, workflow, task_id, _ = setup
+    _, factory, _, task_id, _ = setup
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     record = RecordCiEvidenceUseCase(repository).execute
-    operation = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(workflow), clock=lambda: 1000.0
-    )
+    provide_handoff = PostgresHandoffProvider(factory, clock=lambda: 1000.0)
 
     def current_handoff(head):
-        return operation.execute(
-            HandoffRequest(
-                task_id, REPO, "task/test", BASE, head, "docs/handoff.md", "test"
+        with provide_handoff() as operation:
+            return operation.execute(
+                HandoffRequest(
+                    task_id, REPO, "task/test", BASE, head, "docs/handoff.md", "test"
+                )
             )
-        )
 
     current_handoff(HEAD)
     track(task_id, PR, HEAD)
@@ -579,26 +577,37 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
 
 @pytest.fixture
 def failed_handoff(setup):
-    config, factory, workflow, task_id, _ = setup
-    operation = RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(workflow), clock=lambda: 1000.0
-    )
+    config, factory, _, task_id, _ = setup
+    provide_handoff = PostgresHandoffProvider(factory, clock=lambda: 1000.0)
     request = HandoffRequest(
         task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
     )
-    operation.execute(request)
+    with provide_handoff() as operation:
+        operation.execute(request)
     _, repository = create_ci_state_adapters(factory)
     TrackCiTaskUseCase(repository).execute(task_id, PR, HEAD)
     RecordCiEvidenceUseCase(repository).execute(evidence(task_id, "FAILURE"))
-    return config, operation, request
+    return config, provide_handoff, request
 
 
-def test_conflicting_repairs_commit_only_one_head(failed_handoff):
-    config, operation, request = failed_handoff
+def test_conflicting_repairs_commit_only_one_head(failed_handoff, monkeypatch):
+    config, provide_handoff, request = failed_handoff
+    sessions = []
+    original = PostgresHandoffRepository.lock_task
+    # Both transactions have started before either attempts to lock the task.
+    acquired_sessions = Barrier(2, timeout=10)
+
+    def observe_session(self, task_id):
+        sessions.append(self._session)
+        acquired_sessions.wait()
+        return original(self, task_id)
+
+    monkeypatch.setattr(PostgresHandoffRepository, "lock_task", observe_session)
 
     def propose(head):
         try:
-            operation.execute(replace(request, new_head_sha=head))
+            with provide_handoff() as operation:
+                operation.execute(replace(request, new_head_sha=head))
         except WorkflowError as exc:
             assert "repair" in str(exc).lower()
             return
@@ -607,6 +616,8 @@ def test_conflicting_repairs_commit_only_one_head(failed_handoff):
     winners = []
     run_race(lambda: propose(NEXT), lambda: propose("c" * 40))
     assert len(winners) == 1
+    assert len(sessions) == 2 and sessions[0] is not sessions[1]
+    assert not any(session.in_transaction() for session in sessions)
     winner = winners[0]
     with PostgresFactory.open(config) as restarted:
         reader, _ = create_ci_state_adapters(restarted)
@@ -625,21 +636,50 @@ def test_conflicting_repairs_commit_only_one_head(failed_handoff):
             ]
 
 
+@pytest.mark.parametrize(
+    ("failure_point", "error_type", "message"),
+    [
+        ("writes", RuntimeError, "synthetic repair write failure"),
+        ("before_commit", TimeoutError, "dispatch deadline exceeded"),
+        ("after_commit", TimeoutError, "dispatch deadline exceeded"),
+    ],
+)
 def test_failed_repair_rolls_back_head_event_and_ci_binding(
-    failed_handoff, monkeypatch
+    failed_handoff, monkeypatch, failure_point, error_type, message
 ):
-    config, operation, request = failed_handoff
-    original = PostgresHandoffRepository.record
+    config, provider, request = failed_handoff
+    provide_handoff = replace(provider, clock=lambda: 1001.0)
+    original_record = PostgresHandoffRepository.record
+    original_commit = Session.commit
+    now = 0.0
+    commits = []
 
-    def fail_after_writes(self, *args):
-        original(self, *args)
-        raise RuntimeError("synthetic repair write failure")
+    def record(self, *args):
+        nonlocal now
+        original_record(self, *args)
+        if failure_point == "writes":
+            raise RuntimeError("synthetic repair write failure")
+        if failure_point == "before_commit":
+            now = 2.0
+
+    def commit(self):
+        nonlocal now
+        original_commit(self)
+        commits.append(self)
+        if failure_point == "after_commit":
+            now = 2.0
 
     correction = replace(request, new_head_sha=NEXT)
     with monkeypatch.context() as patch:
-        patch.setattr(PostgresHandoffRepository, "record", fail_after_writes)
-        with pytest.raises(RuntimeError, match="synthetic repair write failure"):
-            operation.execute(correction)
+        patch.setattr(
+            budget, "time", SimpleNamespace(time=lambda: now, monotonic=lambda: now)
+        )
+        patch.setattr(PostgresHandoffRepository, "record", record)
+        patch.setattr(Session, "commit", commit)
+        with budget.dispatch_budget(1.0), pytest.raises(error_type, match=message):
+            with provide_handoff() as operation:
+                operation.execute(correction)
+    assert len(commits) == (1 if failure_point == "after_commit" else 0)
     with PostgresFactory.open(config) as restarted:
         reader, _ = create_ci_state_adapters(restarted)
         assert reader.tracked() == (
@@ -647,27 +687,58 @@ def test_failed_repair_rolls_back_head_event_and_ci_binding(
         )
         assert reader.previous_failure(request.task_id, HEAD)
         with PostgresWorkflowRepository(restarted).read() as unit:
-            assert unit.find_task((request.task_id,))["current_head_sha"] == HEAD
-            actions = [
+            task = unit.find_task((request.task_id,))
+            assert (task["current_head_sha"], task["status"], task["updated_at"]) == (
+                HEAD,
+                "READY_IN_REVIEW",
+                1000.0,
+            )
+            assert [
                 event["action"] for event in unit.list_events((request.task_id,))
-            ]
-            assert actions == [
+            ] == [
                 "LOCAL_AUTHORIZATION",
                 "HANDOFF",
             ]
-        retry = RegisterTaskHandoffUseCase(
-            PostgresHandoffScope(PostgresWorkflowRepository(restarted)),
-            clock=lambda: 1000.0,
-        )
-        assert retry.execute(correction).head_sha == NEXT
+        with PostgresHandoffProvider(restarted, clock=lambda: 1001.0)() as retry:
+            assert retry.execute(correction).head_sha == NEXT
         assert reader.tracked() == (
             CiTrackedTaskSnapshot(request.task_id, PR, NEXT, "BLOCKED", 1),
         )
 
 
+def test_repair_with_unavailable_evidence_is_fail_closed_and_retryable(failed_handoff):
+    _, provider, request = failed_handoff
+    correction = replace(request, new_head_sha=NEXT)
+    engine = provider.factory._engine
+
+    def missing_column(_conn, _cursor, statement, parameters, _context, _executemany):
+        if "controller_ci_observations" in statement and statement.endswith(
+            "FOR UPDATE"
+        ):
+            return "SELECT missing_evidence_column", ()
+        return statement, parameters
+
+    event.listen(engine, "before_cursor_execute", missing_column, retval=True)
+    try:
+        with (
+            provider() as operation,
+            pytest.raises(WorkflowError, match="CI repair evidence is unavailable"),
+        ):
+            operation.execute(correction)
+    finally:
+        event.remove(engine, "before_cursor_execute", missing_column)
+
+    reader, _ = create_ci_state_adapters(provider.factory)
+    assert reader.tracked() == (
+        CiTrackedTaskSnapshot(request.task_id, PR, HEAD, "FAILURE", 0),
+    )
+    with provider() as operation:
+        assert operation.execute(correction).head_sha == NEXT
+
+
 def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
-    config, factory, workflow, task_id, deliveries = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, deliveries = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -746,8 +817,8 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
 def test_reconcile_settles_failure_or_replays_retained_delivery(
     setup, scenario, reason
 ):
-    config, factory, workflow, task_id, (delivery, _) = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, (delivery, _) = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     TrackCiTaskUseCase(repository).execute(task_id, PR, HEAD)
     add_delivery(factory, delivery)
@@ -787,8 +858,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
 
 
 def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
-    config, factory, workflow, task_id, deliveries = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, deliveries = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -813,8 +884,8 @@ def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
 
 
 def test_pg_ci_watch_two_passes_ack_once(setup):
-    config, factory, workflow, task_id, deliveries = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, deliveries = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -834,8 +905,8 @@ def test_pg_ci_watch_two_passes_ack_once(setup):
 
 
 def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
-    config, factory, workflow, task_id, deliveries = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, deliveries = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -906,8 +977,8 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
 
 
 def test_lost_watcher_session_keeps_real_inbox_pending(setup):
-    config, factory, workflow, task_id, (notification, _) = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, (notification, _) = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -995,8 +1066,8 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
 
 
 def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
-    config, factory, workflow, task_id, _ = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, _ = setup
+    handoff(factory, task_id, HEAD)
     reader, repository = create_ci_state_adapters(factory)
     track = TrackCiTaskUseCase(repository).execute
     approved = CheckCiApprovalUseCase(reader).execute
@@ -1038,8 +1109,8 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
 
 
 def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
-    config, factory, workflow, task_id, (notification, _) = setup
-    handoff(workflow, task_id, HEAD)
+    config, factory, _, task_id, (notification, _) = setup
+    handoff(factory, task_id, HEAD)
     sessions = []
 
     @contextmanager

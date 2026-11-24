@@ -22,10 +22,8 @@ from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
 )
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import (
@@ -37,9 +35,6 @@ from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
 )
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
-)
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -49,7 +44,6 @@ from agent_workflow.observability.correlation import (
     get_correlation_id,
     set_correlation_id,
 )
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 def encode(value):
@@ -210,20 +204,20 @@ def test_operator_cli_readback_preserves_history(
         )
     assert task["repository"] == REPOSITORY
     assert task["status"] == "AWAITING_HANDOFF"
-    RegisterTaskHandoffUseCase(
-        PostgresHandoffScope(PostgresWorkflowRepository(factory)),
-        clock=lambda: task["updated_at"] + 1,
-    ).execute(
-        HandoffRequest(
-            spec.task_id,
-            REPOSITORY,
-            spec.branch,
-            spec.base_sha,
-            "b" * 40,
-            "docs/handoff.md",
-            "Disposable test",
+    with PostgresHandoffProvider(
+        factory, clock=lambda: task["updated_at"] + 1
+    )() as operation:
+        operation.execute(
+            HandoffRequest(
+                spec.task_id,
+                REPOSITORY,
+                spec.branch,
+                spec.base_sha,
+                "b" * 40,
+                "docs/handoff.md",
+                "Disposable test",
+            )
         )
-    )
     before = read_rows(factory, spec.task_id)
     authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before

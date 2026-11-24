@@ -22,7 +22,7 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
 from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
+    HandoffUseCaseProvider,
 )
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
 from agent_workflow.domain.task.handoff import HandoffRequest
@@ -319,7 +319,7 @@ class CoderRuntime:
     def __init__(
         self,
         config: dict,
-        handoff: RegisterTaskHandoffUseCase,
+        handoff_provider: HandoffUseCaseProvider,
         *,
         dispatch: DispatchEvidence,
         ci: CiTracking,
@@ -327,7 +327,7 @@ class CoderRuntime:
         plugins: Iterable[AgentRuntimePlugin] = (),
     ) -> None:
         if (
-            not isinstance(handoff, RegisterTaskHandoffUseCase)
+            not callable(handoff_provider)
             or not callable(getattr(dispatch, "is_pre_launch", None))
             or not callable(getattr(dispatch, "retire_pre_launch", None))
             or not callable(getattr(dispatch, "record_runtime_evidence", None))
@@ -340,7 +340,7 @@ class CoderRuntime:
             )
         self._initialize(
             config,
-            handoff,
+            handoff_provider,
             plugins,
             AppConfig.from_env(),
             dispatch,
@@ -351,14 +351,14 @@ class CoderRuntime:
     def _initialize(
         self,
         config: dict,
-        handoff: RegisterTaskHandoffUseCase,
+        handoff_provider: HandoffUseCaseProvider,
         plugins: Iterable[AgentRuntimePlugin],
         app_config: AppConfig,
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool] | None,
     ) -> None:
-        self.config, self.handoff = config, handoff
+        self.config, self.handoff_provider = config, handoff_provider
         self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
         self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
         self.agent_runtime = AgentRuntime(
@@ -708,14 +708,14 @@ class CoderRuntime:
         test_summary: str,
     ) -> None:
         task = self.config["tasks"][context["task_id"]]
-        self.handoff.execute(
-            HandoffRequest(
-                context["task_id"],
-                context["repository"],
-                context["branch"],
-                context["base_sha"],
-                result["head_sha"],
-                task["handoff_path"],
-                test_summary + "; worker PR: " + result["pr_url"],
-            )
+        request = HandoffRequest(
+            context["task_id"],
+            context["repository"],
+            context["branch"],
+            context["base_sha"],
+            result["head_sha"],
+            task["handoff_path"],
+            test_summary + "; worker PR: " + result["pr_url"],
         )
+        with self.handoff_provider() as handoff:
+            handoff.execute(request)

@@ -24,9 +24,6 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.composition.postgres_controller import (
-    ControllerDependencies,
-)
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
@@ -109,7 +106,7 @@ def test_concurrent_claim_block_restart_and_replay(setup):
 
 
 def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
-    ledger, repository, factory, task_id = setup
+    ledger, _, factory, task_id = setup
     claim = ledger.claim({task_id}, 60, track_pre_launch=True)
     assert claim is not None
     simulated_publish = Mock()
@@ -119,17 +116,9 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
             factory, role="dev", phase="code", clock=lambda: 1000.0
         )
         leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
-        dependencies = ControllerDependencies(
-            workflow=repository,
-            dispatch=successor,
-            ci_tracking=Mock(),
-            ci_repository=Mock(),
-            ci_factory=Mock(),
-            leadership=leadership,
-        )
         return RunDispatchPassUseCase(
-            dependencies.leadership,
-            dependencies.dispatch,
+            leadership,
+            successor,
             GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
             simulated_publish,
         ).execute({task_id})
@@ -524,7 +513,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         runtime = original_compose(
             config, service, deps, leadership_guard=leadership_guard
         )
-        assert service.scope.repository is deps.workflow
+        assert service is deps.handoff_provider
         assert runtime.agent_runtime.dispatch is deps.dispatch
         assert runtime.agent_runtime.ci is deps.ci_tracking
         host = FakeHost(calls)
@@ -536,19 +525,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         def handoff(context, result, summary):
             leadership_guard()
             calls.append("handoff")
-            from agent_workflow.domain.task.handoff import HandoffRequest
-
-            service.execute(
-                HandoffRequest(
-                    task_id,
-                    context["repository"],
-                    context["branch"],
-                    context["base_sha"],
-                    result["head_sha"],
-                    "docs/handoff.md",
-                    summary,
-                )
-            )
+            runtime._register_handoff(context, result, summary)
 
         host._register_handoff = handoff
         runtime.agent_runtime.host = host
@@ -603,7 +580,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     monkeypatch.setattr(
         coder_runtime, "run_container", lambda *_: pytest.fail("real Worker forbidden")
     )
-    config = {"tasks": {task_id: {}}}
+    config = {"tasks": {task_id: {"handoff_path": "docs/handoff.md"}}}
 
     def run_dispatch():
         return dispatch_cli.run_dispatch_pass(

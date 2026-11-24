@@ -3,14 +3,13 @@
 from contextlib import contextmanager
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import exists, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from agent_workflow.budget import check_deadline
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.models import (
-    CIObservation,
     CITask,
     Review,
     ReviewAttempt,
@@ -392,62 +391,6 @@ class PostgresWorkflowUnit:
                 )
         except DBAPIError:
             return False
-
-    def advance_failed_ci_head(self, task_id: str, old_head: str, new_head: str) -> int:
-        if new_head == old_head:
-            raise BusinessRuleError("CI repair requires a different HEAD")
-        failure = exists(
-            select(CIObservation.id).where(
-                CIObservation.task_id == CITask.task_id,
-                CIObservation.pr_number == CITask.pr_number,
-                CIObservation.head_sha == CITask.head_sha,
-                CIObservation.verdict == CITask.verdict,
-                CIObservation.reason == "REQUIRED_CHECK_FAILED",
-                CIObservation.check_run_id > 0,
-                CIObservation.workflow_run_id > 0,
-                CIObservation.run_attempt > 0,
-            )
-        )
-        seen = exists(
-            select(CIObservation.id).where(
-                CIObservation.task_id == CITask.task_id,
-                CIObservation.head_sha == new_head,
-            )
-        )
-        stmt = (
-            select(CITask.pr_number)
-            .where(
-                CITask.task_id == task_id,
-                CITask.head_sha == old_head,
-                CITask.verdict == "FAILURE",
-                CITask.pr_number > 0,
-                CITask.repair_heads < 2,
-                failure,
-                ~seen,
-            )
-            .with_for_update()
-        )
-        try:
-            with self.session.begin_nested():
-                row = self._execute(stmt).first()
-        except DBAPIError as exc:
-            if getattr(exc.orig, "sqlstate", None) not in {"42P01", "42703"}:
-                raise
-            raise BusinessRuleError("CI repair evidence is unavailable") from exc
-        if row is None:
-            raise BusinessRuleError("CI repair HEAD not authorized")
-        changed = self._execute(
-            update(CITask)
-            .where(CITask.task_id == task_id)
-            .values(
-                head_sha=new_head,
-                verdict="BLOCKED",
-                repair_heads=CITask.repair_heads + 1,
-            )
-        ).rowcount
-        if changed != 1:
-            raise BusinessRuleError("CI repair update failed")
-        return row[0]
 
     def import_historical_head(self, values: tuple) -> None:
         raise BusinessRuleError(

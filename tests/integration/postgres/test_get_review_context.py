@@ -16,12 +16,10 @@ from agent_workflow.application.review.dtos import PreviousReview, ReviewEvent
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
+from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.infrastructure.database.models import (
     Review,
@@ -33,15 +31,11 @@ from agent_workflow.infrastructure.database.models import (
 from agent_workflow.infrastructure.database.repositories.review_repository import (
     SqlAlchemyReviewRepository,
 )
-from agent_workflow.infrastructure.database.repositories.task_handoff import (
-    PostgresHandoffScope,
-)
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
 )
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -112,14 +106,12 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
             )
         )
         assert 0 < timeout <= 15_000
-        RegisterTaskHandoffUseCase(
-            PostgresHandoffScope(PostgresWorkflowRepository(factory)),
-            clock=lambda: 1000.0,
-        ).execute(
-            HandoffRequest(
-                task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"
+        with PostgresHandoffProvider(factory, clock=lambda: 1000.0)() as operation:
+            operation.execute(
+                HandoffRequest(
+                    task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"
+                )
             )
-        )
         return original_list(repository, requested_task_id)
 
     connection_scope = Mock(wraps=factory.connect_session)
