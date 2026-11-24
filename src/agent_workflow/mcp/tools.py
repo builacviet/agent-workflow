@@ -21,13 +21,14 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
     SubmitReviewInput,
 )
-from agent_workflow.application.task.use_cases.get_coder_assignment import (
-    review_context_response as _review_context_response,
-)
 from agent_workflow.domain.contracts import Submission
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.interfaces.review_assignment_response import (
+    coder_assignment_response,
+    review_context_response,
+)
 from agent_workflow.mcp.security import (
     TECHLEAD_SCOPE,
     TechLeadScopeRequired,
@@ -45,7 +46,7 @@ def _review_request(task_id: str) -> GetReviewContextInput:
 
 
 def _review_result_response(output: GetReviewResultOutput) -> dict:
-    result = _review_context_response(output.context)
+    result = review_context_response(output.context)
     result.update(
         latest_reviewed_sha=output.context.previous_reviewed_sha,
         actual_effort=output.actual_effort,
@@ -81,7 +82,7 @@ def register_tools(
         authorize_context(ctx)
         request = _review_request(task_id)
         with review_reads_provider() as (_, context, _):
-            return _review_context_response(context.execute(request))
+            return review_context_response(context.execute(request))
 
     @mcp.tool()
     def claim_review(task_id: str, expected_head_sha: str, ctx: Context) -> dict:
@@ -152,7 +153,7 @@ def register_tools(
         """Authenticated read only: task and unresolved findings; never dispatch Codex."""
         authorize_context(ctx)
         with task_operations_provider() as (_, assignment):
-            return assignment.get_coder_assignment(task_id)
+            return coder_assignment_response(assignment.execute(task_id))
 
     if mcp.settings.auth is None:
         return

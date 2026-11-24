@@ -404,7 +404,7 @@ def test_service_history_and_replay(setup):
     service, _, _, _ = setup
     ready(service, task_id)
     with postgres_mcp_task_operations(config) as (_, assignment):
-        assert assignment.get_coder_assignment(task_id)["current_head_sha"] == HEAD
+        assert assignment.execute(task_id).context.task.current_head_sha == HEAD
     with pytest.raises(WorkflowError, match="stale"):
         service.claim_review(task_id, NEXT, "lead")
     claim = service.claim_review(task_id, HEAD, "lead")

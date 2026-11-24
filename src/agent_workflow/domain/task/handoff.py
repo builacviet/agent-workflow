@@ -3,15 +3,13 @@ Responsibility: Validate handoff identity and workflow transitions.
 Dependencies: Canonical workflow identity and state definitions.
 """
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import (
-    WorkflowError,
-    canonical_repository,
-    validate_sha,
-)
+from agent_workflow.domain.workflow_identity import canonical_repository, validate_sha
 
 
 class TaskEventAction(StrEnum):
@@ -31,10 +29,31 @@ class HandoffRequest:
 
     def validate(self) -> None:
         if not isinstance(self.task_id, str) or not self.task_id.strip():
-            raise WorkflowError("unknown authorized task")
+            raise BusinessRuleError("unknown authorized task")
+        if not isinstance(self.repository, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository
+        ):
+            raise BusinessRuleError("repository must be an owner/name")
+        if (
+            not isinstance(self.branch, str)
+            or not self.branch.strip()
+            or any(char.isspace() or ord(char) < 32 for char in self.branch)
+        ):
+            raise BusinessRuleError("branch must be a nonblank ref")
+        validate_sha(self.base_sha)
         validate_sha(self.new_head_sha)
+        path = self.handoff_file_path
+        if (
+            not isinstance(path, str)
+            or not path.strip()
+            or path.startswith(("/", "\\"))
+            or ".." in path.replace("\\", "/").split("/")
+            or ":" in path
+            or "\0" in path
+        ):
+            raise BusinessRuleError("handoff path must be repository-relative")
         if not isinstance(self.test_summary, str) or not self.test_summary.strip():
-            raise WorkflowError("test summary required")
+            raise BusinessRuleError("test summary required")
 
 
 @dataclass(frozen=True)
@@ -55,9 +74,9 @@ def validate_handoff(task: HandoffTask, request: HandoffRequest) -> None:
         task.branch,
         task.base_sha,
     ):
-        raise WorkflowError("handoff differs from authorized task")
+        raise BusinessRuleError("handoff differs from authorized task")
     if request.handoff_file_path not in task.context_paths:
-        raise WorkflowError("handoff path is not authorized")
+        raise BusinessRuleError("handoff path is not authorized")
     if (
         task.status
         not in {
@@ -67,19 +86,19 @@ def validate_handoff(task: HandoffTask, request: HandoffRequest) -> None:
         }
         or task.completed_review_rounds >= 2
     ):
-        raise WorkflowError("handoff is not permitted in this state")
+        raise BusinessRuleError("handoff is not permitted in this state")
     if (
         task.status == WorkflowStatus.CHANGES_REQUESTED
         and request.new_head_sha == task.head_sha
     ):
-        raise WorkflowError("correction requires a new pushed SHA")
+        raise BusinessRuleError("correction requires a new pushed SHA")
 
 
 def validate_repair(
     task: HandoffTask, request: HandoffRequest, prior_path: str | None, seen: bool
 ) -> bool:
     if prior_path is not None and prior_path != request.handoff_file_path:
-        raise WorkflowError("handoff path differs from current handoff")
+        raise BusinessRuleError("handoff path differs from current handoff")
     if request.new_head_sha == task.head_sha:
         return False
     if (
@@ -87,7 +106,7 @@ def validate_repair(
         or task.head_sha is None
         or request.new_head_sha == request.base_sha
     ):
-        raise WorkflowError("CI repair requires a new SHA and current handoff")
+        raise BusinessRuleError("CI repair requires a new SHA and current handoff")
     if seen:
-        raise WorkflowError("stale CI repair SHA")
+        raise BusinessRuleError("stale CI repair SHA")
     return True

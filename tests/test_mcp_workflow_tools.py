@@ -102,6 +102,7 @@ def test_workflow_paths_authorize_and_close(
     monkeypatch, authorized_workflow, name, arguments
 ):
     from agent_workflow.application.task.use_cases.get_coder_assignment import (
+        CoderAssignmentOutput,
         GetCoderAssignmentUseCase,
     )
     from agent_workflow.application.task.use_cases.register_task_handoff import (
@@ -123,11 +124,9 @@ def test_workflow_paths_authorize_and_close(
         monkeypatch.setattr(RegisterTaskHandoffUseCase, "execute", operation)
         expected = {"task_id": "TEST", "status": "READY_IN_REVIEW", "head_sha": HEAD}
     else:
-        operation = Mock(return_value=RECORD)
-        monkeypatch.setattr(
-            GetCoderAssignmentUseCase, "get_coder_assignment", operation
-        )
-        expected = RECORD
+        operation = Mock(return_value=CoderAssignmentOutput(CONTEXT, ()))
+        monkeypatch.setattr(GetCoderAssignmentUseCase, "execute", operation)
+        expected = {**CONTEXT_WIRE, "unresolved_findings": []}
     reset = auth_context_var.set(None)
     try:
         with pytest.raises(ToolError, match="workflow OAuth authorization required"):

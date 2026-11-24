@@ -9,13 +9,13 @@ import pytest
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import (
     HandoffRequest,
     HandoffTask,
     TaskEventAction,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -82,10 +82,29 @@ def test_first_handoff_records_atomic_transition():
 )
 def test_invalid_request_never_records(invalid_request):
     use, repo = setup()
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         use.execute(invalid_request)
     repo.record.assert_not_called()
     repo.advance_failed_ci_head.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "invalid_request",
+    [
+        replace(REQUEST, repository=" "),
+        replace(REQUEST, repository="invalid"),
+        replace(REQUEST, branch=" "),
+        replace(REQUEST, base_sha="bad"),
+        replace(REQUEST, handoff_file_path=""),
+        replace(REQUEST, handoff_file_path="../outside"),
+    ],
+)
+def test_invalid_shape_rejected_before_scope(invalid_request):
+    scope = Mock(side_effect=AssertionError("invalid command opened a scope"))
+    use = RegisterTaskHandoffUseCase(scope, clock=lambda: 123.0)
+    with pytest.raises(BusinessRuleError):
+        use.execute(invalid_request)
+    scope.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -98,7 +117,7 @@ def test_invalid_request_never_records(invalid_request):
 )
 def test_disallowed_state_never_records(task):
     use, repo = setup(task)
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         use.execute(REQUEST)
     repo.record.assert_not_called()
 
@@ -130,7 +149,7 @@ def test_failed_reservation_never_records():
         replace(TASK, status=WorkflowStatus.READY_IN_REVIEW, head_sha=HEAD)
     )
     repo.handoff_path.side_effect = [(True, REQUEST.handoff_file_path), (False, None)]
-    repo.advance_failed_ci_head.side_effect = WorkflowError("not authorized")
-    with pytest.raises(WorkflowError):
+    repo.advance_failed_ci_head.side_effect = BusinessRuleError("not authorized")
+    with pytest.raises(BusinessRuleError):
         use.execute(replace(REQUEST, new_head_sha=NEW))
     repo.record.assert_not_called()

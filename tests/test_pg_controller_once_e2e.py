@@ -16,13 +16,22 @@ from sqlalchemy import create_engine
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.review.dtos import ReviewTask
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextOutput,
+)
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    GetCoderAssignmentUseCase,
+)
 from agent_workflow.composition import postgres_ci_entrypoint
 from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
 from agent_workflow.composition import postgres_dispatch_entrypoint as entry
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
+from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
+from agent_workflow.interfaces.review_assignment_response import coder_assignment_response
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import CITask, Task
@@ -377,7 +386,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
             if outcome == "cleanup_error":
                 raise RuntimeError("pin retained")
 
-        return SimpleNamespace(execute=execute, release_engine=clear)
+        return SimpleNamespace(execute_assignment=execute, release_engine=clear)
 
     worker = Mock(side_effect=compose)
     monkeypatch.setattr(deps_wiring, "compose_postgres_worker", worker)
@@ -491,16 +500,35 @@ def test_pg_once_runs_native_dev_stages(
         "round_number": 0,
         "deadline": coder_runtime.time.time() + 120,
     }
-    assignment = {
-        "task_id": "T",
-        "repository": REPOSITORY,
-        "branch": branch,
-        "base_sha": base_sha,
-        "current_head_sha": None,
-        "status": "AWAITING_HANDOFF",
-        "completed_review_rounds": 0,
-        "context_paths": [handoff_path, "src/value.txt"],
-    }
+    context_paths = (handoff_path, "src/value.txt")
+    snapshot = GetReviewContextOutput(
+        task=ReviewTask(
+            task_id="T",
+            repository=REPOSITORY,
+            branch=branch,
+            base_sha=base_sha,
+            current_head_sha=None,
+            requested_effort="medium",
+            require_verified_effort=0,
+            max_review_rounds=2,
+            completed_review_rounds=0,
+            status=WorkflowStatus.AWAITING_HANDOFF,
+            created_at=1.0,
+            updated_at=1.0,
+            context_paths=context_paths,
+            spec_json=json.dumps({"context_paths": context_paths}),
+        ),
+        review_round=1,
+        rounds_remaining=2,
+        previous_reviewed_sha=None,
+        previous_verdict=None,
+        previous_reviews=(),
+        events=(),
+    )
+    reader = Mock()
+    reader.execute.return_value = snapshot
+    projection = GetCoderAssignmentUseCase(reader).get_coder_assignment("T")
+    assignment = coder_assignment_response(projection["details"])
 
     factory = offline_factory
     deps = compose_postgres_controller(factory)
@@ -530,7 +558,7 @@ def test_pg_once_runs_native_dev_stages(
     monkeypatch.setattr(deps.dispatch, "record_runtime_evidence", events.evidence)
     monkeypatch.setattr(deps.dispatch, "finish", finish)
     monkeypatch.setattr(deps.dispatch, "block", events.block)
-    get_assignment = Mock(return_value=assignment)
+    get_assignment = Mock(return_value=projection)
     monkeypatch.setattr(
         deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )

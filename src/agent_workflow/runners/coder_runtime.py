@@ -17,6 +17,10 @@ from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    DispatchAssignment,
+)
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
@@ -27,6 +31,7 @@ from agent_workflow.integrations.github import (
     WorkflowError,
     canonical_repository,
 )
+from agent_workflow.interfaces.review_assignment_response import coder_assignment_response
 from agent_workflow.runners.agent_runtime import (
     AgentRuntime,
     CiTracking,
@@ -569,6 +574,12 @@ class CoderRuntime:
         ]
         self.agent_runtime.require_leadership()
         return run_container(args, prompt, remaining)
+
+    def execute_assignment(
+        self, claim: DispatchClaim, assignment: DispatchAssignment
+    ) -> str:
+        """Map the typed business assignment at the trusted Worker boundary."""
+        return self.execute(claim, coder_assignment_response(assignment["details"]))
 
     def execute(self, claim: dict, context: dict) -> str:
         self.agent_runtime.require_leadership()

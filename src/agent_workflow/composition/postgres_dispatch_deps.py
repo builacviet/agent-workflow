@@ -15,6 +15,7 @@ from agent_workflow.application.dispatch.ports import (
 )
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    DispatchAssignment,
     GetCoderAssignmentUseCase,
 )
 from agent_workflow.application.task.use_cases.register_task_handoff import (
@@ -59,7 +60,7 @@ def create_dispatch_use_case(
             config, handoff, dependencies, leadership_guard=guard
         )
         guard()
-        return runtime.execute(claim, context)
+        return runtime.execute_assignment(claim, cast(DispatchAssignment, context))
 
     def finished(dispatch_id: str) -> None:
         if runtime is None:

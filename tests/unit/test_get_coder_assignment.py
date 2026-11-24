@@ -15,10 +15,10 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 )
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
-    coder_assignment_response,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.interfaces.review_assignment_response import coder_assignment_response
 
 
 def test_latest_resolution_filters_findings_and_preserves_wire_context():
@@ -64,7 +64,17 @@ def test_latest_resolution_filters_findings_and_preserves_wire_context():
     reader = Mock()
     reader.execute.return_value = context
     use = GetCoderAssignmentUseCase(reader)
-    wire = coder_assignment_response(use.execute("T"))
+    details = use.execute("T")
+    projection = use.get_coder_assignment("T")
+    assert projection == {
+        "task_id": "T",
+        "completed_review_rounds": 1,
+        "status": WorkflowStatus.CHANGES_REQUESTED,
+        "current_head_sha": "b" * 40,
+        "base_sha": "a" * 40,
+        "details": details,
+    }
+    wire = coder_assignment_response(details)
     assert wire["unresolved_findings"][0]["resolution_status"] == "NOT_VERIFIED"
     assert wire["task_id"] == "T"
     resolved = replace(review, prior_resolutions=(("f1", "FIXED"),))
@@ -74,6 +84,6 @@ def test_latest_resolution_filters_findings_and_preserves_wire_context():
 
 def test_blank_id_rejected_before_reader():
     reader = Mock()
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         GetCoderAssignmentUseCase(reader).execute(" ")
     reader.execute.assert_not_called()

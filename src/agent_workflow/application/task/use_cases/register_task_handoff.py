@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import ContextManager, Protocol
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import (
     HandoffRequest,
@@ -15,7 +16,6 @@ from agent_workflow.domain.task.handoff import (
     validate_handoff,
     validate_repair,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 class IHandoffRepository(Protocol):
@@ -56,7 +56,7 @@ class RegisterTaskHandoffUseCase:
         with self.scope() as repo:
             task = repo.lock_task(request.task_id)
             if task is None:
-                raise WorkflowError("unknown authorized task")
+                raise BusinessRuleError("unknown authorized task")
             validate_handoff(task, request)
             result = HandoffResult(
                 task.task_id, WorkflowStatus.READY_IN_REVIEW, request.new_head_sha
@@ -70,7 +70,7 @@ class RegisterTaskHandoffUseCase:
             if task.status == WorkflowStatus.READY_IN_REVIEW:
                 exists, prior_path = repo.handoff_path(task.task_id, task.head_sha)
                 if exists and prior_path != request.handoff_file_path:
-                    raise WorkflowError("handoff path differs from current handoff")
+                    raise BusinessRuleError("handoff path differs from current handoff")
                 seen, _ = repo.handoff_path(task.task_id, request.new_head_sha)
                 if not validate_repair(task, request, prior_path, seen):
                     return result
