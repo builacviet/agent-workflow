@@ -39,8 +39,10 @@ from agent_workflow.application.review.use_cases.write_contracts import ClaimRev
 from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
 from agent_workflow.composition.ci_deps import create_ci_state_adapters
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
+from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.service import WorkflowService
+from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
 )
@@ -74,7 +76,6 @@ from agent_workflow.storage.postgres_models import (
     WebhookInboxRow,
 )
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
-from agent_workflow.storage.webhook_inbox import InboxResult, WebhookNotification
 
 PR = 21
 INSTALLATION = 17

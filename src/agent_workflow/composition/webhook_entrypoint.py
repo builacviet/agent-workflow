@@ -9,8 +9,8 @@ from pathlib import Path
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.composition.webhook_deps import create_webhook_use_case
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.integrations.webhook_http import WebhookHTTPServer
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
+from agent_workflow.interfaces.webhook.http_server import WebhookHTTPServer
 
 
 def main() -> None:

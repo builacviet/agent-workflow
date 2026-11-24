@@ -1,29 +1,26 @@
-"""Bounded webhook HTTP transport. No MCP/OAuth or App credentials in process."""
+"""Layer: Interfaces/Webhook
+Responsibility: Serve bounded signed webhook HTTP requests without request logging.
+Dependencies: Application and Domain errors, webhook receiver, standard HTTP server.
+"""
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 from agent_workflow.application.exceptions import (
     InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.exceptions import DomainError
-from agent_workflow.integrations.github_webhook import (
-    GitHubWebhookReceiver as LegacyGitHubWebhookReceiver,
-)
 from agent_workflow.interfaces.webhook.github_receiver import (
     DEFAULT_MAX_BODY_BYTES,
     WEBHOOK_PATH,
     GitHubWebhookReceiver,
 )
-from agent_workflow.storage.webhook_inbox import WebhookInbox as WebhookInbox
 
 
 class _RateLimit:
@@ -123,30 +120,3 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
     do_PUT = do_GET
     do_DELETE = do_GET
-
-
-def main() -> None:
-    """Run the legacy SQLite transport for explicit local compatibility only."""
-    db = os.environ["WFC_WEBHOOK_DB_PATH"]
-    secret_path = Path(os.environ["WFC_WEBHOOK_SECRET_FILE"])
-    if not secret_path.is_absolute():
-        raise ValueError("webhook secret must be mounted at absolute path")
-    secret = secret_path.read_bytes().strip(b"\r\n")
-    if len(secret) < 32:
-        raise ValueError("use at least 32 random bytes for webhook secret")
-    # Preserve SQLite error translation only for explicit legacy local launches.
-    receiver = LegacyGitHubWebhookReceiver(
-        WebhookInbox(db),
-        secret=secret,
-        installation_id=int(os.environ["WFC_CONTROLLER_INSTALLATION_ID"]),
-    )
-    port = int(os.environ.get("WFC_WEBHOOK_PORT", "8081"))
-    server = WebhookHTTPServer(("0.0.0.0", port), receiver)
-    try:
-        server.serve_forever(poll_interval=0.5)
-    finally:
-        server.server_close()
-
-
-if __name__ == "__main__":
-    main()
