@@ -14,6 +14,7 @@ from agent_workflow.application.review.ports import (
     IReviewQueueReader,
     IReviewQueueScope,
 )
+from agent_workflow.domain.review.events import ReviewEventAction
 from agent_workflow.domain.review.policy import require_ci
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
@@ -67,7 +68,7 @@ class ListReviewQueueUseCase:
                     ReviewLeaseTransition(
                         task=task,
                         next_status=WorkflowStatus.READY_IN_REVIEW,
-                        action="LEASE_EXPIRED",
+                        action=ReviewEventAction.LEASE_EXPIRED,
                         timestamp=self._clock(),
                     )
                 )
