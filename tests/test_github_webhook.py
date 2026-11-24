@@ -106,8 +106,14 @@ class GitHubWebhookTests(TestCase):
             (self.body + b" ", signed_headers(self.body)),
             (self.body, signed_headers(self.body, secret=b"wrong-secret")),
             (self.body, {}),
-            (self.body, {**signed_headers(self.body), "X-Hub-Signature-256": "sha1=abc"}),
-            (self.body, {**signed_headers(self.body), "X-Hub-Signature-256": "sha256=é"}),
+            (
+                self.body,
+                {**signed_headers(self.body), "X-Hub-Signature-256": "sha1=abc"},
+            ),
+            (
+                self.body,
+                {**signed_headers(self.body), "X-Hub-Signature-256": "sha256=é"},
+            ),
         ):
             with self.subTest(headers=headers):
                 self.assertEqual(
@@ -222,8 +228,14 @@ class GitHubWebhookTests(TestCase):
                 "workflow_run",
                 encode({**payload_for("workflow_run"), "action": "requested"}),
             ),
-            ("pull_request", encode({**payload_for("pull_request"), "action": "opened"})),
-            ("pull_request", encode({**payload_for("pull_request"), "action": "closed"})),
+            (
+                "pull_request",
+                encode({**payload_for("pull_request"), "action": "opened"}),
+            ),
+            (
+                "pull_request",
+                encode({**payload_for("pull_request"), "action": "closed"}),
+            ),
             ("push", encode(payload_for("workflow_run"))),
             ("ping", encode({"zen": "Keep it logically awesome!", "hook_id": 33})),
         ]
@@ -253,7 +265,10 @@ class GitHubWebhookTests(TestCase):
         )
         self.assertEqual(
             self.receiver.handle(
-                "POST", WEBHOOK_PATH, signed_headers(self.body, secret=b"bad"), self.body
+                "POST",
+                WEBHOOK_PATH,
+                signed_headers(self.body, secret=b"bad"),
+                self.body,
             ),
             HTTPStatus.FORBIDDEN,
         )
