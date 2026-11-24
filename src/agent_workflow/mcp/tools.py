@@ -17,14 +17,11 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 from agent_workflow.application.review.use_cases.get_review_result import (
     GetReviewResultOutput,
 )
-from agent_workflow.application.review.use_cases.write_contracts import (
-    ClaimReviewInput,
-    SubmitReviewInput,
-)
-from agent_workflow.domain.contracts import Submission
+from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
     review_context_response,
@@ -97,8 +94,9 @@ def register_tools(
     def submit_review(submission: Submission, ctx: Context) -> dict:
         """Authenticated mutation: submit structured verdict using claim token as idempotency identity."""
         actor = authorize_context(ctx)
+        request = submission.to_input(actor)
         with review_writes_provider() as (_, submit):
-            result = submit.execute(SubmitReviewInput(submission, actor))
+            result = submit.execute(request)
             if result.duplicate:
                 return {
                     "task_id": result.task_id,

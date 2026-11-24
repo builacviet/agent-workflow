@@ -7,7 +7,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from agent_workflow.domain.contracts import Submission
+from agent_workflow.application.review.use_cases.write_contracts import ReviewSubmission
 from agent_workflow.domain.review.events import ReviewEventAction
 from agent_workflow.domain.review.policy import ClaimFacts, TaskFacts
 from agent_workflow.domain.states import WorkflowStatus
@@ -116,7 +116,7 @@ class PostgresReviewWrites:
     def submit(
         self,
         task: TaskFacts,
-        submission: Submission,
+        submission: ReviewSubmission,
         canonical: str,
         review_id: str,
         reviewer: str,
@@ -131,7 +131,7 @@ class PostgresReviewWrites:
                 submission.review_round,
                 task.base,
                 submission.reviewed_head_sha,
-                submission.verdict,
+                submission.verdict.value,
                 submission.summary,
                 task.effort,
                 actual,
@@ -139,7 +139,7 @@ class PostgresReviewWrites:
                 reviewer,
                 now,
                 None,
-                encode(submission.prior_resolutions),
+                encode(dict(submission.prior_resolutions)),
             )
         )
         for finding in submission.findings:
@@ -161,7 +161,7 @@ class PostgresReviewWrites:
         self.unit.submit_claim((canonical, submission.claim_token))
         self.transition(
             task,
-            WorkflowStatus(submission.verdict),
+            submission.verdict,
             ReviewEventAction.REVIEW_SUBMITTED,
             now,
             {"review_id": review_id, "round": submission.review_round},

@@ -15,7 +15,6 @@ def test_packaged_reference_available():
 @pytest.mark.parametrize(
     ("module", "package"),
     [
-        ("contracts", "domain"),
         ("coder_runtime", "runners"),
         ("github", "integrations"),
         ("auth0_oauth", "mcp"),

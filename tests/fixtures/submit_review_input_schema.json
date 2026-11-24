@@ -1,0 +1,181 @@
+{
+  "$defs": {
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "acceptance_criterion": {
+          "minLength": 1,
+          "title": "Acceptance Criterion",
+          "type": "string"
+        },
+        "file_path": {
+          "minLength": 1,
+          "title": "File Path",
+          "type": "string"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "suggested_correction": {
+          "minLength": 1,
+          "title": "Suggested Correction",
+          "type": "string"
+        },
+        "required_verification": {
+          "minLength": 1,
+          "title": "Required Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "acceptance_criterion",
+        "file_path",
+        "description",
+        "suggested_correction",
+        "required_verification"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "Submission": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "claim_token": {
+          "title": "Claim Token",
+          "type": "string"
+        },
+        "reviewed_head_sha": {
+          "title": "Reviewed Head Sha",
+          "type": "string"
+        },
+        "review_round": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Review Round",
+          "type": "integer"
+        },
+        "verdict": {
+          "enum": [
+            "APPROVED",
+            "CHANGES_REQUESTED",
+            "ESCALATED"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "prior_resolutions": {
+          "additionalProperties": {
+            "enum": [
+              "FIXED",
+              "NOT_FIXED",
+              "PARTIALLY_FIXED",
+              "NOT_VERIFIED"
+            ],
+            "type": "string"
+          },
+          "title": "Prior Resolutions",
+          "type": "object"
+        },
+        "requested_effort": {
+          "title": "Requested Effort",
+          "type": "string"
+        },
+        "actual_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Effort"
+        },
+        "verification_evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Evidence"
+        }
+      },
+      "required": [
+        "task_id",
+        "claim_token",
+        "reviewed_head_sha",
+        "review_round",
+        "verdict",
+        "summary",
+        "findings",
+        "prior_resolutions",
+        "requested_effort"
+      ],
+      "title": "Submission",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "submission": {
+      "$ref": "#/$defs/Submission"
+    }
+  },
+  "required": [
+    "submission"
+  ],
+  "title": "submit_reviewArguments",
+  "type": "object"
+}

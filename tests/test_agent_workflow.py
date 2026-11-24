@@ -156,10 +156,11 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
     from agent_workflow.application.review.use_cases.write_contracts import (
         ClaimReviewInput,
         ClaimReviewOutput,
+        ReviewSubmission,
         SubmitReviewInput,
         SubmitReviewOutput,
     )
-    from agent_workflow.domain.contracts import Submission
+    from agent_workflow.domain.states import WorkflowStatus
 
     claim_operation = Mock()
     claim_operation.execute.return_value = ClaimReviewOutput(
@@ -296,7 +297,18 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
                     )
                     submit_operation.execute.assert_called_once_with(
                         SubmitReviewInput(
-                            Submission.model_validate(data), "http-test-reviewer"
+                            ReviewSubmission(
+                                task_id="TEST",
+                                claim_token="token",
+                                reviewed_head_sha=HEAD,
+                                review_round=1,
+                                verdict=WorkflowStatus.APPROVED,
+                                summary="Synthetic review",
+                                findings=(),
+                                prior_resolutions={},
+                                requested_effort="medium",
+                            ),
+                            "http-test-reviewer",
                         )
                     )
                     assert provider.call_count == 2
