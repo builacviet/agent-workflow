@@ -1,4 +1,7 @@
-"""Project the task fields needed by the review context."""
+"""Layer: Infrastructure
+Responsibility: Project persisted task fields for review context.
+Dependencies: Application review DTOs, SQLAlchemy models and session controls.
+"""
 
 import json
 
@@ -50,4 +53,5 @@ class SqlAlchemyTaskRepository:
             created_at=row.created_at,
             updated_at=row.updated_at,
             context_paths=context_paths,
+            spec_json=row.metadata_text,
         )

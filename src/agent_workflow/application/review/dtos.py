@@ -1,4 +1,7 @@
-"""Typed review context data shared by the use case and its read port."""
+"""Layer: Application
+Responsibility: Define immutable review context, queue and lease data.
+Dependencies: Domain workflow statuses.
+"""
 
 from dataclasses import dataclass
 
@@ -20,6 +23,7 @@ class ReviewTask:
     created_at: float
     updated_at: float
     context_paths: tuple[str, ...]
+    spec_json: str
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ class PreviousReview:
     reviewer: str | None
     reviewed_at: float | None
     imported_at: float | None
-    prior_resolutions: dict[str, str]
+    prior_resolutions: tuple[tuple[str, str], ...]
     findings: tuple[ReviewFinding, ...]
 
 
@@ -72,3 +76,35 @@ class ReviewContextSnapshot:
     task: ReviewTask
     previous_reviews: tuple[PreviousReview, ...]
     events: tuple[ReviewEvent, ...]
+
+
+@dataclass(frozen=True)
+class ReviewQueueItem:
+    task_id: str
+    title: str
+    repository: str
+    branch: str
+    head_sha: str | None
+    requested_effort: str
+    review_round: int
+
+
+@dataclass(frozen=True)
+class ClaimedReviewTask:
+    task_id: str
+    head_sha: str | None
+    status: WorkflowStatus
+
+
+@dataclass(frozen=True)
+class ActiveReviewClaim:
+    token: str
+    expires_at: float
+
+
+@dataclass(frozen=True)
+class ReviewLeaseTransition:
+    task: ClaimedReviewTask
+    next_status: WorkflowStatus
+    action: str
+    timestamp: float

@@ -1,4 +1,7 @@
-"""Project review history from the caller's scoped Session."""
+"""Layer: Infrastructure
+Responsibility: Project persisted review history and events in the caller's scope.
+Dependencies: Application review DTOs, SQLAlchemy models and session controls.
+"""
 
 from pydantic import TypeAdapter
 from sqlalchemy import select
@@ -54,7 +57,7 @@ class SqlAlchemyReviewRepository:
             reviewer=row.reviewer,
             reviewed_at=row.reviewed_at,
             imported_at=row.imported_at,
-            prior_resolutions=prior_resolutions,
+            prior_resolutions=tuple(prior_resolutions.items()),
             findings=self._list_findings(row.review_id),
         )
 

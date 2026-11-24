@@ -1,4 +1,7 @@
-"""Read persisted review context for an authorized task."""
+"""Layer: Application
+Responsibility: Read persisted review context for an authorized task.
+Dependencies: Application review ports and Domain workflow types.
+"""
 
 from dataclasses import dataclass
 
@@ -17,6 +20,8 @@ class GetReviewContextInput:
     task_id: str
 
     def __post_init__(self) -> None:
+        if not isinstance(self.task_id, str):
+            raise WorkflowError("task_id must be a string")
         if not self.task_id.strip():
             raise WorkflowError("task_id must not be blank")
 

@@ -1,3 +1,8 @@
+"""Layer: Interfaces/MCP
+Responsibility: Configure the MCP transport and register tools with their providers.
+Dependencies: MCP SDK, Bootstrap dependency providers and MCP tool adapters.
+"""
+
 import os
 import re
 from datetime import datetime, timezone
@@ -7,7 +12,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 
-from agent_workflow.bootstrap.mcp_runtime import postgres_workflow_provider
+from agent_workflow.bootstrap.mcp_runtime import (
+    postgres_review_reads_provider,
+    postgres_workflow_provider,
+)
 from agent_workflow.mcp.security import TECHLEAD_SCOPE
 from agent_workflow.mcp.tools import register_tools
 
@@ -123,7 +131,7 @@ def get_server_info() -> dict:
 mcp = create_mcp_server()
 mcp.tool()(ping)
 mcp.tool()(get_server_info)
-register_tools(mcp, postgres_workflow_provider)
+register_tools(mcp, postgres_workflow_provider, postgres_review_reads_provider)
 
 
 def main() -> None:
