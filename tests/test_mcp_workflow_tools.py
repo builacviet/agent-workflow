@@ -27,7 +27,6 @@ from agent_workflow.application.review.use_cases.get_review_result import (
 from agent_workflow.application.review.use_cases.list_review_queue import (
     ListReviewQueueUseCase,
 )
-from agent_workflow.domain.service import WorkflowService
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_connection import PostgresFactory
@@ -114,9 +113,6 @@ def test_workflow_paths_authorize_and_close(
     factory = Mock()
     open_factory = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
-    monkeypatch.setattr(
-        WorkflowService, name, Mock(side_effect=AssertionError("legacy called"))
-    )
     if name == "register_task_handoff":
         operation = Mock(
             return_value=HandoffResult("TEST", WorkflowStatus.READY_IN_REVIEW, HEAD)
@@ -253,8 +249,6 @@ def test_review_reads_authorize_execute_and_close(
     execute = Mock(return_value=output)
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
     monkeypatch.setattr(use_case, "execute", execute)
-    legacy = Mock(side_effect=AssertionError("read must use the injected use case"))
-    monkeypatch.setattr(WorkflowService, name, legacy)
 
     reset = auth_context_var.set(None)
     try:
@@ -271,7 +265,6 @@ def test_review_reads_authorize_execute_and_close(
     assert open_factory.call_args.args[0].pg_runtime_dsn == DSN
     execute.assert_called_once_with(request_arg)
     factory.close.assert_called_once_with()
-    legacy.assert_not_called()
 
 
 @pytest.mark.parametrize("name", ["get_review_context", "get_review_result"])
@@ -416,9 +409,6 @@ def test_review_writes_use_cases_authorize_and_close(
     factory = Mock()
     opened = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", opened)
-    monkeypatch.setattr(
-        WorkflowService, name, Mock(side_effect=AssertionError("legacy called"))
-    )
     if name == "claim_review":
         case = ClaimReviewUseCase
         arguments = {**TASK, "expected_head_sha": HEAD}

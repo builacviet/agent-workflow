@@ -22,10 +22,12 @@ from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
 )
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
+)
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
-from agent_workflow.domain import service as legacy_service
-from agent_workflow.domain.service import WorkflowService, encode
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
+from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import (
     LEGACY_REPOSITORY,
     REPOSITORY,
@@ -34,6 +36,9 @@ from agent_workflow.domain.workflow_identity import (
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
+)
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
@@ -45,6 +50,10 @@ from agent_workflow.observability.correlation import (
     set_correlation_id,
 )
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+def encode(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 @pytest.fixture
@@ -71,12 +80,9 @@ def pg_authorization():
         try:
             yield factory, spec
         finally:
-            task_ids = (task_id, f"{task_id}-legacy")
             with factory.transaction() as connection:
-                connection.execute(
-                    delete(TaskEvent).where(TaskEvent.task_id.in_(task_ids))
-                )
-                connection.execute(delete(Task).where(Task.task_id.in_(task_ids)))
+                connection.execute(delete(TaskEvent).where(TaskEvent.task_id == task_id))
+                connection.execute(delete(Task).where(Task.task_id == task_id))
 
 
 def read_rows(factory, task_id):
@@ -169,7 +175,7 @@ def test_task_and_event_share_one_physical_commit(pg_authorization, monkeypatch)
     assert_closed(scopes)
 
 
-def test_operator_cli_readback_matches_legacy_and_preserves_history(
+def test_operator_cli_readback_preserves_history(
     pg_authorization, monkeypatch, tmp_path
 ):
     factory, spec = pg_authorization
@@ -184,39 +190,12 @@ def test_operator_cli_readback_matches_legacy_and_preserves_history(
         "argv",
         ["agent_workflow.admin", "provision", "--file", str(path)],
     )
-    monkeypatch.setattr(
-        legacy_service, "default_service", lambda: pytest.fail("legacy CLI fallback")
-    )
     admin.main()
 
     task, events = read_rows(factory, spec.task_id)
     assert task["metadata"] == encode(payload)
     assert len(events) == 1
     assert task["updated_at"] == events[0]["timestamp"]
-    legacy_id = f"{spec.task_id}-legacy"
-    times = iter((task["created_at"], task["updated_at"]))
-    legacy = WorkflowService(
-        repository=PostgresWorkflowRepository(factory),
-        require_ci=False,
-        clock=lambda: next(times),
-    )
-    legacy.provision_task(payload | {"task_id": legacy_id})
-    legacy_task, legacy_events = read_rows(factory, legacy_id)
-    assert dict(task) == dict(legacy_task) | {
-        "task_id": spec.task_id,
-        "metadata": encode(payload),
-    }
-    assert dict(events[0]) == dict(legacy_events[0]) | {
-        "task_id": spec.task_id,
-        "event_id": events[0]["event_id"],
-    }
-    actual_context = legacy.get_review_context(spec.task_id)
-    expected_context = legacy.get_review_context(legacy_id)
-    assert actual_context == expected_context | {
-        "task_id": spec.task_id,
-        "events": actual_context["events"],
-    }
-
     with factory.transaction() as connection:
         # Simulate a pre-R2 row that keeps the historical repository slug.
         connection.execute(
@@ -227,16 +206,15 @@ def test_operator_cli_readback_matches_legacy_and_preserves_history(
                 repository=LEGACY_REPOSITORY,
             )
         )
-    legacy.clock = lambda: task["updated_at"] + 1
-    legacy.register_task_handoff(
-        spec.task_id,
-        REPOSITORY,
-        spec.branch,
-        spec.base_sha,
-        "b" * 40,
-        "docs/handoff.md",
-        "Disposable test",
-    )
+    assert task["repository"] == REPOSITORY
+    assert task["status"] == "AWAITING_HANDOFF"
+    RegisterTaskHandoffUseCase(
+        PostgresHandoffScope(PostgresWorkflowRepository(factory)),
+        clock=lambda: task["updated_at"] + 1,
+    ).execute(HandoffRequest(
+        spec.task_id, REPOSITORY, spec.branch, spec.base_sha, "b" * 40,
+        "docs/handoff.md", "Disposable test",
+    ))
     before = read_rows(factory, spec.task_id)
     authorize(factory, spec)
     assert read_rows(factory, spec.task_id) == before
@@ -403,12 +381,8 @@ def test_failure_after_writes_rolls_back_task_and_event(
     assert read_rows(factory, spec.task_id) == (None, [])
 
 
-@pytest.mark.parametrize(
-    ("legacy_follower", "conflict"), [(False, False), (False, True), (True, False)]
-)
-def test_concurrent_create_collision(
-    pg_authorization, monkeypatch, legacy_follower, conflict
-):
+@pytest.mark.parametrize("conflict", [False, True])
+def test_concurrent_create_collision(pg_authorization, monkeypatch, conflict):
     factory, spec = pg_authorization
     first_written, follower_query, finish = Event(), Event(), Event()
     backends = []
@@ -429,11 +403,7 @@ def test_concurrent_create_collision(
     other_spec = replace(spec, title="Different spec") if conflict else spec
 
     def follow():
-        if legacy_follower:
-            legacy = WorkflowService(repository=PostgresWorkflowRepository(factory))
-            legacy.provision_task(json.loads(encode(asdict(other_spec))))
-        else:
-            authorize(factory, other_spec)
+        authorize(factory, other_spec)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(authorize, factory, spec)

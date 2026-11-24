@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from pg_task_fixtures import authorize_task
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -16,12 +17,18 @@ from test_agent_workflow import HEAD, NEXT, spec
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextInput,
+)
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    GetCoderAssignmentUseCase,
+)
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
+from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.domain.service import WorkflowService
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
@@ -41,19 +48,15 @@ def setup(request):
     task_id = "PG02C-" + uuid.uuid4().hex
     task_keys = {"task": task_id, "other": task_id + "-NEXT"}
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
-        service = WorkflowService(
-            repository=PostgresWorkflowRepository(factory),
-            require_ci=False,
-            clock=lambda: 1000.0,
-        )
-        service.provision_task(spec(task_id))
+        repository = PostgresWorkflowRepository(factory)
+        authorize_task(factory, spec(task_id))
         ledger = PostgresDispatchLedger(
             factory, role="dev", phase="code", clock=lambda: 1000.0
         )
         try:
             if getattr(request, "param", False):
-                service.provision_task(spec(task_keys["other"]))
-            yield ledger, service, factory, task_id
+                authorize_task(factory, spec(task_keys["other"]))
+            yield ledger, repository, factory, task_id
         finally:
             with factory.transaction() as conn:
                 conn.execute(
@@ -106,7 +109,7 @@ def test_concurrent_claim_block_restart_and_replay(setup):
 
 
 def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
-    ledger, service, factory, task_id = setup
+    ledger, repository, factory, task_id = setup
     claim = ledger.claim({task_id}, 60, track_pre_launch=True)
     assert claim is not None
     simulated_publish = Mock()
@@ -117,7 +120,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
         )
         leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
         dependencies = ControllerDependencies(
-            workflow=service.repository,
+            workflow=repository,
             dispatch=successor,
             ci_tracking=Mock(),
             ci_repository=Mock(),
@@ -127,7 +130,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
         return RunDispatchPassUseCase(
             dependencies.leadership,
             dependencies.dispatch,
-            service,
+            GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
             simulated_publish,
         ).execute({task_id})
 
@@ -143,7 +146,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
 @pytest.mark.parametrize("setup", [True], indirect=True)
 @pytest.mark.parametrize("fault", ["uncertain-publish", "late-result"])
 def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, fault):
-    _, service, factory, task_id = setup
+    _, _, factory, task_id = setup
     ledger = PostgresDispatchLedger(factory, role="dev", phase="code")
     leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
     finish_cleanup = Mock()
@@ -178,7 +181,11 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
 
     worker = Mock(side_effect=execute)
     dispatch = RunDispatchPassUseCase(
-        leadership, ledger, service, worker, on_finished=finish_cleanup
+        leadership,
+        ledger,
+        GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
+        worker,
+        on_finished=finish_cleanup,
     )
     if fault == "late-result":
         with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
@@ -193,7 +200,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         successor = RunDispatchPassUseCase(
             PostgresLeadershipLock(fresh, LeadershipDomain.CONTROLLER),
             PostgresDispatchLedger(fresh, role="dev", phase="code"),
-            service,
+            GetCoderAssignmentUseCase(create_get_review_context_use_case(fresh)),
             worker,
             on_finished=finish_cleanup,
         )
@@ -210,9 +217,11 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         assert not successor.execute({task_id}, 60)
         assert not successor.execute({task_id + "-NEXT"}, 60)
 
-    context = service.get_review_context(task_id)
-    assert context["status"] == "AWAITING_HANDOFF"
-    assert [event["action"] for event in context["events"]] == ["LOCAL_AUTHORIZATION"]
+    context = create_get_review_context_use_case(factory).execute(
+        GetReviewContextInput(task_id)
+    )
+    assert context.task.status == "AWAITING_HANDOFF"
+    assert [event.action for event in context.events] == ["LOCAL_AUTHORIZATION"]
     worker.assert_called_once()
     finish_cleanup.assert_not_called()
 

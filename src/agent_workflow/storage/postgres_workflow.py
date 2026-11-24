@@ -8,6 +8,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from agent_workflow.budget import check_deadline
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.unit_of_work import (
     set_workflow_query_timeout,
 )
@@ -21,7 +22,6 @@ from agent_workflow.storage.postgres_models import (
     Task,
     TaskEvent,
 )
-from agent_workflow.storage.repository import WorkflowError
 
 
 class RecordDTO(BaseModel):
@@ -395,7 +395,7 @@ class PostgresWorkflowUnit:
 
     def advance_failed_ci_head(self, task_id: str, old_head: str, new_head: str) -> int:
         if new_head == old_head:
-            raise WorkflowError("CI repair requires a different HEAD")
+            raise BusinessRuleError("CI repair requires a different HEAD")
         failure = exists(
             select(CIObservation.id).where(
                 CIObservation.task_id == CITask.task_id,
@@ -433,9 +433,9 @@ class PostgresWorkflowUnit:
         except DBAPIError as exc:
             if getattr(exc.orig, "sqlstate", None) not in {"42P01", "42703"}:
                 raise
-            raise WorkflowError("CI repair evidence is unavailable") from exc
+            raise BusinessRuleError("CI repair evidence is unavailable") from exc
         if row is None:
-            raise WorkflowError("CI repair HEAD not authorized")
+            raise BusinessRuleError("CI repair HEAD not authorized")
         changed = self._execute(
             update(CITask)
             .where(CITask.task_id == task_id)
@@ -446,16 +446,16 @@ class PostgresWorkflowUnit:
             )
         ).rowcount
         if changed != 1:
-            raise WorkflowError("CI repair update failed")
+            raise BusinessRuleError("CI repair update failed")
         return row[0]
 
     def import_historical_head(self, values: tuple) -> None:
-        raise WorkflowError(
+        raise BusinessRuleError(
             "historical import is unsupported by the PostgreSQL adapter"
         )
 
     def delete_synthetic_history(self, values: tuple) -> None:
-        raise WorkflowError(
+        raise BusinessRuleError(
             "synthetic history deletion is unsupported by the PostgreSQL adapter"
         )
 

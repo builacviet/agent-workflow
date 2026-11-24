@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from agent_workflow.domain.service import WorkflowService, encode
 from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.workers.trusted_git.app_auth import (
@@ -18,66 +17,6 @@ from agent_workflow.workers.trusted_git.repository import changes
 
 BASE = "a" * 40
 HEAD = "b" * 40
-
-
-def provision(service, task_id="P31"):
-    service.provision_task(
-        dict(
-            task_id=task_id,
-            title="Controller fixture",
-            description="Deterministic only",
-            acceptance_criteria=["AC1"],
-            definition_of_done="tests",
-            repository=REPOSITORY,
-            branch="codex/test",
-            base_sha=BASE,
-            requested_effort="high",
-            risk_level="high",
-            require_verified_effort=True,
-            context_paths=["docs/handoff.md"],
-            synthetic=True,
-        )
-    )
-
-
-@pytest.fixture
-def state(tmp_path):
-    service = WorkflowService(tmp_path / "workflow.sqlite3", require_ci=False)
-    provision(service)
-    return service
-
-
-def test_pre_rename_task_can_handoff_without_rewriting_repository(state):
-    with state.repository.read() as db:
-        spec = json.loads(state.task(db, "P31")["metadata"])
-    legacy_spec = spec | {"repository": LEGACY_REPOSITORY}
-    with state.repository.raw_transaction() as db:
-        db.execute(
-            "UPDATE tasks SET repository=?, metadata=? WHERE task_id=?",
-            (LEGACY_REPOSITORY, encode(legacy_spec), "P31"),
-        )
-
-    state.provision_task(spec)
-
-    assert state.get_coder_assignment("P31")["repository"] == REPOSITORY
-    state.register_task_handoff(
-        "P31",
-        LEGACY_REPOSITORY,
-        "codex/test",
-        BASE,
-        HEAD,
-        "docs/handoff.md",
-        "synthetic tests",
-    )
-    assert state.list_review_queue()[0]["repository"] == REPOSITORY
-    context = state.get_review_context("P31")
-    assert context["github_references"]["complete_diff"] == (
-        f"https://github.com/{REPOSITORY}/compare/{BASE}...{HEAD}"
-    )
-    with state.repository.read() as db:
-        task = state.task(db, "P31")
-    assert task["repository"] == LEGACY_REPOSITORY
-    assert task["metadata"] == encode(legacy_spec)
 
 
 @pytest.mark.parametrize(

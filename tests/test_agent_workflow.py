@@ -1,43 +1,18 @@
 """Deterministic tests: remote SHA responses and time are controlled, never invented evidence."""
 
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
-from legacy_admin_fixtures import import_history, reset_synthetic, seed_synthetic
 from starlette.requests import Request
 
-from agent_workflow.admin import BASE, REPO, ROUND1, ROUND2
+from agent_workflow.admin import BASE, REPO
 from agent_workflow.application.review.dtos import ReviewQueueItem
-from agent_workflow.domain.service import WorkflowService
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.mcp.security import authorize_request
 from agent_workflow.workers.trusted_git.github import GitHubVerifier
 
 HEAD = "a" * 40
 NEXT = "b" * 40
-
-
-class Remote:
-    def __init__(self):
-        self.head = HEAD
-        self.available = True
-
-    def __call__(self, repo, branch, base, head):
-        if not self.available:
-            raise WorkflowError("verification unavailable")
-        if head != self.head:
-            raise WorkflowError("stale remote")
-
-
-@pytest.fixture
-def env(tmp_path):
-    remote = Remote()
-    now = [1000.0]
-    service = WorkflowService(
-        tmp_path / "state.db", clock=lambda: now[0], lease_seconds=10, require_ci=False
-    )
-    return service, remote, now
 
 
 def spec(task_id="TEST", effort="medium", verified=False):
@@ -60,13 +35,6 @@ def spec(task_id="TEST", effort="medium", verified=False):
             "docs/tasks/TEST.md",
         ],
         synthetic=True,
-    )
-
-
-def ready(service, task_id="TEST", effort="medium", verified=False):
-    service.provision_task(spec(task_id, effort, verified))
-    return service.register_task_handoff(
-        task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "mock test evidence"
     )
 
 
@@ -107,233 +75,6 @@ def test_ping_and_info_preserved():
     assert mcp.settings.port == 8000
 
 
-def test_restart_persistence_and_queue_filter(env):
-    service, remote, now = env
-    ready(service)
-    ready(service, "HIGH", "high", True)
-    restarted = WorkflowService(service.db_path, require_ci=False)
-    assert [t["task_id"] for t in restarted.list_review_queue("high")] == ["HIGH"]
-    assert len(restarted.list_review_queue()) == 2
-    assert restarted.list_review_queue("instant") == []
-
-
-def test_historical_seed_idempotent_and_no_round_three(env):
-    service, _, _ = env
-    import_history(service)
-    import_history(service)
-    result = service.get_review_result("TASK-001")
-    assert result["status"] == "ESCALATED"
-    assert result["completed_review_rounds"] == 2
-    assert result["current_head_sha"] == ROUND2
-    assert result["actual_effort"] is None
-    assert result["acceptance_criteria"] and result["definition_of_done"]
-    assert [r["reviewed_head_sha"] for r in result["previous_reviews"]] == [
-        ROUND1,
-        ROUND2,
-    ]
-    assert [r["reviewed_at"] for r in result["previous_reviews"]] == [None, None]
-    assert all(r["reviewer"] is None for r in result["previous_reviews"])
-    assert result["previous_reviews"][1]["prior_resolutions"] == {"F-001": "FIXED"}
-    assert not service.list_review_queue()
-    assert [
-        f["finding_id"]
-        for f in service.get_coder_assignment("TASK-001")["unresolved_findings"]
-    ] == ["F-002"]
-    with pytest.raises(WorkflowError):
-        service.claim_review("TASK-001", ROUND2, "lead")
-    with pytest.raises(WorkflowError):
-        service.register_task_handoff(
-            "TASK-001", REPO, "task/TASK-001", BASE, NEXT, "docs/handoff.md", "x"
-        )
-
-
-def test_concurrent_claims_only_one_winner(env):
-    service, _, _ = env
-    ready(service)
-
-    def claim(_):
-        try:
-            return service.claim_review("TEST", HEAD, "lead")
-        except WorkflowError:
-            return None
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(claim, range(2)))
-    assert sum(result is not None for result in outcomes) == 1
-    assert not service.list_review_queue()
-
-
-def test_lease_recovery_does_not_consume_round(env):
-    service, _, now = env
-    ready(service)
-    first = service.claim_review("TEST", HEAD, "lead")
-    now[0] += 11
-    assert service.list_review_queue()[0]["review_round"] == 1
-    second = service.claim_review("TEST", HEAD, "lead")
-    assert first["claim_token"] != second["claim_token"]
-    with pytest.raises(WorkflowError):
-        service.submit_review(payload(first), "lead")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 0
-
-
-def test_expired_claim_direct_recovery(env):
-    service, _, now = env
-    ready(service)
-    service.claim_review("TEST", HEAD, "lead")
-    now[0] += 10
-    assert service.claim_review("TEST", HEAD, "lead")["review_round"] == 1
-
-
-def test_stale_client_sha_and_wrong_owner(env):
-    service, _, _ = env
-    ready(service)
-    with pytest.raises(WorkflowError):
-        service.claim_review("TEST", NEXT, "lead")
-    claim = service.claim_review("TEST", HEAD, "lead")
-    with pytest.raises(WorkflowError):
-        service.submit_review(payload(claim, reviewed_head_sha=NEXT), "lead")
-    with pytest.raises(WorkflowError):
-        service.submit_review(payload(claim), "other")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 0
-
-
-def test_duplicate_submission_and_conflicting_duplicate(env):
-    service, _, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    data = payload(claim)
-    service.submit_review(data, "lead")
-    assert service.submit_review(data, "lead")["duplicate"]
-    with pytest.raises(WorkflowError):
-        service.submit_review({**data, "summary": "different"}, "lead")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 1
-
-
-def test_two_round_cycle_full_history_and_resolution(env):
-    service, remote, _ = env
-    ready(service)
-    first = service.claim_review("TEST", HEAD, "lead")
-    service.submit_review(payload(first), "lead")
-    assert service.get_review_result("TEST")["status"] == "CHANGES_REQUESTED"
-    assert service.list_review_queue() == []
-    with pytest.raises(WorkflowError):
-        service.register_task_handoff(
-            "TEST", REPO, "task/test", BASE, HEAD, "docs/handoff.md", "x"
-        )
-    remote.head = NEXT
-    service.register_task_handoff(
-        "TEST", REPO, "task/test", BASE, NEXT, "docs/handoff.md", "mock correction"
-    )
-    context = service.get_review_context("TEST")
-    assert context["review_round"] == 2
-    assert context["previous_reviews"][0]["findings"][0]["finding_id"] == "F-1"
-    assert context["github_references"]["complete_diff"].endswith(f"{BASE}...{NEXT}")
-    assert context["github_references"]["correction_diff"].endswith(f"{HEAD}...{NEXT}")
-    second = service.claim_review("TEST", NEXT, "lead")
-    with pytest.raises(WorkflowError):
-        service.submit_review(
-            payload(second, "ESCALATED", findings=[finding("F-2")]), "lead"
-        )
-    review = payload(
-        second,
-        "ESCALATED",
-        findings=[finding("F-2")],
-        prior_resolutions={"F-1": "FIXED"},
-    )
-    service.submit_review(review, "lead")
-    result = service.get_review_result("TEST")
-    assert result["completed_review_rounds"] == 2 and result["status"] == "ESCALATED"
-    assert len(result["previous_reviews"]) == 2
-    assert result["previous_reviews"][0]["prior_resolutions"] == {}
-    assert result["previous_reviews"][1]["prior_resolutions"] == {"F-1": "FIXED"}
-    assert [
-        f["finding_id"]
-        for f in service.get_coder_assignment("TEST")["unresolved_findings"]
-    ] == ["F-2"]
-    with pytest.raises(WorkflowError):
-        service.claim_review("TEST", NEXT, "lead")
-
-
-@pytest.mark.parametrize("verdict", ["ESCALATED", "APPROVED"])
-def test_policy_cannot_be_overridden(env, verdict):
-    service, _, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    data = payload(claim, verdict, findings=[finding()])
-    with pytest.raises(WorkflowError):
-        service.submit_review(data, "lead")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 0
-
-
-def test_unverified_high_blocks_approval_without_consuming_round(env):
-    service, _, _ = env
-    ready(service, effort="high", verified=True)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    data = payload(
-        claim,
-        "APPROVED",
-        requested_effort="high",
-        actual_effort="high",
-        verification_evidence="client says high",
-    )
-    with pytest.raises(WorkflowError, match="effort"):
-        service.submit_review(data, "lead")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 0
-    assert service.get_review_result("TEST")["status"] == "IN_REVIEW"
-
-
-def test_unverified_claim_not_recorded_as_actual_effort(env):
-    service, _, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    service.submit_review(
-        payload(claim, actual_effort="high", verification_evidence="untrusted"), "lead"
-    )
-    review = service.get_review_result("TEST")["previous_reviews"][0]
-    assert (
-        review["actual_effort"] is None
-        and review["verification_evidence"] == "unverified"
-    )
-
-
-def test_approval_terminal_and_branch_move_invalidates_approval(env):
-    service, remote, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    data = payload(claim, "APPROVED")
-    service.submit_review(data, "lead")
-    assert service.get_review_result("TEST")["approval_current"] is None
-    with pytest.raises(WorkflowError):
-        service.claim_review("TEST", HEAD, "lead")
-    remote.head = NEXT
-    assert service.get_review_result("TEST")["approval_current"] is None
-    assert service.submit_review(data, "lead")["duplicate"]
-    with pytest.raises(WorkflowError):
-        service.register_task_handoff(
-            "TEST", REPO, "task/test", BASE, NEXT, "docs/handoff.md", "x"
-        )
-
-
-def test_transaction_rollback_after_partial_review_write(env, monkeypatch):
-    service, _, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    before = service.get_review_context("TEST")
-    original = service.insert_findings
-
-    def fail(*args):
-        original(*args)
-        raise RuntimeError("simulated storage failure")
-
-    monkeypatch.setattr(service, "insert_findings", fail)
-    with pytest.raises(RuntimeError):
-        service.submit_review(payload(claim), "lead")
-    assert service.get_review_context("TEST") == before
-    monkeypatch.setattr(service, "insert_findings", original)
-    service.submit_review(payload(claim), "lead")
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 1
-
-
 def test_auth_denies_default_missing_and_wrong_token(monkeypatch):
     monkeypatch.delenv("WFC_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("WFC_REVIEWER_ID", raising=False)
@@ -351,32 +92,6 @@ def test_auth_denies_default_missing_and_wrong_token(monkeypatch):
         with pytest.raises(PermissionError):
             authorize_request(request(header))
     assert authorize_request(request("Bearer " + "a" * 32)) == "test-reviewer"
-
-
-def test_authorization_metadata_and_handoff_cannot_be_retargeted(env):
-    service, _, _ = env
-    with pytest.raises(WorkflowError):
-        service.provision_task({**spec(), "repository": "other/repo"})
-    ready(service)
-    for args in [
-        ("other/repo", "task/test", BASE),
-        (REPO, "other", BASE),
-        (REPO, "task/test", NEXT),
-    ]:
-        with pytest.raises(WorkflowError):
-            service.register_task_handoff("TEST", *args, HEAD, "docs/handoff.md", "x")
-
-
-def test_synthetic_reset_preserves_real_history(env):
-    service, remote, _ = env
-    import_history(service)
-    remote.head = BASE
-    seed_synthetic(service)
-    before = service.get_review_context("TASK-001")
-    reset_synthetic(service)
-    seed_synthetic(service)
-    assert service.get_review_context("TASK-001") == before
-    assert service.list_review_queue()[0]["task_id"] == "POC-REVIEW-001"
 
 
 def test_github_verifier_fail_closed_and_escapes_branch(monkeypatch):
@@ -592,67 +307,6 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
         thread.join(timeout=10)
         sock.close()
     assert not thread.is_alive()
-
-
-def test_trusted_effort_adapter_only_path_to_verified_approval(env):
-    service, _, _ = env
-    ready(service, effort="high", verified=True)
-    service.effort_verifier = lambda actor, task, data: (
-        "high",
-        "server-side test attestation",
-    )
-    claim = service.claim_review("TEST", HEAD, "lead")
-    result = service.submit_review(
-        payload(claim, "APPROVED", requested_effort="high"), "lead"
-    )
-    assert result["actual_effort"] == "high"
-
-
-def test_concurrent_submissions_increment_exactly_once(env):
-    service, _, _ = env
-    ready(service)
-    claim = service.claim_review("TEST", HEAD, "lead")
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(
-            pool.map(lambda _: service.submit_review(payload(claim), "lead"), range(2))
-        )
-    assert sum(bool(result.get("duplicate")) for result in results) == 1
-    assert service.get_review_result("TEST")["completed_review_rounds"] == 1
-
-
-def test_old_synthetic_metadata_is_not_silently_retargeted(env):
-    from agent_workflow.admin import BASE, REPO
-    from agent_workflow.domain.contracts import TaskSpec
-
-    service, remote, _ = env
-    import_history(service)
-    remote.head = BASE
-    seed_synthetic(service)
-    context = service.get_review_context("POC-REVIEW-001")
-    old_spec = {name: context[name] for name in TaskSpec.model_fields}
-    reset_synthetic(service)
-    old_spec["branch"] = "main"
-    old_spec["require_verified_effort"] = bool(old_spec["require_verified_effort"])
-    service.provision_task(old_spec)
-    service.register_task_handoff(
-        "POC-REVIEW-001",
-        REPO,
-        "main",
-        BASE,
-        BASE,
-        "docs/handoff.md",
-        "synthetic legacy fixture",
-    )
-    before = service.get_review_context("TASK-001")
-    with pytest.raises(WorkflowError, match="conflicts"):
-        seed_synthetic(service)
-    assert service.get_review_context("POC-REVIEW-001")["branch"] == "main"
-    reset_synthetic(service)
-    seed_synthetic(service)
-    assert (
-        service.get_review_context("POC-REVIEW-001")["branch"] == "poc/review-baseline"
-    )
-    assert service.get_review_context("TASK-001") == before
 
 
 def test_server_docker_bind_and_public_hostname_are_explicit(monkeypatch):

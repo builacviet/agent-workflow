@@ -1,13 +1,10 @@
-"""Compare both review-context readers on one migrated, disposable database."""
+"""Verify current review-context reader on disposable PostgreSQL."""
 
-import json
 import os
 import time
 import uuid
 from collections.abc import Iterator
-from dataclasses import asdict
 from unittest.mock import Mock
-from urllib.parse import quote
 
 import pytest
 from sqlalchemy import delete, event, text, update
@@ -18,19 +15,24 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.review.dtos import PreviousReview, ReviewEvent
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
-    GetReviewContextUseCase,
+)
+from agent_workflow.application.task.use_cases.register_task_handoff import (
+    RegisterTaskHandoffUseCase,
 )
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
-from agent_workflow.domain.service import WorkflowService
-from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.composition.task_deps import create_authorize_task_use_case
+from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.infrastructure.database.repositories.review_repository import (
     SqlAlchemyReviewRepository,
+)
+from agent_workflow.infrastructure.database.repositories.task_handoff import (
+    PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresUnavailableError,
 )
+from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_models import (
     Review,
@@ -43,19 +45,18 @@ from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 BASE = "a" * 40
 HEAD = "b" * 40
-NEXT = "c" * 40
 REPO = "builacviet/agent-workflow"
 BRANCH = "task/test"
 HANDOFF_PATH = "docs/handoff.md"
 
-ContextDatabase = tuple[PostgresFactory, WorkflowService, str]
+ContextDatabase = tuple[PostgresFactory, str]
 
 
 def task_spec(task_id: str) -> dict[str, object]:
     return {
         "task_id": task_id,
         "title": "Synthetic review context",
-        "description": "PostgreSQL parity fixture",
+        "description": "PostgreSQL context fixture",
         "acceptance_criteria": ["AC4"],
         "definition_of_done": "Tests pass",
         "repository": REPO,
@@ -69,38 +70,6 @@ def task_spec(task_id: str) -> dict[str, object]:
     }
 
 
-def finding(finding_id: str) -> dict[str, object]:
-    return {
-        "finding_id": finding_id,
-        "severity": "medium",
-        "acceptance_criterion": "AC4",
-        "file_path": "src/module.py",
-        "description": "Missing case",
-        "suggested_correction": "Handle absent data",
-        "required_verification": "Regression test",
-    }
-
-
-def review_payload(
-    claim: dict[str, object],
-    verdict: WorkflowStatus,
-    *,
-    findings: list[dict[str, object]],
-    prior_resolutions: dict[str, str],
-) -> dict[str, object]:
-    return {
-        "task_id": claim["task_id"],
-        "claim_token": claim["claim_token"],
-        "reviewed_head_sha": claim["reviewed_sha"],
-        "review_round": claim["review_round"],
-        "verdict": verdict.value,
-        "summary": "Synthetic review",
-        "findings": findings,
-        "prior_resolutions": prior_resolutions,
-        "requested_effort": "medium",
-    }
-
-
 @pytest.fixture
 def context_db() -> Iterator[ContextDatabase]:
     dsn = os.environ.get("PG_TEST_DSN")
@@ -108,120 +77,20 @@ def context_db() -> Iterator[ContextDatabase]:
         pytest.skip("disposable PG_TEST_DSN not supplied")
     task_id = f"R2-ARCH-01-{uuid.uuid4().hex}"
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
-        service = WorkflowService(
-            repository=PostgresWorkflowRepository(factory),
-            require_ci=False,
-            clock=lambda: 1000.0,
-        )
         try:
-            yield factory, service, task_id
+            yield factory, task_id
         finally:
             with factory.transaction() as connection:
                 for model in (ReviewFinding, Review, ReviewAttempt, TaskEvent, Task):
                     connection.execute(delete(model).where(model.task_id == task_id))
 
 
-def _assert_parity(
-    use_case: GetReviewContextUseCase, service: WorkflowService, task_id: str
-) -> None:
-    expected = service.get_review_context(task_id)
-    actual = use_case.execute(GetReviewContextInput(task_id))
-    task = asdict(actual.task)
-    assert json.loads(task.pop("spec_json")) == task_spec(task_id)
-    for key, value in task.items():
-        assert value == (
-            tuple(expected[key]) if key == "context_paths" else expected[key]
-        )
-    assert type(actual.task.require_verified_effort) is type(
-        expected["require_verified_effort"]
-    )
-    assert actual.task.status is WorkflowStatus(expected["status"])
-    assert actual.review_round == expected["review_round"]
-    assert actual.rounds_remaining == expected["rounds_remaining"]
-    assert actual.previous_reviewed_sha == expected["previous_reviewed_sha"]
-    assert actual.previous_verdict == expected["previous_verdict"]
-
-    actual_reviews = []
-    for review in actual.previous_reviews:
-        record = asdict(review)
-        record["prior_resolutions"] = dict(review.prior_resolutions)
-        record["findings"] = [asdict(finding) for finding in review.findings]
-        actual_reviews.append(record)
-    assert actual_reviews == expected["previous_reviews"]
-    assert [asdict(event) for event in actual.events] == expected["events"]
-
-    # Exercise the inputs a future transport mapper would use for the existing URLs.
-    root = f"https://github.com/{actual.task.repository}"
-    head = actual.task.current_head_sha
-    prior = actual.previous_reviewed_sha
-    assert expected["github_references"] == {
-        "complete_diff": f"{root}/compare/{actual.task.base_sha}...{head}"
-        if head
-        else None,
-        "correction_diff": f"{root}/compare/{prior}...{head}"
-        if prior and head
-        else None,
-        "context_files": {
-            path: f"{root}/blob/{head}/{quote(path, safe='/')}"
-            for path in actual.task.context_paths
-        }
-        if head
-        else {},
-    }
-    assert service.get_review_context(task_id) == expected
-
-
-def test_context_parity_with_empty_and_two_round_history(
-    context_db: ContextDatabase,
-) -> None:
-    factory, service, task_id = context_db
-    use_case = create_get_review_context_use_case(factory)
-    service.provision_task(task_spec(task_id))
-    _assert_parity(use_case, service, task_id)
-
-    service.register_task_handoff(
-        task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "first handoff"
-    )
-    claim = service.claim_review(task_id, HEAD, "lead")
-    service.submit_review(
-        review_payload(
-            claim,
-            WorkflowStatus.CHANGES_REQUESTED,
-            findings=[finding("F-2"), finding("F-1")],
-            prior_resolutions={},
-        ),
-        "lead",
-    )
-    _assert_parity(use_case, service, task_id)
-
-    service.register_task_handoff(
-        task_id, REPO, BRANCH, BASE, NEXT, HANDOFF_PATH, "second handoff"
-    )
-    _assert_parity(use_case, service, task_id)
-    second = service.claim_review(task_id, NEXT, "lead")
-    service.submit_review(
-        review_payload(
-            second,
-            WorkflowStatus.APPROVED,
-            findings=[],
-            prior_resolutions={"F-1": "FIXED", "F-2": "FIXED"},
-        ),
-        "lead",
-    )
-    _assert_parity(use_case, service, task_id)
-
-    missing = f"{task_id}-missing"
-    with pytest.raises(WorkflowError, match="^unknown authorized task$"):
-        service.get_review_context(missing)
-    with pytest.raises(WorkflowError, match="^unknown authorized task$"):
-        use_case.execute(GetReviewContextInput(missing))
-
-
 def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
     context_db: ContextDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    factory, service, task_id = context_db
-    service.provision_task(task_spec(task_id))
+    factory, task_id = context_db
+    with create_authorize_task_use_case(factory) as operation:
+        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
     request = GetReviewContextInput(task_id)
     original_list = SqlAlchemyReviewRepository.list_events
     read_connections: list[Connection] = []
@@ -241,9 +110,10 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
             )
         )
         assert 0 < timeout <= 15_000
-        service.register_task_handoff(
-            task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"
-        )
+        RegisterTaskHandoffUseCase(
+            PostgresHandoffScope(PostgresWorkflowRepository(factory)),
+            clock=lambda: 1000.0,
+        ).execute(HandoffRequest(task_id, REPO, BRANCH, BASE, HEAD, HANDOFF_PATH, "during read"))
         return original_list(repository, requested_task_id)
 
     connection_scope = Mock(wraps=factory.connect_session)
@@ -266,8 +136,9 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
 def test_context_read_failure_rolls_back_and_factory_can_be_reused(
     context_db: ContextDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    factory, service, task_id = context_db
-    service.provision_task(task_spec(task_id))
+    factory, task_id = context_db
+    with create_authorize_task_use_case(factory) as operation:
+        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
     request = GetReviewContextInput(task_id)
     use_case = create_get_review_context_use_case(factory)
     failed_connections: list[Connection] = []
@@ -305,8 +176,9 @@ def test_context_read_failure_rolls_back_and_factory_can_be_reused(
 def test_context_rejects_unknown_persisted_event_status(
     context_db: ContextDatabase,
 ) -> None:
-    factory, service, task_id = context_db
-    service.provision_task(task_spec(task_id))
+    factory, task_id = context_db
+    with create_authorize_task_use_case(factory) as operation:
+        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
     with factory.transaction() as connection:
         connection.execute(
             update(TaskEvent)
@@ -322,8 +194,9 @@ def test_context_rejects_unknown_persisted_event_status(
 def test_context_rejects_invalid_metadata_without_exposing_values(
     context_db: ContextDatabase,
 ) -> None:
-    factory, service, task_id = context_db
-    service.provision_task(task_spec(task_id))
+    factory, task_id = context_db
+    with create_authorize_task_use_case(factory) as operation:
+        operation.execute(ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command())
     with factory.transaction() as connection:
         connection.execute(
             update(Task)

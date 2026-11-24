@@ -7,7 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from types import SimpleNamespace
+from dataclasses import asdict
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,18 +15,33 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
-from sqlalchemy import create_engine, text
+from pg_task_fixtures import authorize_task, record_handoff
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.review.use_cases.claim_review import ClaimReviewUseCase
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextInput,
+)
+from agent_workflow.application.review.use_cases.submit_review import SubmitReviewUseCase
+from agent_workflow.application.review.use_cases.write_contracts import (
+    ClaimReviewInput,
+    SubmitReviewInput,
+)
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.postgres_mcp import postgres_mcp_task_operations
-from agent_workflow.domain.service import WorkflowService
+from agent_workflow.composition.review_deps import create_get_review_context_use_case
+from agent_workflow.domain.contracts import Submission
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueReader,
 )
+from agent_workflow.infrastructure.database.repositories.review_writes import (
+    PostgresReviewWriteScope,
+)
 from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.interfaces.review_assignment_response import review_context_response
 from agent_workflow.mcp.server import mcp
 from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
@@ -74,36 +89,10 @@ def test_mcp_composition_closes_on_scope_and_construction_errors():
 def test_mcp_composition_rejects_missing_or_invalid_dsn(dsn):
     config = AppConfig.model_construct(pg_runtime_dsn=dsn)
     with patch("agent_workflow.storage.postgres_connection.create_engine") as engine:
-        with patch("agent_workflow.domain.service.SQLiteWorkflowRepository") as sqlite:
-            with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
-                with postgres_mcp_task_operations(config):
-                    pytest.fail("service must not be yielded")
-            engine.assert_not_called()
-            sqlite.assert_not_called()
-
-
-def test_factory_uow_deadline_hook_can_rollback_after_session_commit():
-    engine = create_engine("sqlite://")
-    with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE alembic_version (version_num text)"))
-        connection.execute(
-            text("INSERT INTO alembic_version VALUES ('pg02d_webhook_digest')")
-        )
-        connection.execute(text("CREATE TABLE uow_items (value integer)"))
-
-    def expired():
-        raise TimeoutError("deadline expired")
-
-    with PostgresFactory(engine) as factory:
-        with factory.unit_of_work_session() as session:
-            session.execute(text("INSERT INTO uow_items VALUES (1)"))
-        with pytest.raises(TimeoutError, match="deadline expired"):
-            with factory.unit_of_work_session(after_session_commit=expired) as session:
-                session.execute(text("INSERT INTO uow_items VALUES (2)"))
-        with factory.transaction() as connection:
-            assert connection.execute(
-                text("SELECT value FROM uow_items")
-            ).scalars().all() == [1]
+        with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
+            with postgres_mcp_task_operations(config):
+                pytest.fail("operation must not be yielded")
+        engine.assert_not_called()
 
 
 @pytest.fixture
@@ -114,11 +103,8 @@ def setup():
     task_id = "PG02B-" + uuid.uuid4().hex
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
         repo = PostgresWorkflowRepository(factory)
-        service = WorkflowService(
-            repository=repo, require_ci=False, clock=lambda: 1000.0
-        )
         try:
-            yield service, repo, task_id, factory
+            yield repo, task_id, factory
         finally:
             with factory.transaction() as conn:
                 for table in (
@@ -136,11 +122,35 @@ def setup():
                     )
 
 
-def ready(service, task_id):
-    service.provision_task(spec(task_id))
-    service.register_task_handoff(
-        task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
+def ready(repo, task_id):
+    authorize_task(repo.factory, spec(task_id))
+    record_handoff(repo, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test")
+
+
+def claim_task(repo, task_id, head, reviewer, *, require_ci=False, clock=None, lease=900):
+    operation = ClaimReviewUseCase(
+        PostgresReviewWriteScope(repo),
+        clock=clock or (lambda: 1000.0),
+        token=lambda: uuid.uuid4().hex,
+        require_ci=require_ci,
+        lease_seconds=lease,
     )
+    return asdict(operation.execute(ClaimReviewInput(task_id, head, reviewer)))
+
+
+def submit_task(repo, data, reviewer, *, clock=None, require_ci=False):
+    operation = SubmitReviewUseCase(
+        PostgresReviewWriteScope(repo),
+        clock=clock or (lambda: 1000.0),
+        token=lambda: uuid.uuid4().hex,
+        require_ci=require_ci,
+    )
+    return asdict(operation.execute(SubmitReviewInput(Submission.model_validate(data), reviewer)))
+
+
+def read_context(repo, task_id):
+    operation = create_get_review_context_use_case(repo.factory)
+    return review_context_response(operation.execute(GetReviewContextInput(task_id)))
 
 
 @pytest.fixture
@@ -174,9 +184,9 @@ def mcp_postgres(setup, monkeypatch):
 
 
 def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
-    service, _, task_id, _ = setup
-    service.provision_task(spec(task_id))
-    assert service.get_review_context(task_id)["current_head_sha"] is None
+    repo, task_id, _ = setup
+    authorize_task(repo.factory, spec(task_id))
+    assert read_context(repo, task_id)["current_head_sha"] is None
     handoff = mcp_postgres(
         "register_task_handoff",
         {
@@ -199,24 +209,12 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
     assert context["current_head_sha"] == HEAD
     assert context["status"] == "READY_IN_REVIEW"
     assert context["events"][-1]["action"] == "HANDOFF"
-    assert context == service.get_review_context(task_id)
+    assert context["github_references"]["complete_diff"].endswith(BASE + "..." + HEAD)
 
 
-def test_mcp_handoff_and_assignment_do_not_call_legacy_service(
-    setup, mcp_postgres, monkeypatch
-):
-    service, repo, task_id, _ = setup
-    service.provision_task(spec(task_id))
-    monkeypatch.setattr(
-        WorkflowService,
-        "register_task_handoff",
-        Mock(side_effect=AssertionError("legacy handoff invoked")),
-    )
-    monkeypatch.setattr(
-        WorkflowService,
-        "get_coder_assignment",
-        Mock(side_effect=AssertionError("legacy assignment invoked")),
-    )
+def test_mcp_handoff_idempotent_and_empty_assignment(setup, mcp_postgres):
+    repo, task_id, _ = setup
+    authorize_task(repo.factory, spec(task_id))
     arguments = {
         "task_id": task_id,
         "repository": REPO,
@@ -241,19 +239,16 @@ def test_mcp_handoff_and_assignment_do_not_call_legacy_service(
         )
 
 
-def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres, monkeypatch):
-    service, _, task_id, _ = setup
-    ready(service, task_id)
-    claim = service.claim_review(task_id, HEAD, "lead")
-    service.submit_review(payload(claim, "CHANGES_REQUESTED"), "lead")
-    expected = service.get_coder_assignment(task_id)
-    monkeypatch.setattr(
-        WorkflowService,
-        "get_coder_assignment",
-        Mock(side_effect=AssertionError("legacy assignment invoked")),
-    )
+def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres):
+    repo, task_id, _ = setup
+    ready(repo, task_id)
+    claim = claim_task(repo, task_id, HEAD, "lead")
+    submit_task(repo, payload(claim, "CHANGES_REQUESTED"), "lead")
     actual = mcp_postgres("get_coder_assignment", {"task_id": task_id})
-    assert actual == expected
+    assert actual["status"] == "CHANGES_REQUESTED"
+    assert actual["current_head_sha"] == HEAD
+    assert len(actual["unresolved_findings"]) == 1
+    assert actual["unresolved_findings"][0]["finding_id"] == "F-1"
     assert actual["unresolved_findings"][0]["resolution_status"] == "NOT_VERIFIED"
 
 
@@ -267,8 +262,8 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
         PostgresHandoffScope,
     )
 
-    service, repo, task_id, _ = setup
-    service.provision_task(spec(task_id))
+    repo, task_id, _ = setup
+    authorize_task(repo.factory, spec(task_id))
     original = PostgresHandoffRepository.record
 
     def fail_after_writes(self, *args):
@@ -293,31 +288,40 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("verdict", ["APPROVED", "ESCALATED"])
-def test_mcp_context_and_result_match_persisted_history(setup, mcp_postgres, verdict):
-    service, _, task_id, _ = setup
+def test_mcp_context_and_result_preserve_persisted_history(setup, mcp_postgres, verdict):
+    repo, task_id, _ = setup
     arguments = {"task_id": task_id}
-    service.provision_task(
+    authorize_task(repo.factory, 
         {**spec(task_id), "context_paths": ["docs/review context.md"]}
     )
 
-    def assert_parity():
-        assert mcp_postgres(
-            "get_review_context", arguments
-        ) == service.get_review_context(task_id)
-        assert mcp_postgres(
-            "get_review_result", arguments
-        ) == service.get_review_result(task_id)
+    def assert_history(status, head, rounds):
+        context = mcp_postgres("get_review_context", arguments)
+        result = mcp_postgres("get_review_result", arguments)
+        assert context["status"] == status
+        assert context["current_head_sha"] == head
+        assert context["completed_review_rounds"] == rounds
+        assert len(context["previous_reviews"]) == rounds
+        assert result["status"] == status
+        assert result["previous_reviews"] == context["previous_reviews"]
+        assert result["latest_reviewed_sha"] == (head if rounds else None)
+        assert result["approval_current"] is None
+        assert result["remote_verification"] == "not_performed_by_wfc"
+        if head:
+            assert context["github_references"]["context_files"] == {
+                "docs/review context.md": f"https://github.com/{REPO}/blob/{head}/docs/review%20context.md"
+            }
 
-    assert_parity()
+    assert_history("AWAITING_HANDOFF", None, 0)
     for sha, outcome, resolutions in (
         (HEAD, "CHANGES_REQUESTED", {}),
         (NEXT, verdict, {"F-1": "FIXED" if verdict == "APPROVED" else "NOT_FIXED"}),
     ):
-        service.register_task_handoff(
+        record_handoff(repo, 
             task_id, REPO, "task/test", BASE, sha, "docs/review context.md", "test"
         )
-        claim = service.claim_review(task_id, sha, "lead")
-        service.submit_review(
+        claim = claim_task(repo, task_id, sha, "lead")
+        submit_task(repo, 
             payload(
                 claim,
                 outcome,
@@ -326,7 +330,7 @@ def test_mcp_context_and_result_match_persisted_history(setup, mcp_postgres, ver
             ),
             "lead",
         )
-        assert_parity()
+        assert_history(outcome, sha, 1 if sha == HEAD else 2)
 
     for name in ("get_review_context", "get_review_result"):
         with pytest.raises(ToolError, match="unknown authorized task"):
@@ -337,10 +341,10 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
     setup,
     mcp_postgres,
 ):
-    service, repo, task_id, factory = setup
-    ready(service, task_id)
-    claim = service.claim_review(task_id, HEAD, "lead")
-    assert service.get_review_context(task_id)["status"] == "IN_REVIEW"
+    repo, task_id, factory = setup
+    ready(repo, task_id)
+    claim = claim_task(repo, task_id, HEAD, "lead")
+    assert read_context(repo, task_id)["status"] == "IN_REVIEW"
 
     # Even an effort filter with no matches recovers stale leases.
     assert mcp_postgres("list_review_queue", {"requested_effort": "invalid"}) == {
@@ -349,7 +353,7 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
     with repo.read() as unit:
         assert unit.find_claim((claim["claim_token"], task_id))["status"] == "EXPIRED"
     assert (
-        service.get_review_context(task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
+        read_context(repo, task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
     )
 
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
@@ -370,19 +374,25 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
     assert mcp_postgres("list_review_queue", {"requested_effort": "high"}) == {
         "tasks": []
     }
-    expected = service.list_review_queue("medium")
-    assert [task["task_id"] for task in expected] == [task_id]
     assert mcp_postgres("list_review_queue", {"requested_effort": "medium"}) == {
-        "tasks": expected
+        "tasks": [{
+            "task_id": task_id,
+            "title": spec(task_id)["title"],
+            "repository": REPO,
+            "branch": "task/test",
+            "head_sha": HEAD,
+            "requested_effort": "medium",
+            "review_round": 1,
+        }]
     }
 
 
 def test_mcp_queue_read_failure_rolls_back_lease_recovery(
     setup, mcp_postgres, monkeypatch
 ):
-    service, repo, task_id, _ = setup
-    ready(service, task_id)
-    claim = service.claim_review(task_id, HEAD, "lead")
+    repo, task_id, _ = setup
+    ready(repo, task_id)
+    claim = claim_task(repo, task_id, HEAD, "lead")
 
     def fail_read(self, requested_effort):
         raise RuntimeError("synthetic queue read failure")
@@ -393,42 +403,13 @@ def test_mcp_queue_read_failure_rolls_back_lease_recovery(
 
     with repo.read() as unit:
         assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
-    context = service.get_review_context(task_id)
+    context = read_context(repo, task_id)
     assert context["status"] == "IN_REVIEW"
     assert context["events"][-1]["action"] == "CLAIM"
 
 
-def test_service_history_and_replay(setup):
-    _, _, task_id, _ = setup
-    config = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"], ci_gate_required=False)
-    service, _, _, _ = setup
-    ready(service, task_id)
-    with postgres_mcp_task_operations(config) as (_, assignment):
-        assert assignment.execute(task_id).context.task.current_head_sha == HEAD
-    with pytest.raises(WorkflowError, match="stale"):
-        service.claim_review(task_id, NEXT, "lead")
-    claim = service.claim_review(task_id, HEAD, "lead")
-    with pytest.raises(WorkflowError, match="stale"):
-        service.submit_review(payload(claim, reviewed_head_sha=NEXT), "lead")
-    result = service.submit_review(payload(claim), "lead")
-    assert service.submit_review(payload(claim), "lead")["duplicate"]
-    with pytest.raises(WorkflowError, match="conflicting"):
-        service.submit_review(payload(claim, summary="different"), "lead")
-    context = service.get_review_context(task_id)
-    assert context["current_head_sha"] == HEAD
-    assert context["previous_reviews"][0]["review_id"] == result["review_id"]
-    assert context["previous_reviews"][0]["findings"][0]["finding_id"] == "F-1"
-    assert [e["action"] for e in context["events"]] == [
-        "LOCAL_AUTHORIZATION",
-        "HANDOFF",
-        "CLAIM",
-        "REVIEW_SUBMITTED",
-    ]
-    assert context["events"][-1]["sha"] == HEAD
-
-
 def test_rollback_and_constraints(setup):
-    service, repo, task_id, _ = setup
+    repo, task_id, _ = setup
     with pytest.raises(RuntimeError):
         with repo.transaction() as db:
             db.insert_task(
@@ -451,7 +432,7 @@ def test_rollback_and_constraints(setup):
             raise RuntimeError("rollback")
     with repo.read() as db:
         assert db.find_task((task_id,)) is None
-    ready(service, task_id)
+    ready(repo, task_id)
     with pytest.raises(IntegrityError):
         with repo.transaction() as db:
             db.set_head((NEXT, task_id))
@@ -463,8 +444,8 @@ def test_rollback_and_constraints(setup):
 
 
 def test_read_keeps_repeatable_read_snapshot_and_rejects_writes(setup):
-    service, repo, task_id, factory = setup
-    ready(service, task_id)
+    repo, task_id, factory = setup
+    ready(repo, task_id)
     with repo.read() as db:
         assert (
             db.session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
@@ -489,7 +470,7 @@ def test_read_keeps_repeatable_read_snapshot_and_rejects_writes(setup):
 
 @pytest.mark.parametrize("failed_check", [1, 2])
 def test_deadline_before_outer_commit_rolls_back(setup, monkeypatch, failed_check):
-    _, repo, task_id, factory = setup
+    repo, task_id, factory = setup
     checks = 0
 
     def fail_at_deadline():
@@ -531,15 +512,14 @@ def test_deadline_before_outer_commit_rolls_back(setup, monkeypatch, failed_chec
 
 
 def test_competing_claims_and_ci_fail_closed(setup):
-    service, repo, task_id, _ = setup
-    ready(service, task_id)
-    guarded = WorkflowService(repository=repo, require_ci=True, clock=lambda: 1000.0)
+    repo, task_id, _ = setup
+    ready(repo, task_id)
     with pytest.raises(WorkflowError, match="CI"):
-        guarded.claim_review(task_id, HEAD, "lead")
+        claim_task(repo, task_id, HEAD, "lead", require_ci=True)
 
     def claim():
         try:
-            return service.claim_review(task_id, HEAD, "lead")
+            return claim_task(repo, task_id, HEAD, "lead")
         except WorkflowError:
             return None
 
@@ -551,18 +531,9 @@ def test_competing_claims_and_ci_fail_closed(setup):
         assert not db.ci_approved((task_id, NEXT))
 
 
-def test_history_helpers_reject(setup):
-    _, repo, _, _ = setup
-    with repo.transaction() as db:
-        with pytest.raises(WorkflowError):
-            db.import_historical_head((HEAD, 1))
-        with pytest.raises(WorkflowError):
-            db.delete_synthetic_history(("tasks", "POC-REVIEW-001"))
-
-
 def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monkeypatch):
-    service, repo, task_id, factory = setup
-    ready(service, task_id)
+    repo, task_id, factory = setup
+    ready(repo, task_id)
     with factory.transaction() as conn:
         conn.execute(
             text(
@@ -571,7 +542,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             {"id": task_id, "head": HEAD},
         )
     with pytest.raises(WorkflowError, match="not authorized"):
-        service.register_task_handoff(
+        record_handoff(repo, 
             task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
         )
     with factory.transaction() as conn:
@@ -581,7 +552,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             ),
             {"id": task_id, "head": HEAD},
         )
-    service.register_task_handoff(
+    record_handoff(repo, 
         task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "repair"
     )
     with repo.read() as db:
@@ -590,7 +561,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with pytest.raises(WorkflowError, match="CI"):
-        service.claim_review(task_id, NEXT, "lead")
+        claim_task(repo, task_id, NEXT, "lead")
     with factory.transaction() as conn:
         conn.execute(
             text("UPDATE controller_ci_tasks SET verdict='SUCCESS' WHERE task_id=:id"),
@@ -599,87 +570,39 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
     with repo.read() as db:
         assert db.ci_approved((task_id, NEXT))
         assert not db.ci_approved((task_id, HEAD))
-    assert mcp_postgres("list_review_queue", {}) == {
-        "tasks": service.list_review_queue()
-    }
-    assert service.claim_review(task_id, NEXT, "lead")["reviewed_sha"] == NEXT
+    queued = mcp_postgres("list_review_queue", {})["tasks"]
+    assert [item["task_id"] for item in queued] == [task_id]
+    assert queued[0]["head_sha"] == NEXT
+    assert claim_task(repo, task_id, NEXT, "lead")["reviewed_sha"] == NEXT
 
 
 def test_expired_claim_recovery(setup):
-    _, repo, task_id, _ = setup
+    repo, task_id, _ = setup
     now = [1000.0]
-    service = WorkflowService(
-        repository=repo, require_ci=False, clock=lambda: now[0], lease_seconds=10
-    )
-    ready(service, task_id)
-    first = service.claim_review(task_id, HEAD, "lead")
+    ready(repo, task_id)
+    first = claim_task(repo, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
     now[0] += 11
-    second = service.claim_review(task_id, HEAD, "lead")
+    second = claim_task(repo, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
     with pytest.raises(WorkflowError, match="expired"):
-        service.submit_review(payload(first), "lead")
+        submit_task(repo, payload(first), "lead", clock=lambda: now[0])
     assert second["claim_token"] != first["claim_token"]
     assert second["review_round"] == 1
 
 
 def test_concurrent_identical_authorization_is_idempotent(setup):
-    service, _, task_id, _ = setup
+    repo, task_id, _ = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda _: service.provision_task(spec(task_id)), range(2)))
-    assert len(service.get_review_context(task_id)["events"]) == 1
-
-
-def test_second_round_history_and_order(setup):
-    service, _, task_id, _ = setup
-    ready(service, task_id)
-    first = service.claim_review(task_id, HEAD, "lead")
-    service.submit_review(payload(first), "lead")
-    service.register_task_handoff(
-        task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
-    )
-    second = service.claim_review(task_id, NEXT, "lead")
-    data = payload(second, "APPROVED", prior_resolutions={"F-1": "FIXED"})
-    service.submit_review(data, "lead")
-    result = service.get_review_context(task_id)
-    assert [r["round_number"] for r in result["previous_reviews"]] == [1, 2]
-    assert result["previous_reviews"][1]["prior_resolutions"] == {"F-1": "FIXED"}
-    assert result["previous_reviews"][1]["actual_effort"] is None
-    assert result["status"] == "APPROVED"
-
-
-def test_service_result_matches_sqlite(setup, tmp_path, monkeypatch):
-    pg, _, task_id, _ = setup
-    sqlite = WorkflowService(
-        tmp_path / "workflow.sqlite", require_ci=False, clock=lambda: 1000.0
-    )
-    monkeypatch.setattr(
-        "agent_workflow.domain.service.uuid.uuid4",
-        lambda: SimpleNamespace(hex="fixed-id"),
-    )
-    for service in (sqlite, pg):
-        ready(service, task_id)
-        claim = service.claim_review(task_id, HEAD, "lead")
-        service.submit_review(payload(claim), "lead")
-    left, right = sqlite.get_review_context(task_id), pg.get_review_context(task_id)
-    # PostgreSQL identity sequences are database-wide; SQLite IDs are file-local.
-    for context in (left, right):
-        for event in context["events"]:
-            event.pop("event_id")
-    assert left == right
-    assert (
-        type(left["require_verified_effort"])
-        is type(right["require_verified_effort"])
-        is int
-    )
-    assert right["previous_reviews"][0]["actual_effort"] is None
+        list(pool.map(lambda _: authorize_task(repo.factory, spec(task_id)), range(2)))
+    assert len(read_context(repo, task_id)["events"]) == 1
 
 
 def test_adversarial_text_is_stored_as_data(setup):
-    service, repo, task_id, _ = setup
-    ready(service, task_id)
+    repo, task_id, _ = setup
+    ready(repo, task_id)
     attack = "lead' OR 1=1 --"
-    claim = service.claim_review(task_id, HEAD, attack)
-    service.submit_review(payload(claim, summary=attack), attack)
-    context = service.get_review_context(task_id)
+    claim = claim_task(repo, task_id, HEAD, attack)
+    submit_task(repo, payload(claim, summary=attack), attack)
+    context = read_context(repo, task_id)
     assert context["previous_reviews"][0]["summary"] == attack
     with repo.read() as db:
         assert db.find_claim(("' OR 1=1 --", task_id)) is None
@@ -687,8 +610,8 @@ def test_adversarial_text_is_stored_as_data(setup):
 
 
 def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup):
-    service, repo, task_id, factory = setup
-    ready(service, task_id)
+    repo, task_id, factory = setup
+    ready(repo, task_id)
     rolled_back_id = task_id + "-rollback"
     with factory.transaction() as holder:
         holder.execute(
@@ -726,8 +649,8 @@ def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup):
 
 
 def test_null_handoff_sha_does_not_match(setup):
-    service, repo, task_id, _ = setup
-    service.provision_task(spec(task_id))
+    repo, task_id, _ = setup
+    authorize_task(repo.factory, spec(task_id))
     with repo.transaction() as db:
         db.insert_event(
             (
@@ -745,19 +668,9 @@ def test_null_handoff_sha_does_not_match(setup):
 
 
 def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeypatch):
-    service, repo, task_id, factory = setup
-    ready(service, task_id)
+    repo, task_id, factory = setup
+    ready(repo, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    monkeypatch.setattr(
-        WorkflowService,
-        "claim_review",
-        lambda *args: pytest.fail("legacy claim called"),
-    )
-    monkeypatch.setattr(
-        WorkflowService,
-        "submit_review",
-        lambda *args: pytest.fail("legacy submit called"),
-    )
     claim = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
     )
@@ -772,7 +685,7 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     }
     with pytest.raises(ToolError, match="conflicting duplicate"):
         mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
-    service.register_task_handoff(
+    record_handoff(repo, 
         task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
     )
     claim2 = mcp_postgres(
@@ -781,12 +694,15 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     second = payload(claim2, "APPROVED", prior_resolutions={"F-1": "FIXED"})
     result2 = mcp_postgres("submit_review", {"submission": second})
     assert result2["verdict"] == "APPROVED" and result2["review_round"] == 2
-    assert mcp_postgres(
-        "get_review_context", {"task_id": task_id}
-    ) == service.get_review_context(task_id)
-    assert mcp_postgres(
-        "get_review_result", {"task_id": task_id}
-    ) == service.get_review_result(task_id)
+    context = mcp_postgres("get_review_context", {"task_id": task_id})
+    result = mcp_postgres("get_review_result", {"task_id": task_id})
+    assert context["status"] == result["status"] == "APPROVED"
+    assert context["completed_review_rounds"] == 2
+    assert [r["round_number"] for r in context["previous_reviews"]] == [1, 2]
+    assert context["previous_reviews"][1]["prior_resolutions"] == {"F-1": "FIXED"}
+    assert result["latest_reviewed_sha"] == NEXT
+    assert result["approval_current"] is None
+    assert result["actual_effort"] is None
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with repo.read() as unit:
         assert len(unit.list_reviews((task_id,))) == 2
@@ -797,8 +713,8 @@ def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
         PostgresReviewWrites,
     )
 
-    service, repo, task_id, _ = setup
-    ready(service, task_id)
+    repo, task_id, _ = setup
+    ready(repo, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     claim = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
@@ -823,8 +739,8 @@ def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
 def test_mcp_submit_deadline_failure_rolls_back(setup, mcp_postgres, monkeypatch):
     import agent_workflow.storage.postgres_workflow as workflow_storage
 
-    service, repo, task_id, _ = setup
-    ready(service, task_id)
+    repo, task_id, _ = setup
+    ready(repo, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     claim = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
@@ -841,67 +757,3 @@ def test_mcp_submit_deadline_failure_rolls_back(setup, mcp_postgres, monkeypatch
         assert unit.list_reviews((task_id,)) == []
         assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
         assert unit.find_task((task_id,))["completed_review_rounds"] == 0
-
-
-def test_mcp_writes_match_legacy_in_two_rounds(setup, mcp_postgres, monkeypatch):
-    service, _, task_id, factory = setup
-    legacy_id = task_id + "-legacy"
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    actor = "auth0:auth0|pg-test"
-    try:
-        ready(service, task_id)
-        ready(service, legacy_id)
-        for sha, verdict, resolutions in (
-            (HEAD, "CHANGES_REQUESTED", {}),
-            (NEXT, "APPROVED", {"F-1": "FIXED"}),
-        ):
-            if sha == NEXT:
-                for current_id in (task_id, legacy_id):
-                    service.register_task_handoff(
-                        current_id,
-                        REPO,
-                        "task/test",
-                        BASE,
-                        sha,
-                        "docs/handoff.md",
-                        "test",
-                    )
-            legacy_claim = service.claim_review(legacy_id, sha, actor)
-            new_claim = mcp_postgres(
-                "claim_review", {"task_id": task_id, "expected_head_sha": sha}
-            )
-            assert {k: legacy_claim[k] for k in ("reviewed_sha", "review_round")} == {
-                k: new_claim[k] for k in ("reviewed_sha", "review_round")
-            }
-            old_data = payload(legacy_claim, verdict, prior_resolutions=resolutions)
-            new_data = payload(new_claim, verdict, prior_resolutions=resolutions)
-            old_result = service.submit_review(old_data, actor)
-            new_result = mcp_postgres("submit_review", {"submission": new_data})
-            fields = ("verdict", "review_round", "reviewed_head_sha", "actual_effort")
-            assert {k: old_result[k] for k in fields} == {
-                k: new_result[k] for k in fields
-            }
-            old_duplicate = service.submit_review(old_data, actor)
-            new_duplicate = mcp_postgres("submit_review", {"submission": new_data})
-            assert {
-                k: old_duplicate[k]
-                for k in ("duplicate", "reviewed_head_sha", "verdict")
-            } == {
-                k: new_duplicate[k]
-                for k in ("duplicate", "reviewed_head_sha", "verdict")
-            }
-    finally:
-        with factory.transaction() as conn:
-            for table in (
-                "review_findings",
-                "reviews",
-                "review_attempts",
-                "task_events",
-                "controller_ci_observations",
-                "controller_ci_tasks",
-                "tasks",
-            ):
-                conn.execute(
-                    text(f"DELETE FROM {table} WHERE task_id=:task_id"),
-                    {"task_id": legacy_id},
-                )

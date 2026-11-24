@@ -17,42 +17,7 @@ from agent_workflow.composition import (
     postgres_dispatch_deps,
     postgres_dispatch_entrypoint,
 )
-from agent_workflow.domain.service import WorkflowService, default_service
-from agent_workflow.integrations.github import REPOSITORY
 from agent_workflow.storage.postgres_connection import PostgresFactory
-
-BASE = "a" * 40
-HEAD = "b" * 40
-
-
-def _ready(service):
-    service.provision_task(
-        {
-            "task_id": "R101",
-            "title": "Local CI policy fixture",
-            "description": "Synthetic policy test",
-            "acceptance_criteria": ["CI authorization must be exact-HEAD"],
-            "definition_of_done": "CI gate checked",
-            "repository": REPOSITORY,
-            "branch": "codex/r1-01",
-            "base_sha": BASE,
-            "requested_effort": "medium",
-            "risk_level": "low",
-            "require_verified_effort": False,
-            "context_paths": ["docs/handoff.md"],
-            "synthetic": True,
-        }
-    )
-    service.register_task_handoff(
-        "R101",
-        REPOSITORY,
-        "codex/r1-01",
-        BASE,
-        HEAD,
-        "docs/handoff.md",
-        "synthetic tests passed",
-    )
-
 
 @pytest.mark.parametrize(
     ("env_value", "expected"),
@@ -96,28 +61,6 @@ def test_mcp_provider_injects_ci_policy(monkeypatch, env_value, expected):
     with postgres_review_reads_provider() as (queue, _, _):
         assert queue._require_ci is expected
     factory.close.assert_called_once_with()
-
-
-def test_direct_service_is_fail_closed_even_when_env_requests_bypass(
-    tmp_path,
-    monkeypatch,
-):
-    path = tmp_path / "workflow.db"
-    monkeypatch.setenv("WFC_DB_PATH", str(path))
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    default = WorkflowService(path)
-    _ready(default)
-    assert default.require_ci is True
-    assert default.list_review_queue() == []
-    assert default_service().require_ci is True
-
-    local = WorkflowService(path, require_ci=False)
-    assert local.require_ci is False
-    assert len(local.list_review_queue()) == 1
-    # The service policy is captured at construction; no hidden ENV lookups.
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
-    assert len(local.list_review_queue()) == 1
-    assert default.list_review_queue() == []
 
 
 @pytest.mark.parametrize(
@@ -179,14 +122,6 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     assert "configuration" in capsys.readouterr().err
     open_database.assert_not_called()
     compose.assert_not_called()
-
-
-@pytest.mark.parametrize("invalid", [None, "true", "0", 1, 0, [], {}])
-def test_invalid_service_ci_policy_type_fails_before_database(tmp_path, invalid):
-    path = tmp_path / "workflow.db"
-    with pytest.raises(ValueError, match="require_ci"):
-        WorkflowService(path, require_ci=invalid)
-    assert not path.exists()
 
 
 def test_app_config_can_validate_supplied_mapping_without_reading_process_env(

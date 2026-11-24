@@ -35,31 +35,6 @@ trusted_git = ["agent_workflow.domain.service", "agent_workflow.storage", "agent
 legacy = [["agent_workflow.runners.coder_runtime", "agent_workflow.runners.sandbox"]]
 
 [[legacy_imports]]
-path = "src/agent_workflow/domain/service.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/domain/service.py"
-module = "agent_workflow.paths"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/domain/service.py"
-module = "agent_workflow.storage.repository"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/storage/repository.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/storage/workflow_migrations.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
 path = "src/agent_workflow/runners/coder_runtime.py"
 module = "agent_workflow.integrations.github"
 reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
