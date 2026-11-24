@@ -17,7 +17,7 @@ from agent_workflow.composition import (
     postgres_dispatch_deps,
     postgres_dispatch_entrypoint,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 
 
 @pytest.mark.parametrize(

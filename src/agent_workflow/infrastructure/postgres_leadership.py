@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.elements import TextClause
 
-from agent_workflow.storage.postgres_connection import (
+from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
 )

@@ -8,12 +8,12 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.ports import ICiChecksReader
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.composition.ci_deps import create_ci_reconcile_use_case
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,
     ControllerChecksClient,
 )
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
-from agent_workflow.storage.postgres_connection import PostgresFactory
 
 
 @contextmanager

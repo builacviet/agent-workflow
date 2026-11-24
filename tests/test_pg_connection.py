@@ -10,13 +10,13 @@ from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.infrastructure.database import session_factory
+from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
+    PostgresUnavailableError,
+)
 from agent_workflow.observability.correlation import (
     correlation_scope,
     set_correlation_id,
-)
-from agent_workflow.storage.postgres_connection import (
-    PostgresFactory,
-    PostgresUnavailableError,
 )
 
 DSN = "postgresql+psycopg://user:secret@localhost:5432/db"
@@ -80,10 +80,7 @@ def test_bad_revision_disposes(rows, fake_engine):
 def test_unreachable_is_safe_and_disposes(monkeypatch, fake_engine):
     engine = fake_engine
     engine.connect.side_effect = RuntimeError(DSN)
-    monkeypatch.setattr(
-        "agent_workflow.storage.postgres_connection.create_engine",
-        lambda *a, **kw: engine,
-    )
+    monkeypatch.setattr(session_factory, "create_engine", lambda *a, **kw: engine)
     with pytest.raises(PostgresUnavailableError) as exc:
         PostgresFactory.open(AppConfig(pg_runtime_dsn=DSN))
     assert "secret" not in str(exc.value)
@@ -106,9 +103,7 @@ def test_open_uses_bounded_timeout_and_checks_revision(monkeypatch, fake_engine)
         "pg02d_webhook_digest"
     ]
     create = MagicMock(return_value=engine)
-    monkeypatch.setattr(
-        "agent_workflow.storage.postgres_connection.create_engine", create
-    )
+    monkeypatch.setattr(session_factory, "create_engine", create)
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=DSN)):
         assert create.call_args.kwargs["connect_args"] == {"connect_timeout": 5}
     engine.dispose.assert_called_once()
@@ -161,9 +156,7 @@ def test_repository_session_lifecycle(monkeypatch, failure, fake_engine):
     lifecycle.attach_mock(session_scope, "session_scope")
     lifecycle.attach_mock(transaction, "transaction")
     lifecycle.attach_mock(connection_scope, "connection_scope")
-    monkeypatch.setattr(
-        "agent_workflow.storage.postgres_connection.Session", session_type
-    )
+    monkeypatch.setattr(session_factory, "Session", session_type)
 
     database_error = SQLAlchemyError(DSN)
     if failure == "connect":
@@ -248,9 +241,7 @@ def test_repository_read_session_closes_without_flush_or_commit(
     factory = PostgresFactory(engine)
     connection_scope.reset_mock()
     session_type = MagicMock()
-    monkeypatch.setattr(
-        "agent_workflow.storage.postgres_connection.Session", session_type
-    )
+    monkeypatch.setattr(session_factory, "Session", session_type)
 
     with factory.repository_session(
         error_message="read failed", read_only=True

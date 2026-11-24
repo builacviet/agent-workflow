@@ -28,6 +28,8 @@ from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
 from agent_workflow.composition import postgres_dispatch_entrypoint as entry
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.infrastructure.database.models import CITask, Task
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.integrations.github import REPOSITORY, WorkflowError
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
@@ -35,8 +37,6 @@ from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
 from agent_workflow.runners import coder_runtime, sandbox
-from agent_workflow.storage.postgres_connection import PostgresFactory
-from agent_workflow.storage.postgres_models import CITask, Task
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"

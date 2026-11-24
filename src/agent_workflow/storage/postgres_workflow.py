@@ -9,11 +9,7 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.budget import check_deadline
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.infrastructure.database.unit_of_work import (
-    set_workflow_query_timeout,
-)
-from agent_workflow.storage.postgres_connection import PostgresFactory
-from agent_workflow.storage.postgres_models import (
+from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CITask,
     Review,
@@ -21,6 +17,10 @@ from agent_workflow.storage.postgres_models import (
     ReviewFinding,
     Task,
     TaskEvent,
+)
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database.unit_of_work import (
+    set_workflow_query_timeout,
 )
 
 

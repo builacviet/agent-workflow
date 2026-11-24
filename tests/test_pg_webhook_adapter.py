@@ -30,7 +30,7 @@ from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
     SqlAlchemyWebhookInboxRepository,
 )
-from agent_workflow.storage.postgres_connection import (
+from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
 )
 

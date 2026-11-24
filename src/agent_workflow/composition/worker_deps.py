@@ -19,13 +19,13 @@ from agent_workflow.infrastructure.database.repositories.ci_state_repository imp
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffScope,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
-from agent_workflow.storage.postgres_connection import PostgresFactory
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 

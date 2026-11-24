@@ -23,6 +23,13 @@ from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
 from agent_workflow.domain.task.handoff import HandoffRequest
+from agent_workflow.infrastructure.database.models import (
+    Review,
+    ReviewAttempt,
+    ReviewFinding,
+    Task,
+    TaskEvent,
+)
 from agent_workflow.infrastructure.database.repositories.review_repository import (
     SqlAlchemyReviewRepository,
 )
@@ -30,17 +37,10 @@ from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffScope,
 )
 from agent_workflow.infrastructure.database.session_factory import (
+    PostgresFactory,
     PostgresUnavailableError,
 )
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
-from agent_workflow.storage.postgres_connection import PostgresFactory
-from agent_workflow.storage.postgres_models import (
-    Review,
-    ReviewAttempt,
-    ReviewFinding,
-    Task,
-    TaskEvent,
-)
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 BASE = "a" * 40

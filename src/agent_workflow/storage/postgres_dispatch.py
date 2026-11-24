@@ -17,12 +17,12 @@ from agent_workflow.domain.workflow_identity import (
     canonical_repository,
     validate_sha,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
-from agent_workflow.storage.postgres_models import (
+from agent_workflow.infrastructure.database.models import (
     AgentDispatch,
     AgentExecutionEvidence,
     Task,
 )
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 
 _PRE_LAUNCH = "PRE_LAUNCH"
 _BLOCKED = "Operator reconciliation required; do not retry automatically"

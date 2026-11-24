@@ -12,15 +12,15 @@ from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot, CiTrackingSnapshot
 from agent_workflow.domain.states import CiVerdict
-from agent_workflow.infrastructure.database.session_factory import (
-    _set_repository_transaction_options,
-)
-from agent_workflow.storage.postgres_models import (
+from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
     CITask,
     Task,
     WebhookInboxRow,
+)
+from agent_workflow.infrastructure.database.session_factory import (
+    _set_repository_transaction_options,
 )
 
 _OPERATION_ERROR = "PostgreSQL Controller CI operation failed"

@@ -38,7 +38,7 @@ from agent_workflow.infrastructure.database.repositories.review_writes import (
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffScope,
 )
-from agent_workflow.storage.postgres_connection import PostgresFactory
+from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
