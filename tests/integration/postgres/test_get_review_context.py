@@ -132,7 +132,7 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
 
 
 def test_review_context_sql_statement_budget(
-    context_db: ContextDatabase, request: pytest.FixtureRequest
+    context_db: ContextDatabase,
 ) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
@@ -142,12 +142,8 @@ def test_review_context_sql_statement_budget(
 
     # The production schema allows at most two reviews. Seed valid persisted
     # snapshots directly: this test exercises the reader, not review submission.
-    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     config = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
-    started = time.perf_counter()
-    read_factory = PostgresFactory.open(config)
-    cold_factory_ms = (time.perf_counter() - started) * 1000
-    with read_factory:
+    with PostgresFactory.open(config) as read_factory:
         use_case = create_get_review_context_use_case(read_factory)
         engine = read_factory._engine
         for review_count in range(3):
@@ -227,10 +223,8 @@ def test_review_context_sql_statement_budget(
             for name, listener in listeners:
                 event.listen(engine, name, listener)
             try:
-                started = time.perf_counter()
                 with dispatch_budget(time.time() + 15):
                     result = use_case.execute(GetReviewContextInput(task_id))
-                elapsed_ms = (time.perf_counter() - started) * 1000
             finally:
                 for name, listener in listeners:
                     event.remove(engine, name, listener)
@@ -239,7 +233,7 @@ def test_review_context_sql_statement_budget(
             counts = {name: statements.count(name) for name in set(statements)}
             assert counts == {
                 "isolation": 1,
-                "timeout": 1 + 2 * query_count,
+                "timeout": 1 + query_count,
                 "read": query_count,
             }
             assert len(checkouts) == len(rollbacks) == 1
@@ -251,15 +245,6 @@ def test_review_context_sql_statement_budget(
                 for review in result.previous_reviews
                 for finding in review.findings
             ] == [f"F{number}" for number in range(1, review_count + 1)]
-            if reporter is not None:
-                reporter.write_line(
-                    f"DB04_BASELINE reviews={review_count} "
-                    f"sql={len(statements)} timeout={counts['timeout']} "
-                    f"reads={counts['read']} checkouts={len(checkouts)} "
-                    f"rollbacks={len(rollbacks)} commits={len(commits)} "
-                    f"read_ms={elapsed_ms:.3f} "
-                    f"cold_factory_open_ms={cold_factory_ms:.3f}"
-                )
 
 
 def test_context_read_failure_rolls_back_and_factory_can_be_reused(
