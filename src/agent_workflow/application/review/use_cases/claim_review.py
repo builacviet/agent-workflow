@@ -1,6 +1,6 @@
 """Layer: Application
 Responsibility: Atomically claim an eligible review at its current head.
-Dependencies: Review write port and Domain policy.
+Dependencies: Unit of work, review write port and Domain policy.
 """
 
 from collections.abc import Callable
@@ -9,9 +9,10 @@ from dataclasses import replace
 from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
     ClaimReviewOutput,
-    IReviewWriteScope,
+    IReviewWriteRepository,
     ci_allows,
 )
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.review.policy import ClaimFacts, claim_allowed
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
@@ -20,14 +21,17 @@ from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
 class ClaimReviewUseCase:
     def __init__(
         self,
-        scope: IReviewWriteScope,
+        uow: IUnitOfWork,
+        repository: IReviewWriteRepository,
         *,
         clock: Callable[[], float],
         token: Callable[[], str],
         require_ci: bool,
         lease_seconds: int = 900,
     ):
-        self.scope, self.clock, self.token = scope, clock, token
+        self.uow = uow
+        self.repository = repository
+        self.clock, self.token = clock, token
         self.require_ci, self.lease_seconds = require_ci, lease_seconds
 
     def execute(self, request: ClaimReviewInput) -> ClaimReviewOutput:
@@ -36,7 +40,8 @@ class ClaimReviewUseCase:
         if not isinstance(request.reviewer, str) or not request.reviewer.strip():
             raise WorkflowError("invalid reviewer")
         validate_sha(request.expected_head_sha)
-        with self.scope() as repo:
+        repo = self.repository
+        with self.uow:
             task = repo.lock_task(request.task_id)
             if task is None:
                 raise WorkflowError("unknown authorized task")
@@ -63,6 +68,7 @@ class ClaimReviewUseCase:
                 None,
             )
             repo.claim(task, claim, now)
+            self.uow.commit()
             return ClaimReviewOutput(
                 claim.token,
                 task.task_id,

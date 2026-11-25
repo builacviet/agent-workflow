@@ -13,7 +13,6 @@ from agent_workflow.infrastructure.database.models import (
     CITask,
     Review,
     ReviewAttempt,
-    ReviewFinding,
     Task,
     TaskEvent,
 )
@@ -71,19 +70,6 @@ class ReviewDTO(RecordDTO):
     reviewed_at: float | None
     imported_at: float | None
     prior_resolutions: str
-
-
-class FindingDTO(RecordDTO):
-    review_id: str
-    finding_id: str
-    task_id: str
-    severity: str
-    acceptance_criterion: str
-    file_path: str
-    line: int | None
-    description: str
-    suggested_correction: str
-    required_verification: str
 
 
 class EventDTO(RecordDTO):
@@ -180,14 +166,6 @@ class PostgresWorkflowUnit:
             update(Task).where(Task.task_id == task_id).values(current_head_sha=head)
         )
 
-    def set_rounds(self, values: tuple = ()) -> None:
-        rounds, task_id = values
-        self._execute(
-            update(Task)
-            .where(Task.task_id == task_id)
-            .values(completed_review_rounds=rounds)
-        )
-
     def insert_claim(self, values: tuple = ()) -> None:
         token, task_id, sha, reviewer, claimed, expires = values
         self._add(
@@ -208,78 +186,6 @@ class PostgresWorkflowUnit:
             update(ReviewAttempt)
             .where(ReviewAttempt.token == token)
             .values(status="EXPIRED")
-        )
-
-    def submit_claim(self, values: tuple = ()) -> None:
-        payload, token = values
-        self._execute(
-            update(ReviewAttempt)
-            .where(ReviewAttempt.token == token)
-            .values(status="SUBMITTED", submitted_payload=payload)
-        )
-
-    def insert_review(self, values: tuple = ()) -> None:
-        (
-            review_id,
-            task_id,
-            round_number,
-            base,
-            head,
-            verdict,
-            summary,
-            requested,
-            actual,
-            evidence,
-            reviewer,
-            reviewed,
-            imported,
-            resolutions,
-        ) = values
-        self._add(
-            Review(
-                review_id=review_id,
-                task_id=task_id,
-                round_number=round_number,
-                base_sha=base,
-                reviewed_head_sha=head,
-                verdict=verdict,
-                summary=summary,
-                requested_effort=requested,
-                actual_effort=actual,
-                verification_evidence=evidence,
-                reviewer=reviewer,
-                reviewed_at=reviewed,
-                imported_at=imported,
-                prior_resolutions=resolutions,
-            )
-        )
-
-    def insert_finding(self, values: tuple = ()) -> None:
-        (
-            review_id,
-            finding_id,
-            task_id,
-            severity,
-            criterion,
-            path,
-            line,
-            description,
-            correction,
-            verification,
-        ) = values
-        self._add(
-            ReviewFinding(
-                review_id=review_id,
-                finding_id=finding_id,
-                task_id=task_id,
-                severity=severity,
-                acceptance_criterion=criterion,
-                file_path=path,
-                line=line,
-                description=description,
-                suggested_correction=correction,
-                required_verification=verification,
-            )
         )
 
     def find_task(self, values: tuple = ()) -> dict | None:
@@ -337,15 +243,6 @@ class PostgresWorkflowUnit:
             .where(Review.task_id == task_id)
             .order_by(Review.round_number),
             ReviewDTO,
-        )
-
-    def list_findings(self, values: tuple = ()) -> list[dict]:
-        (review_id,) = values
-        return self._all(
-            select(ReviewFinding)
-            .where(ReviewFinding.review_id == review_id)
-            .order_by(ReviewFinding.finding_id),
-            FindingDTO,
         )
 
     def list_events(self, values: tuple = ()) -> list[dict]:

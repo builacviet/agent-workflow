@@ -1,18 +1,19 @@
 """Layer: Application
 Responsibility: Validate and atomically persist a review submission.
-Dependencies: Review write port and Domain policy.
+Dependencies: Unit of work, review write port and Domain policy.
 """
 
 import json
 from collections.abc import Callable
 
 from agent_workflow.application.review.use_cases.write_contracts import (
-    IReviewWriteScope,
+    IReviewWriteRepository,
     ReviewSubmission,
     SubmitReviewInput,
     SubmitReviewOutput,
     ci_allows,
 )
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.review.policy import (
     TaskFacts,
     effort_allowed,
@@ -25,7 +26,8 @@ from agent_workflow.domain.workflow_identity import WorkflowError
 class SubmitReviewUseCase:
     def __init__(
         self,
-        scope: IReviewWriteScope,
+        uow: IUnitOfWork,
+        repository: IReviewWriteRepository,
         *,
         clock: Callable[[], float],
         token: Callable[[], str],
@@ -35,12 +37,9 @@ class SubmitReviewUseCase:
         ]
         | None = None,
     ):
-        self.scope, self.clock, self.token, self.require_ci = (
-            scope,
-            clock,
-            token,
-            require_ci,
-        )
+        self.uow = uow
+        self.repository = repository
+        self.clock, self.token, self.require_ci = clock, token, require_ci
 
         self.effort_verifier = effort_verifier
 
@@ -78,7 +77,8 @@ class SubmitReviewUseCase:
             separators=(",", ":"),
             allow_nan=False,
         )
-        with self.scope() as repo:
+        repo = self.repository
+        with self.uow:
             task = repo.lock_task(submission.task_id)
             if task is None:
                 raise WorkflowError("unknown authorized task")
@@ -129,6 +129,7 @@ class SubmitReviewUseCase:
                 actual,
                 evidence,
             )
+            self.uow.commit()
             return SubmitReviewOutput(
                 task.task_id,
                 submission.verdict.value,

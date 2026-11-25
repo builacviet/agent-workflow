@@ -1,5 +1,4 @@
-from contextlib import contextmanager
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 
@@ -12,6 +11,7 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ReviewSubmission,
     SubmitReviewInput,
 )
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.review.policy import (
     ClaimFacts,
     TaskFacts,
@@ -23,14 +23,6 @@ from agent_workflow.domain.workflow_identity import WorkflowError
 
 HEAD = "a" * 40
 TASK = TaskFacts("T", "READY_IN_REVIEW", HEAD, "b" * 40, 0, "medium", False)
-
-
-def scope_for(repo):
-    @contextmanager
-    def scope():
-        yield repo
-
-    return scope
 
 
 def submission(**updates):
@@ -48,24 +40,42 @@ def submission(**updates):
     return ReviewSubmission(**(fields | updates))
 
 
-def claim_checks_ci_and_commits_only_after_validation():
+def test_claim_checks_ci_and_commits_only_after_validation():
+    uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     repo.lock_task.return_value = TASK
     repo.active_claim.return_value = None
     repo.has_successful_ci.return_value = False
+    calls = Mock()
+    calls.attach_mock(repo, "repo")
+    calls.attach_mock(uow, "uow")
     case = ClaimReviewUseCase(
-        scope_for(repo), clock=lambda: 100, token=lambda: "token", require_ci=True
+        uow, repo, clock=lambda: 100, token=lambda: "token", require_ci=True
     )
     with pytest.raises(WorkflowError, match="exact-HEAD CI"):
         case.execute(ClaimReviewInput("T", HEAD, "lead"))
     repo.claim.assert_not_called()
+    uow.commit.assert_not_called()
+    calls.reset_mock()
     repo.has_successful_ci.return_value = True
     result = case.execute(ClaimReviewInput("T", HEAD, "lead"))
     assert result.claim_token == "token" and result.lease_expiration == 1000
     repo.claim.assert_called_once()
+    assert calls.mock_calls == [
+        call.uow.__enter__(),
+        call.repo.lock_task("T"),
+        call.repo.active_claim("T"),
+        call.repo.has_successful_ci("T", HEAD),
+        call.repo.claim(
+            TASK, ClaimFacts("token", "lead", HEAD, 1000, "ACTIVE", None), 100
+        ),
+        call.uow.commit(),
+        call.uow.__exit__(None, None, None),
+    ]
 
 
-def submit_rejects_expired_and_conflicting_duplicate_without_write():
+def test_submit_rejects_expired_and_conflicting_duplicate_without_write():
+    uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     repo.lock_task.return_value = TaskFacts(
         "T", "IN_REVIEW", HEAD, TASK.base, 0, "medium", False
@@ -75,7 +85,7 @@ def submit_rejects_expired_and_conflicting_duplicate_without_write():
         "token", "lead", HEAD, 100, "ACTIVE", None
     )
     case = SubmitReviewUseCase(
-        scope_for(repo), clock=lambda: 100, token=lambda: "review", require_ci=True
+        uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
     with pytest.raises(WorkflowError, match="claim expired"):
         case.execute(SubmitReviewInput(submission(), "lead"))
@@ -85,6 +95,7 @@ def submit_rejects_expired_and_conflicting_duplicate_without_write():
     with pytest.raises(WorkflowError, match="conflicting duplicate"):
         case.execute(SubmitReviewInput(submission(), "lead"))
     repo.submit.assert_not_called()
+    uow.commit.assert_not_called()
 
 
 def test_round_policy_and_repair_ci():

@@ -1,15 +1,9 @@
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
-from test_review_writes import (
-    HEAD,
-    TASK,
-    scope_for,
-    submission,
-    submit_rejects_expired_and_conflicting_duplicate_without_write,
-)
+from test_review_writes import HEAD, TASK, submission
 
 from agent_workflow.application.review.use_cases.submit_review import (
     SubmitReviewUseCase,
@@ -18,6 +12,7 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ReviewFinding,
     SubmitReviewInput,
 )
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.review.policy import ClaimFacts
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import WorkflowError
@@ -34,11 +29,8 @@ FINDING = ReviewFinding(
 )
 
 
-def test_submission_validation():
-    submit_rejects_expired_and_conflicting_duplicate_without_write()
-
-
 def test_submit_duplicate_and_effort_gate():
+    uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     task = replace(TASK, status="IN_REVIEW", verified_effort=True)
     repo.lock_task.return_value = task
@@ -48,13 +40,15 @@ def test_submit_duplicate_and_effort_gate():
         "token", "lead", HEAD, 101, "ACTIVE", None
     )
     case = SubmitReviewUseCase(
-        scope_for(repo), clock=lambda: 100, token=lambda: "review", require_ci=True
+        uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
     with pytest.raises(WorkflowError, match="effort cannot be verified"):
         case.execute(SubmitReviewInput(submission(), "lead"))
     repo.submit.assert_not_called()
+    uow.commit.assert_not_called()
     verified = SubmitReviewUseCase(
-        scope_for(repo),
+        uow,
+        repo,
         clock=lambda: 100,
         token=lambda: "review",
         require_ci=True,
@@ -63,6 +57,7 @@ def test_submit_duplicate_and_effort_gate():
     result = verified.execute(SubmitReviewInput(submission(), "lead"))
     assert result.actual_effort == "medium"
     assert repo.submit.call_count == 1
+    uow.commit.assert_called_once_with()
     canonical = (FIXTURES / "review_submission_round_one.json").read_text(
         encoding="ascii"
     )
@@ -71,6 +66,7 @@ def test_submit_duplicate_and_effort_gate():
     )
     assert case.execute(SubmitReviewInput(submission(), "lead")).duplicate
     assert repo.submit.call_count == 1
+    uow.commit.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -101,6 +97,7 @@ def test_submit_duplicate_and_effort_gate():
     ],
 )
 def test_submit_rejections_have_no_persistence(change, message):
+    uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     repo.lock_task.return_value = change.get("task", replace(TASK, status="IN_REVIEW"))
     repo.find_claim.return_value = change.get(
@@ -108,7 +105,7 @@ def test_submit_rejections_have_no_persistence(change, message):
     )
     repo.has_successful_ci.return_value = change.get("ci", True)
     case = SubmitReviewUseCase(
-        scope_for(repo), clock=lambda: 100, token=lambda: "review", require_ci=True
+        uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
     with pytest.raises(WorkflowError, match=message):
         case.execute(
@@ -117,6 +114,7 @@ def test_submit_rejections_have_no_persistence(change, message):
             )
         )
     repo.submit.assert_not_called()
+    uow.commit.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -168,6 +166,7 @@ def test_verdict_policy_rejects_invalid_cases(
 )
 def test_submit_matches_and_replays_historical_canonical_payload(fixture, submitted):
     historical = (FIXTURES / fixture).read_bytes()
+    uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     repo.lock_task.return_value = replace(
         TASK, status=WorkflowStatus.IN_REVIEW, rounds=submitted.review_round - 1
@@ -176,15 +175,23 @@ def test_submit_matches_and_replays_historical_canonical_payload(fixture, submit
     repo.prior_findings.return_value = set(submitted.prior_resolutions)
     claim = ClaimFacts("token", "lead", HEAD, 101, "ACTIVE", None)
     repo.find_claim.return_value = claim
+    calls = Mock()
+    calls.attach_mock(repo, "repo")
+    calls.attach_mock(uow, "uow")
     case = SubmitReviewUseCase(
-        scope_for(repo), clock=lambda: 100, token=lambda: "review", require_ci=True
+        uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
     result = case.execute(SubmitReviewInput(submitted, "lead"))
     assert not result.duplicate
     assert repo.submit.call_args.args[2].encode("ascii") == historical
+    assert calls.mock_calls[-3:] == [
+        call.repo.submit(*repo.submit.call_args.args),
+        call.uow.commit(),
+        call.uow.__exit__(None, None, None),
+    ]
     assert result.actual_effort is None
 
-    repo.reset_mock()
+    calls.reset_mock()
     repo.find_claim.return_value = replace(
         claim, status="SUBMITTED", submitted_payload=historical.decode("ascii")
     )
@@ -192,6 +199,7 @@ def test_submit_matches_and_replays_historical_canonical_payload(fixture, submit
     with pytest.raises(WorkflowError, match="conflicting duplicate"):
         case.execute(SubmitReviewInput(replace(submitted, summary="different"), "lead"))
     repo.submit.assert_not_called()
+    uow.commit.assert_not_called()
     repo.has_successful_ci.assert_not_called()
 
 
@@ -220,11 +228,14 @@ def test_submit_matches_and_replays_historical_canonical_payload(fixture, submit
     ],
 )
 def test_invalid_typed_submission_does_not_open_scope(updates, reviewer, message):
-    scope = Mock()
-    case = SubmitReviewUseCase(scope, clock=Mock(), token=Mock(), require_ci=True)
+    uow = MagicMock(spec=IUnitOfWork)
+    repo = Mock()
+    case = SubmitReviewUseCase(uow, repo, clock=Mock(), token=Mock(), require_ci=True)
     with pytest.raises(WorkflowError, match=message):
         case.execute(SubmitReviewInput(submission(**updates), reviewer))
-    scope.assert_not_called()
+    uow.__enter__.assert_not_called()
+    uow.commit.assert_not_called()
+    assert repo.mock_calls == []
 
 
 @pytest.mark.parametrize(
@@ -237,15 +248,18 @@ def test_invalid_typed_submission_does_not_open_scope(updates, reviewer, message
     ],
 )
 def test_invalid_typed_finding_does_not_open_scope(updates, message):
-    scope = Mock()
-    case = SubmitReviewUseCase(scope, clock=Mock(), token=Mock(), require_ci=True)
+    uow = MagicMock(spec=IUnitOfWork)
+    repo = Mock()
+    case = SubmitReviewUseCase(uow, repo, clock=Mock(), token=Mock(), require_ci=True)
     with pytest.raises(WorkflowError, match=message):
         case.execute(
             SubmitReviewInput(
                 submission(findings=(replace(FINDING, **updates),)), "lead"
             )
         )
-    scope.assert_not_called()
+    uow.__enter__.assert_not_called()
+    uow.commit.assert_not_called()
+    assert repo.mock_calls == []
 
 
 def test_typed_submission_snapshots_prior_resolutions():
