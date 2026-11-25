@@ -1,95 +1,158 @@
 """Layer: Infrastructure
-Responsibility: Persist review writes in the existing locked workflow transaction.
-Dependencies: Review ports and PostgreSQL workflow unit.
+Responsibility: Persist claim and submit operations in the caller's transaction.
+Dependencies: Review write contracts, canonical PostgreSQL models and SQLAlchemy Session.
 """
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 
+from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
+
+from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.application.review.use_cases.write_contracts import ReviewSubmission
 from agent_workflow.domain.review.events import ReviewEventAction
 from agent_workflow.domain.review.policy import ClaimFacts, TaskFacts
-from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.storage.postgres_workflow import (
-    PostgresWorkflowRepository,
-    PostgresWorkflowUnit,
+from agent_workflow.domain.states import CiVerdict, WorkflowStatus
+from agent_workflow.domain.task.handoff import TaskEventAction
+from agent_workflow.infrastructure.database.models import (
+    CITask,
+    Review,
+    ReviewAttempt,
+    ReviewFinding,
+    Task,
+    TaskEvent,
 )
 
 
-def encode(value: object) -> str:
+def _encode(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def claim_facts(row: dict | None) -> ClaimFacts | None:
+def _claim_facts(row: ReviewAttempt | None) -> ClaimFacts | None:
     if row is None:
         return None
     return ClaimFacts(
-        row["token"],
-        row["reviewer"],
-        row["expected_sha"],
-        row["expires_at"],
-        row["status"],
-        row["submitted_payload"],
+        row.token,
+        row.reviewer,
+        row.expected_sha,
+        row.expires_at,
+        row.status,
+        row.submitted_payload,
     )
 
 
 class PostgresReviewWrites:
-    def __init__(self, unit: PostgresWorkflowUnit):
-        self.unit = unit
+    def __init__(self, session: Session) -> None:
+        self._session = session
 
     def lock_task(self, task_id: str) -> TaskFacts | None:
-        row = self.unit.find_task((task_id,))
+        row = self._session.scalar(
+            select(Task).where(Task.task_id == task_id).with_for_update()
+        )
         if row is None:
             return None
+        try:
+            status = WorkflowStatus(row.status)
+        except ValueError:
+            raise CorruptedPersistenceDataError(
+                "invalid persisted review task"
+            ) from None
         return TaskFacts(
-            row["task_id"],
-            WorkflowStatus(row["status"]),
-            row["current_head_sha"],
-            row["base_sha"],
-            row["completed_review_rounds"],
-            row["requested_effort"],
-            bool(row["require_verified_effort"]),
+            row.task_id,
+            status,
+            row.current_head_sha,
+            row.base_sha,
+            row.completed_review_rounds,
+            row.requested_effort,
+            bool(row.require_verified_effort),
         )
 
     def active_claim(self, task_id: str) -> ClaimFacts | None:
-        return claim_facts(self.unit.find_active_claim((task_id,)))
+        row = self._session.execute(
+            select(ReviewAttempt).where(
+                ReviewAttempt.task_id == task_id, ReviewAttempt.status == "ACTIVE"
+            )
+        ).scalar_one_or_none()
+        return _claim_facts(row)
 
     def find_claim(self, task_id: str, token: str) -> ClaimFacts | None:
-        return claim_facts(self.unit.find_claim((token, task_id)))
-
-    def latest_head_handoff_action(self, task_id: str, sha: str) -> str | None:
-        handoff = self.unit.find_head_handoff(task_id, sha)
-        return handoff["action"] if handoff else None
-
-    def has_successful_ci(self, task_id: str, sha: str) -> bool:
-        return self.unit.ci_approved((task_id, sha))
-
-    def prior_findings(self, task_id: str) -> set[str]:
-        return {
-            finding["finding_id"]
-            for review in self.unit.list_reviews((task_id,))
-            for finding in self.unit.list_findings((review["review_id"],))
-        }
-
-    def transition(
-        self, task: TaskFacts, status: str, action: str, now: float, metadata: dict
-    ) -> None:
-        self.unit.insert_event(
-            (
-                task.task_id,
-                task.status,
-                status,
-                action,
-                task.head,
-                now,
-                encode(metadata),
+        row = self._session.scalar(
+            select(ReviewAttempt).where(
+                ReviewAttempt.task_id == task_id, ReviewAttempt.token == token
             )
         )
-        self.unit.set_status((status, now, task.task_id))
+        return _claim_facts(row)
+
+    def latest_head_handoff_action(self, task_id: str, sha: str) -> str | None:
+        return self._session.scalar(
+            select(TaskEvent.action)
+            .where(
+                TaskEvent.task_id == task_id,
+                TaskEvent.sha == sha,
+                TaskEvent.action.in_(tuple(TaskEventAction)),
+            )
+            .order_by(TaskEvent.event_id.desc())
+            .limit(1)
+        )
+
+    def has_successful_ci(self, task_id: str, sha: str) -> bool:
+        statement = select(CITask.task_id).where(
+            CITask.task_id == task_id,
+            CITask.head_sha == sha,
+            CITask.verdict == CiVerdict.SUCCESS,
+        )
+        try:
+            # A failed evidence query must leave the outer transaction usable.
+            with self._session.begin_nested():
+                return self._session.scalar(statement) is not None
+        except DBAPIError:
+            return False
+
+    def prior_findings(self, task_id: str) -> set[str]:
+        return set(
+            self._session.scalars(
+                select(ReviewFinding.finding_id)
+                .join(Review, ReviewFinding.review_id == Review.review_id)
+                .where(Review.task_id == task_id)
+            )
+        )
+
+    def transition(
+        self,
+        task: TaskFacts,
+        status: WorkflowStatus,
+        action: ReviewEventAction,
+        now: float,
+        metadata: dict[str, str | int],
+    ) -> None:
+        self._session.add(
+            TaskEvent(
+                task_id=task.task_id,
+                previous_status=task.status,
+                next_status=status,
+                action=action,
+                sha=task.head,
+                timestamp=now,
+                metadata_text=_encode(metadata),
+            )
+        )
+        self._session.flush()
+        self._session.execute(
+            update(Task)
+            .where(Task.task_id == task.task_id)
+            .values(status=status, updated_at=now)
+        )
 
     def expire(self, task: TaskFacts, claim: ClaimFacts, now: float) -> None:
-        self.unit.expire_claim((claim.token,))
+        self._session.execute(
+            update(ReviewAttempt)
+            .where(
+                ReviewAttempt.task_id == task.task_id,
+                ReviewAttempt.token == claim.token,
+            )
+            .values(status="EXPIRED")
+        )
         self.transition(
             task,
             WorkflowStatus.READY_IN_REVIEW,
@@ -99,16 +162,18 @@ class PostgresReviewWrites:
         )
 
     def claim(self, task: TaskFacts, claim: ClaimFacts, now: float) -> None:
-        self.unit.insert_claim(
-            (
-                claim.token,
-                task.task_id,
-                claim.expected_sha,
-                claim.reviewer,
-                now,
-                claim.expires_at,
+        self._session.add(
+            ReviewAttempt(
+                token=claim.token,
+                task_id=task.task_id,
+                expected_sha=claim.expected_sha,
+                reviewer=claim.reviewer,
+                claimed_at=now,
+                expires_at=claim.expires_at,
+                status=claim.status,
             )
         )
+        self._session.flush()
         self.transition(
             task, WorkflowStatus.IN_REVIEW, ReviewEventAction.CLAIM, now, {}
         )
@@ -124,41 +189,54 @@ class PostgresReviewWrites:
         actual: str | None,
         evidence: str,
     ) -> None:
-        self.unit.insert_review(
-            (
-                review_id,
-                task.task_id,
-                submission.review_round,
-                task.base,
-                submission.reviewed_head_sha,
-                submission.verdict.value,
-                submission.summary,
-                task.effort,
-                actual,
-                evidence,
-                reviewer,
-                now,
-                None,
-                encode(dict(submission.prior_resolutions)),
+        self._session.add(
+            Review(
+                review_id=review_id,
+                task_id=task.task_id,
+                round_number=submission.review_round,
+                base_sha=task.base,
+                reviewed_head_sha=submission.reviewed_head_sha,
+                verdict=submission.verdict,
+                summary=submission.summary,
+                requested_effort=task.effort,
+                actual_effort=actual,
+                verification_evidence=evidence,
+                reviewer=reviewer,
+                reviewed_at=now,
+                imported_at=None,
+                prior_resolutions=_encode(dict(submission.prior_resolutions)),
             )
         )
-        for finding in submission.findings:
-            self.unit.insert_finding(
-                (
-                    review_id,
-                    finding.finding_id,
-                    task.task_id,
-                    finding.severity,
-                    finding.acceptance_criterion,
-                    finding.file_path,
-                    finding.line,
-                    finding.description,
-                    finding.suggested_correction,
-                    finding.required_verification,
-                )
+        self._session.flush()
+        self._session.add_all(
+            ReviewFinding(
+                review_id=review_id,
+                finding_id=finding.finding_id,
+                task_id=task.task_id,
+                severity=finding.severity,
+                acceptance_criterion=finding.acceptance_criterion,
+                file_path=finding.file_path,
+                line=finding.line,
+                description=finding.description,
+                suggested_correction=finding.suggested_correction,
+                required_verification=finding.required_verification,
             )
-        self.unit.set_rounds((submission.review_round, task.task_id))
-        self.unit.submit_claim((canonical, submission.claim_token))
+            for finding in submission.findings
+        )
+        self._session.flush()
+        self._session.execute(
+            update(Task)
+            .where(Task.task_id == task.task_id)
+            .values(completed_review_rounds=submission.review_round)
+        )
+        self._session.execute(
+            update(ReviewAttempt)
+            .where(
+                ReviewAttempt.task_id == task.task_id,
+                ReviewAttempt.token == submission.claim_token,
+            )
+            .values(status="SUBMITTED", submitted_payload=canonical)
+        )
         self.transition(
             task,
             submission.verdict,
@@ -166,13 +244,3 @@ class PostgresReviewWrites:
             now,
             {"review_id": review_id, "round": submission.review_round},
         )
-
-
-class PostgresReviewWriteScope:
-    def __init__(self, repository: PostgresWorkflowRepository):
-        self.repository = repository
-
-    @contextmanager
-    def __call__(self) -> Iterator[PostgresReviewWrites]:
-        with self.repository.transaction() as unit:
-            yield PostgresReviewWrites(unit)

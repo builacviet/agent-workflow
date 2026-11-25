@@ -4,7 +4,6 @@ Dependencies: Domain review facts, workflow states and validation.
 """
 
 from collections.abc import Mapping
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Protocol, get_args
@@ -171,10 +170,6 @@ class IReviewWriteRepository(Protocol):
         actual: str | None,
         evidence: str,
     ) -> None: ...
-
-
-class IReviewWriteScope(Protocol):
-    def __call__(self) -> AbstractContextManager[IReviewWriteRepository]: ...
 
 
 def ci_allows(
