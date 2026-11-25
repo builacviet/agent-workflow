@@ -17,6 +17,8 @@ from sqlalchemy.pool import NullPool
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.infrastructure.database.unit_of_work import (
     PostgresUnavailableError as PostgresUnavailableError,
+)
+from agent_workflow.infrastructure.database.unit_of_work import (
     _set_repository_transaction_options as _set_repository_transaction_options,
 )
 from agent_workflow.observability.correlation import (
