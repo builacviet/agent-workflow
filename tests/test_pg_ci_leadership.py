@@ -181,12 +181,9 @@ def production_watcher(monkeypatch):
     @contextmanager
     def transaction():
         tx = Mock()
-        tx.load_for_record.return_value = CiRecordSnapshot(REPO, SHA, 31, SHA, False)
         tx.inbox_delivery_exists.return_value = True
         yield tx
-        # Model effects at commit, before the Application ownership post-check.
-        if tx.record.called:
-            record(*tx.record.call_args.args)
+        # Model legacy ACK effects at commit, before the ownership post-check.
         if tx.mark_processed.called:
             ack(*tx.mark_processed.call_args.args)
 
@@ -194,6 +191,23 @@ def production_watcher(monkeypatch):
     repository.transaction.side_effect = transaction
     monkeypatch.setattr(
         ci_deps, "create_ci_state_adapters", Mock(return_value=(reader, repository))
+    )
+
+    @contextmanager
+    def write_scope():
+        tx = Mock()
+        tx.load_for_record.return_value = CiRecordSnapshot(REPO, SHA, 31, SHA, False)
+        uow = MagicMock()
+
+        def persist(*args):
+            if args[0] is None and uow.commit.called:
+                record(*tx.record.call_args.args)
+
+        uow.__exit__.side_effect = persist
+        yield uow, tx
+
+    monkeypatch.setattr(
+        ci_deps, "PostgresCiWriteScope", Mock(return_value=write_scope)
     )
     return watcher
 
