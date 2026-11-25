@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Persist Dev/Code dispatch claims and runtime evidence in PostgreSQL.
-Dependencies: Domain identity rules, execution budget, and database adapters.
+Dependencies: Application ports, Domain rules, execution budget, and database adapters.
 """
 
 import re
@@ -9,10 +9,11 @@ import uuid
 from contextlib import contextmanager
 from typing import Callable
 
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.budget import check_deadline, operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import (
@@ -31,13 +32,26 @@ _PRE_LAUNCH = "PRE_LAUNCH"
 _BLOCKED = "Operator reconciliation required; do not retry automatically"
 
 
-class DevClaim(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    dispatch_id: str
-    task_id: str
-    input_sha: str
-    deadline: float
-    round_number: int
+def _project_claim(row: AgentDispatch) -> DispatchClaim:
+    task_id = row.task_id
+    input_sha = row.input_sha
+    round_number = row.round_number
+    if (
+        not isinstance(row.dispatch_id, str)
+        or not isinstance(task_id, str)
+        or not isinstance(input_sha, str)
+        or type(round_number) is not int
+        or not isinstance(row.deadline, (int, float))
+        or isinstance(row.deadline, bool)
+    ):
+        raise CorruptedPersistenceDataError("invalid persisted dispatch claim")
+    return DispatchClaim(
+        dispatch_id=row.dispatch_id,
+        task_id=task_id,
+        input_sha=input_sha,
+        deadline=float(row.deadline),
+        round_number=round_number,
+    )
 
 
 class PostgresDispatchLedger:
@@ -89,7 +103,7 @@ class PostgresDispatchLedger:
 
     def claim(
         self, task_ids: set[str], timeout: int, *, track_pre_launch: bool = False
-    ) -> dict | None:
+    ) -> DispatchClaim | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:
             raise BusinessRuleError("runtime timeout must be 60..3600 seconds")
         with self._transaction() as session:
@@ -145,7 +159,7 @@ class PostgresDispatchLedger:
                 session.add(dispatch)
                 self._timeout(session)
                 session.flush()
-                return DevClaim.model_validate(dispatch).model_dump()
+                return _project_claim(dispatch)
         return None
 
     def is_pre_launch(self, dispatch_id: str) -> bool:

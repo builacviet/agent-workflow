@@ -580,8 +580,17 @@ class CoderRuntime:
     def execute_assignment(
         self, claim: DispatchClaim, assignment: DispatchAssignment
     ) -> str:
-        """Map the typed business assignment at the trusted Worker boundary."""
-        return self.execute(claim, coder_assignment_response(assignment["details"]))
+        """Map typed dispatch and assignment values at the trusted Worker boundary."""
+        worker_claim = {
+            "dispatch_id": claim.dispatch_id,
+            "task_id": claim.task_id,
+            "input_sha": claim.input_sha,
+            "deadline": claim.deadline,
+            "round_number": claim.round_number,
+        }
+        return self.execute(
+            worker_claim, coder_assignment_response(assignment["details"])
+        )
 
     def execute(self, claim: dict, context: dict) -> str:
         self.agent_runtime.require_leadership()

@@ -4,6 +4,7 @@ import inspect
 import json
 import subprocess
 from contextlib import nullcontext
+from dataclasses import asdict
 from unittest.mock import Mock
 
 import pytest
@@ -11,6 +12,7 @@ from test_agent_workflow import spec
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 from agent_workflow.application.dispatch import run_dispatch_pass
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
@@ -72,14 +74,14 @@ class BoundaryLedger:
             return None
         task_id = eligible[0]
         task = self.state.tasks[task_id]
-        claim = {
-            "task_id": task_id,
-            "dispatch_id": uuid.uuid4().hex,
-            "input_sha": task["current_head_sha"] or task["base_sha"],
-            "round_number": task["completed_review_rounds"],
-            "deadline": time.time() + timeout,
-        }
-        self.slot = (claim["dispatch_id"], "ACTIVE", task_id)
+        claim = DispatchClaim(
+            task_id=task_id,
+            dispatch_id=uuid.uuid4().hex,
+            input_sha=task["current_head_sha"] or task["base_sha"],
+            round_number=task["completed_review_rounds"],
+            deadline=time.time() + timeout,
+        )
+        self.slot = (claim.dispatch_id, "ACTIVE", task_id)
         self.pre_launch = track_pre_launch
         return claim
 
@@ -284,7 +286,7 @@ def _dispatch_pass(service, ledger, execute, on_finished=None):
         leadership,
         ledger,
         service,
-        lambda claim, context, _guard: execute(claim, context),
+        lambda claim, context, _guard: execute(asdict(claim), context),
         on_finished=on_finished,
     )
 
@@ -326,7 +328,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
     assert ledger.claim({"NEXT"}, 60) is None
     ledger.acknowledge(dispatch_id)
     assert not ledger.is_pre_launch(dispatch_id)
-    assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
+    assert ledger.claim({"NEXT"}, 60).task_id == "NEXT"
 
 
 @pytest.mark.parametrize("pin_written", [False, True])
@@ -366,7 +368,7 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
     config, service, ledger = recovery_dispatch
     runtime = injected_runtime(config, service, ledger)
     claim = ledger.claim({"TEST"}, 60)
-    dispatch_id = claim["dispatch_id"]
+    dispatch_id = claim.dispatch_id
     ledger.block(dispatch_id)
     with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
         runtime.reconcile(dispatch_id)
@@ -378,7 +380,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     recovery_dispatch, suffix
 ):
     config, service, ledger = recovery_dispatch
-    dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True)["dispatch_id"]
+    dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True).dispatch_id
     ledger.block(dispatch_id)
     runtime = injected_runtime(config, service, ledger)
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
@@ -472,7 +474,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     assert ledger.claim({"NEXT"}, 60) is None
     ledger.acknowledge(dispatch_id)
     runtime.release_engine(dispatch_id)
-    assert ledger.claim({"NEXT"}, 60)["task_id"] == "NEXT"
+    assert ledger.claim({"NEXT"}, 60).task_id == "NEXT"
 
 
 def test_worker_owns_bot_commit_ordinary_push_and_draft(tmp_path, monkeypatch):

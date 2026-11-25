@@ -2,7 +2,7 @@
 
 import sqlite3
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 from sqlalchemy import create_engine
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition import worker_deps
 from agent_workflow.composition.postgres_controller import (
@@ -312,7 +313,7 @@ def test_loss_during_engine_admission_leaves_slot_active(
 
         return observe
 
-    claim = CLAIM | {"deadline": coder_runtime.time.time() + 60}
+    claim = DispatchClaim(**CLAIM, deadline=coder_runtime.time.time() + 60)
     context = {
         "task_id": "T",
         "status": "AWAITING_HANDOFF",
@@ -343,7 +344,7 @@ def test_loss_during_engine_admission_leaves_slot_active(
         monkeypatch.setattr(runtime.sandbox, "record_engine", forbidden)
         monkeypatch.setattr(runtime, "_execute_bound", forbidden)
         monkeypatch.setattr(runtime, "stop", forbidden)
-        runtime.execute(claim, context)
+        runtime.execute(asdict(claim), context)
 
     with pytest.raises(PermissionError, match="leadership lost"):
         RunDispatchPassUseCase(
