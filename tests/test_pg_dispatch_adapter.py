@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 from pg_task_fixtures import authorize_task
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from test_agent_workflow import HEAD, NEXT, spec
@@ -81,7 +81,7 @@ def setup(request):
                 )
 
 
-def test_concurrent_claim_block_restart_and_replay(setup):
+def test_concurrent_claim_block_restart_and_replay(setup, monkeypatch):
     ledger, factory, task_id = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
@@ -99,6 +99,65 @@ def test_concurrent_claim_block_restart_and_replay(setup):
     restarted = PostgresDispatchLedger(
         factory, role="dev", phase="code", clock=lambda: 1000.0
     )
+    engine = factory._engine
+    checkouts = []
+    reads = []
+    rollbacks = []
+    commits = []
+    deadline = time.time() + 15
+    expire_after_select = False
+
+    def observe_checkout(*_args):
+        checkouts.append(object())
+
+    def observe_read(connection, _cursor, statement, _params, _context, _many):
+        if "from agent_dispatches" not in statement.lower():
+            return
+        reads.append(connection)
+        isolation, read_only, statement_ms, lock_ms = connection.execute(
+            text(
+                "SELECT current_setting('transaction_isolation'), "
+                "current_setting('transaction_read_only'), "
+                "(SELECT setting::int FROM pg_settings "
+                "WHERE name = 'statement_timeout'), "
+                "(SELECT setting::int FROM pg_settings WHERE name = 'lock_timeout')"
+            )
+        ).one()
+        assert isolation == "read committed"
+        assert read_only == "on"
+        assert 0 < statement_ms == lock_ms <= 15_000
+        if expire_after_select:
+            # The SQL succeeded, but the result must not escape an expired budget.
+            patch.setattr(
+                budget,
+                "time",
+                SimpleNamespace(time=lambda: deadline + 1, monotonic=time.monotonic),
+            )
+
+    listeners = (
+        ("checkout", observe_checkout),
+        ("after_cursor_execute", observe_read),
+        ("rollback", rollbacks.append),
+        ("commit", commits.append),
+    )
+    for name, listener in listeners:
+        event.listen(engine, name, listener)
+    try:
+        with monkeypatch.context() as patch, dispatch_budget(deadline):
+            assert restarted.is_pre_launch(claim.dispatch_id)
+            assert not restarted.is_pre_launch(uuid.uuid4().hex)
+            expire_after_select = True
+            with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
+                restarted.is_pre_launch(claim.dispatch_id)
+    finally:
+        for name, listener in listeners:
+            event.remove(engine, name, listener)
+
+    assert len(checkouts) == len(reads) == 3
+    assert len({id(connection) for connection in reads}) == 3
+    assert rollbacks == reads
+    assert all(connection.closed for connection in reads)
+    assert commits == []
     assert restarted.is_pre_launch(claim.dispatch_id)
     restarted.retire_pre_launch(claim.dispatch_id)
     assert not restarted.is_pre_launch(claim.dispatch_id)
@@ -133,8 +192,10 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
     assert not next_owner_attempt()
     assert ledger.is_pre_launch(claim.dispatch_id)
     ledger.block(claim.dispatch_id)
+    assert ledger.is_pre_launch(claim.dispatch_id)
     assert not next_owner_attempt()
     ledger.acknowledge(claim.dispatch_id)
+    assert not ledger.is_pre_launch(claim.dispatch_id)
     assert not next_owner_attempt()
     simulated_publish.assert_not_called()
 
