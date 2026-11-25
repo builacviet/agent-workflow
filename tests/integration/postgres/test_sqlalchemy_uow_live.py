@@ -153,6 +153,38 @@ def test_deadline_after_orm_flush_prevents_physical_commit(
     assert not is_visible(factory, task_id)
 
 
+@pytest.mark.parametrize("mode", ["workflow", "read-only", "cleanup"])
+def test_implicit_rollback_checks_deadline_only_for_normal_workflow(
+    transaction_task: tuple[PostgresFactory, Task],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    factory, _ = transaction_task
+    clock = SimpleNamespace(now=1000.0)
+    fake_time = SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now)
+    monkeypatch.setattr(budget, "time", fake_time)
+    with budget.dispatch_budget(1001.0):
+        cleanup = budget.cleanup_budget() if mode == "cleanup" else nullcontext()
+        expected = (
+            nullcontext()
+            if mode == "cleanup"
+            else pytest.raises(TimeoutError, match="dispatch deadline exceeded")
+        )
+        with (
+            expected,
+            cleanup,
+            factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session, read_only=mode == "read-only"),
+        ):
+            connection, outcomes = observe_transaction(session)
+            assert session.scalar(text("SELECT 1")) == 1
+            clock.now = 1002.0
+
+    assert outcomes == ["rollback"]
+    assert connection.closed
+    assert not session.in_transaction()
+
+
 @pytest.mark.parametrize(
     "failure", ["validation", "statement", "flush", "physical commit"]
 )
