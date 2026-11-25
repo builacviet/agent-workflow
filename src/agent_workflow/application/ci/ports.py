@@ -23,6 +23,7 @@ class ICiBusinessWriteRepository(Protocol):
 
     def record(self, evidence: CiEvidence, verdict: str) -> None: ...
 
+
 CiWriteScope = Callable[
     [], AbstractContextManager[tuple[IUnitOfWork, ICiBusinessWriteRepository]]
 ]
