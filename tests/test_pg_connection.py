@@ -265,12 +265,9 @@ def test_disposable_live_transactions():
             with factory.connect_session() as connection:
                 connection.execute(text("SET TRANSACTION READ ONLY"))
                 assert connection.scalar(text("SHOW transaction_read_only")) == "on"
-                assert (
-                    connection.execute(text(f"SELECT value FROM {table}"))
-                    .scalars()
-                    .all()
-                    == [1]
-                )
+                assert connection.execute(
+                    text(f"SELECT value FROM {table}")
+                ).scalars().all() == [1]
             assert outcomes == ["rollback", "close"]
             assert connection.closed
             outcomes.clear()
@@ -283,12 +280,9 @@ def test_disposable_live_transactions():
             assert outcomes == ["rollback", "close"]
             assert connection.closed
             with factory.connect_session() as connection:
-                assert (
-                    connection.execute(text(f"SELECT value FROM {table}"))
-                    .scalars()
-                    .all()
-                    == [1]
-                )
+                assert connection.execute(
+                    text(f"SELECT value FROM {table}")
+                ).scalars().all() == [1]
         finally:
             with factory.transaction() as conn:
                 conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
