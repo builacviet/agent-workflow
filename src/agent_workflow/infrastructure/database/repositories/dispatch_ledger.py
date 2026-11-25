@@ -276,7 +276,11 @@ class PostgresDispatchLedger:
         validate_sha(sha)
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
-            if row is None or row.status != DispatchStatus.ACTIVE.value or row.slot != 1:
+            if (
+                row is None
+                or row.status != DispatchStatus.ACTIVE.value
+                or row.slot != 1
+            ):
                 raise BusinessRuleError("dispatch lease lost")
             self._timeout(session)
             evidence = session.get(AgentExecutionEvidence, dispatch_id)
