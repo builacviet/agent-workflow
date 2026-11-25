@@ -5,14 +5,15 @@ import json
 import runpy
 import sqlite3
 import sys
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from agent_workflow.app_config import AppConfig
@@ -556,6 +557,8 @@ def test_pg_once_runs_native_dev_stages(
 
     def finish(finished_id, sha):
         assert engine_pin.is_file() and held
+        session.commit.assert_called_once_with()
+        transaction.commit.assert_called_once_with()
         events.finish(finished_id, sha)
 
     monkeypatch.setattr(deps.leadership, "try_acquire", lambda: held)
@@ -576,8 +579,14 @@ def test_pg_once_runs_native_dev_stages(
         lambda _, request: events.handoff(request),
     )
 
-    session = Mock()
-    session.begin.return_value = nullcontext()
+    connection = Mock(spec=Connection)
+    connection.in_transaction.return_value = False
+    transaction_scope = connection.begin.return_value = MagicMock()
+    transaction = transaction_scope.__enter__.return_value
+    session = Mock(spec=Session)
+    session.get_bind.return_value = connection
+    session.join_transaction_mode = "rollback_only"
+    session.in_transaction.return_value = False
     session.add.side_effect = events.track
 
     def get_row(model, task_id, *, with_for_update):
@@ -745,6 +754,9 @@ def test_pg_once_runs_native_dev_stages(
             "release",
         ]
         events.block.assert_called_once_with(dispatch_id)
+        connection.begin.assert_not_called()
+        session.commit.assert_not_called()
+        transaction.commit.assert_not_called()
     else:
         config_file = tmp_path / "controller.json"
         config_file.write_text(json.dumps(config))
@@ -803,6 +815,11 @@ def test_pg_once_runs_native_dev_stages(
             binding.verdict,
         ) == ("T", 7, pushed_sha, "BLOCKED")
         events.finish.assert_called_once_with(dispatch_id, pushed_sha)
+        connection.begin.assert_called_once_with()
+        session.commit.assert_called_once_with()
+        transaction.commit.assert_called_once_with()
+        transaction.rollback.assert_not_called()
+        session.close.assert_called_once_with()
 
     assert stage_calls == expected_stages
     assert factory._closed

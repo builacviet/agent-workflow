@@ -6,14 +6,9 @@ Dependencies: Application operations and PostgreSQL adapters.
 from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
-from agent_workflow.composition.postgres_controller import (
-    ControllerCiSessionProvider,
-    ControllerDependencies,
-)
+from agent_workflow.composition.ci_deps import PostgresCiWriteScope
+from agent_workflow.composition.postgres_controller import ControllerDependencies
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
-from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
-    SqlAlchemyCiStateRepository,
-)
 from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
     PostgresDispatchLedger,
 )
@@ -43,7 +38,7 @@ def compose_postgres_worker(
         raise TypeError("PostgreSQL Controller dependencies are required")
     dispatch = dependencies.dispatch
     ci_tracking = dependencies.ci_tracking
-    ci_repository = dependencies.ci_repository
+    ci_scope = dependencies.ci_write_scope
     ci_factory = dependencies.ci_factory
     leadership = dependencies.leadership
     if (
@@ -55,8 +50,8 @@ def compose_postgres_worker(
         not isinstance(dispatch, PostgresDispatchLedger)
         or (dispatch.role, dispatch.phase) != ("dev", "code")
         or not isinstance(ci_tracking, TrackCiTaskUseCase)
-        or not isinstance(ci_repository, SqlAlchemyCiStateRepository)
-        or ci_tracking._repository is not ci_repository
+        or type(ci_scope) is not PostgresCiWriteScope
+        or ci_tracking._scope is not ci_scope
         or not isinstance(ci_factory, PostgresFactory)
         or not isinstance(leadership, PostgresLeadershipLock)
         or leadership._key["domain"] != LeadershipDomain.CONTROLLER
@@ -67,14 +62,11 @@ def compose_postgres_worker(
         )
 
     factory = handoff_provider.factory
-    ci_scope = ci_repository._session_scope
     if (
         not isinstance(factory, PostgresFactory)
         or factory._closed
         or dispatch.factory is not factory
         or ci_factory is not factory
-        or ci_repository._session is not None
-        or type(ci_scope) is not ControllerCiSessionProvider
         or ci_scope.factory is not factory
         or leadership._factory is not factory
     ):

@@ -4,7 +4,7 @@ import socket
 import sqlite3
 import subprocess
 from dataclasses import FrozenInstanceError
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -16,13 +16,11 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition import postgres_controller as composition
+from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.ci.leadership_scope import PostgresCiLeadershipScope
 from agent_workflow.infrastructure.database.repositories.ci_state_reader import (
     SqlAlchemyCiStateReader,
-)
-from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
-    SqlAlchemyCiStateRepository,
 )
 from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
     PostgresDispatchLedger,
@@ -97,8 +95,9 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
         "code",
     )
     assert isinstance(dependencies.ci_tracking, TrackCiTaskUseCase)
-    assert isinstance(dependencies.ci_repository, SqlAlchemyCiStateRepository)
-    assert dependencies.ci_tracking._repository is dependencies.ci_repository
+    assert isinstance(dependencies.ci_write_scope, PostgresCiWriteScope)
+    assert dependencies.ci_tracking._scope is dependencies.ci_write_scope
+    assert dependencies.ci_write_scope.factory is factory
     assert dependencies.ci_factory is factory
     assert isinstance(dependencies.leadership, PostgresLeadershipLock)
     constructed_locks.assert_called_once_with(factory, LeadershipDomain.CONTROLLER)
@@ -112,10 +111,13 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
     with pytest.raises(FrozenInstanceError):
         dependencies.handoff_provider = None
 
-    scoped_session = Mock()
+    scoped_session = MagicMock()
     monkeypatch.setattr(factory, "get_scoped_session", scoped_session)
-    assert dependencies.ci_repository._session_scope() is scoped_session.return_value
+    with dependencies.ci_write_scope() as (uow, repository):
+        session = scoped_session.return_value.__enter__.return_value
+        assert uow._session is repository._session is session
     scoped_session.assert_called_once_with()
+    scoped_session.return_value.__exit__.assert_called_once()
 
 
 def test_controller_composition_does_not_expose_obsolete_watcher_path():

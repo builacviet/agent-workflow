@@ -6,7 +6,9 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from agent_workflow.application.ci.ports import ICiBusinessWriteRepository
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.workflow_identity import WorkflowError
 
@@ -17,22 +19,24 @@ DELIVERY = "12345678-1234-1234-1234-123456789abc"
 
 
 def scope_with(operation):
+    uow = MagicMock(spec=IUnitOfWork)
     scope = MagicMock()
-    scope.__enter__.return_value = operation
-    repository = Mock()
-    repository.transaction.return_value = scope
-    return repository, scope
+    scope.__enter__.return_value = (uow, operation)
+    return Mock(return_value=scope), uow, scope
 
 
 def test_track_uses_locked_snapshot_and_single_scope():
-    operation = Mock()
+    operation = Mock(spec=ICiBusinessWriteRepository)
     operation.load_for_tracking.return_value = CiTrackingSnapshot(
         "READY_IN_REVIEW", REPOSITORY, HEAD, None, None
     )
-    repository, scope = scope_with(operation)
-    TrackCiTaskUseCase(repository).execute("task-1", 21, HEAD)
+    provider, uow, scope = scope_with(operation)
+    TrackCiTaskUseCase(provider).execute("task-1", 21, HEAD)
     operation.load_for_tracking.assert_called_once_with("task-1")
     operation.track.assert_called_once_with("task-1", 21, HEAD)
+    provider.assert_called_once_with()
+    uow.commit.assert_called_once_with()
+    uow.__exit__.assert_called_once()
     scope.__exit__.assert_called_once()
 
 
@@ -58,12 +62,13 @@ def test_track_uses_locked_snapshot_and_single_scope():
     ],
 )
 def test_rejected_tracking_does_not_write(snapshot, reason):
-    operation = Mock()
+    operation = Mock(spec=ICiBusinessWriteRepository)
     operation.load_for_tracking.return_value = snapshot
-    repository, scope = scope_with(operation)
+    provider, uow, scope = scope_with(operation)
     with pytest.raises(WorkflowError, match=reason):
-        TrackCiTaskUseCase(repository).execute("task-1", 21, HEAD)
+        TrackCiTaskUseCase(provider).execute("task-1", 21, HEAD)
     operation.track.assert_not_called()
+    uow.commit.assert_not_called()
     assert scope.__exit__.call_count == 1
 
 

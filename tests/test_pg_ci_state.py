@@ -40,7 +40,10 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
 from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
-from agent_workflow.composition.ci_deps import create_ci_state_adapters
+from agent_workflow.composition.ci_deps import (
+    PostgresCiWriteScope,
+    create_ci_state_adapters,
+)
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.ci_evidence import WebhookNotification
@@ -69,7 +72,10 @@ from agent_workflow.infrastructure.database.repositories.webhook_inbox_repositor
     SqlAlchemyWebhookInboxRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from agent_workflow.infrastructure.database.unit_of_work import (
+    PostgresUnavailableError,
+    SqlAlchemyUnitOfWork,
+)
 from agent_workflow.infrastructure.postgres_leadership import (
     _WORKFLOW_NAMESPACE,
     LeadershipDomain,
@@ -155,6 +161,23 @@ def test_ci_dependencies_resolve_scoped_session_after_composition():
     assert repository._session_scope() is replacement_scope.return_value
     assert replacement_scope.call_count == 2
 
+    provide = PostgresCiWriteScope(factory)
+    sessions = [Mock(spec=Session), Mock(spec=Session)]
+    scopes = [MagicMock(), MagicMock()]
+    for scope, session in zip(scopes, sessions, strict=True):
+        scope.__enter__.return_value = session
+    replacement_scope.side_effect = scopes
+    with provide() as (first_uow, first_repo):
+        assert first_uow._session is first_repo._session is sessions[0]
+        assert first_uow._profile == "ci_write"
+    with provide() as (second_uow, second_repo):
+        assert second_uow._session is second_repo._session is sessions[1]
+        assert second_uow._profile == "ci_write"
+    assert first_uow is not second_uow
+    assert first_repo is not second_repo
+    for scope in scopes:
+        scope.__exit__.assert_called_once()
+
 
 @pytest.mark.parametrize("fail_during_read", [False, True])
 def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
@@ -204,20 +227,21 @@ def test_ci_tracking_use_case_load_decide_write_atomically(
     )
     operation = Mock()
     operation.load_for_tracking.return_value = task
+    uow = MagicMock()
     scope = MagicMock()
-    scope.__enter__.return_value = operation
-    repository = Mock()
-    repository.transaction.return_value = scope
+    scope.__enter__.return_value = (uow, operation)
+    provider = Mock(return_value=scope)
 
     if expected_error:
         with pytest.raises(WorkflowError, match=expected_error):
-            TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+            TrackCiTaskUseCase(provider).execute("sample", PR, HEAD)
         operation.track.assert_not_called()
     else:
-        TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+        TrackCiTaskUseCase(provider).execute("sample", PR, HEAD)
         operation.track.assert_not_called()  # Replay: no new binding.
     operation.load_for_tracking.assert_called_once_with("sample")
-    repository.transaction.assert_called_once_with()
+    provider.assert_called_once_with()
+    uow.commit.assert_not_called()
 
 
 def test_ci_tracking_use_case_creates_missing_binding():
@@ -225,11 +249,13 @@ def test_ci_tracking_use_case_creates_missing_binding():
     operation.load_for_tracking.return_value = CiTrackingSnapshot(
         "READY_IN_REVIEW", REPO, HEAD, None, None
     )
+    uow = MagicMock()
     scope = MagicMock()
-    scope.__enter__.return_value = operation
-    repository = Mock(transaction=Mock(return_value=scope))
-    TrackCiTaskUseCase(repository).execute("sample", PR, HEAD)
+    scope.__enter__.return_value = (uow, operation)
+    provider = Mock(return_value=scope)
+    TrackCiTaskUseCase(provider).execute("sample", PR, HEAD)
     operation.track.assert_called_once_with("sample", PR, HEAD)
+    uow.commit.assert_called_once_with()
 
 
 def test_ci_reader_invalid_persisted_dto_is_corrupted_data():
@@ -359,10 +385,10 @@ def run_race(*operations):
 
 def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     _, factory, task_id, _ = setup
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
         track(task_id, PR, HEAD)
     handoff(factory, task_id, HEAD)
@@ -458,10 +484,10 @@ def test_mcp_provider_claims_require_exact_head_ci(
 ):
     _, factory, task_id, _ = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", ci_required)
     assert not approved(task_id, HEAD)
 
@@ -486,9 +512,8 @@ def test_mcp_provider_claims_require_exact_head_ci(
 def test_concurrent_observations_keep_sticky_failure_and_history(setup):
     config, factory, task_id, _ = setup
     handoff(factory, task_id, HEAD)
-    _, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     track(task_id, PR, HEAD)
     failure = evidence(task_id, "FAILURE")
     success = replace(
@@ -497,9 +522,9 @@ def test_concurrent_observations_keep_sticky_failure_and_history(setup):
     run_race(lambda: record(failure), lambda: record(success))
 
     with PostgresFactory.open(config) as restarted:
-        reader, repository = create_ci_state_adapters(restarted)
+        reader, _ = create_ci_state_adapters(restarted)
         approved = CheckCiApprovalUseCase(reader).execute
-        record = RecordCiEvidenceUseCase(repository).execute
+        record = RecordCiEvidenceUseCase(PostgresCiWriteScope(restarted)).execute
         record(success)
         record(evidence(task_id, "BLOCKED"))
         assert reader.previous_failure(task_id, HEAD)
@@ -529,9 +554,9 @@ def test_concurrent_observations_keep_sticky_failure_and_history(setup):
 
 def test_repair_limit_uses_existing_workflow_authorization(setup):
     _, factory, task_id, _ = setup
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     provide_handoff = PostgresHandoffProvider(factory, clock=lambda: 1000.0)
 
     def current_handoff(head):
@@ -583,9 +608,11 @@ def failed_handoff(setup):
     )
     with provide_handoff() as operation:
         operation.execute(request)
-    _, repository = create_ci_state_adapters(factory)
-    TrackCiTaskUseCase(repository).execute(task_id, PR, HEAD)
-    RecordCiEvidenceUseCase(repository).execute(evidence(task_id, "FAILURE"))
+
+    TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute(task_id, PR, HEAD)
+    RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute(
+        evidence(task_id, "FAILURE")
+    )
     return config, provide_handoff, request
 
 
@@ -762,8 +789,8 @@ def test_repair_with_unavailable_evidence_is_fail_closed_and_retryable(failed_ha
 def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
     config, factory, task_id, deliveries = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     track(task_id, PR, HEAD)
     delivery = deliveries[0]
@@ -842,8 +869,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
 ):
     config, factory, task_id, (delivery, _) = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    TrackCiTaskUseCase(repository).execute(task_id, PR, HEAD)
+    reader, _ = create_ci_state_adapters(factory)
+    TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute(task_id, PR, HEAD)
     add_delivery(factory, delivery)
     approved = CheckCiApprovalUseCase(reader).execute
 
@@ -883,8 +910,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
 def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
     config, factory, task_id, deliveries = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     track(task_id, PR, HEAD)
     add_delivery(factory, deliveries[0])
@@ -909,8 +936,8 @@ def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
 def test_pg_ci_watch_two_passes_ack_once(setup):
     config, factory, task_id, deliveries = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     track(task_id, PR, HEAD)
     add_delivery(factory, deliveries[0])
@@ -930,8 +957,8 @@ def test_pg_ci_watch_two_passes_ack_once(setup):
 def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
     config, factory, task_id, deliveries = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     track(task_id, PR, HEAD)
     add_delivery(factory, deliveries[0])
@@ -1002,8 +1029,8 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
 def test_lost_watcher_session_keeps_real_inbox_pending(setup):
     config, factory, task_id, (notification, _) = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     track(task_id, PR, HEAD)
     add_delivery(factory, notification)
@@ -1091,10 +1118,10 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
 def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
     config, factory, task_id, _ = setup
     handoff(factory, task_id, HEAD)
-    reader, repository = create_ci_state_adapters(factory)
-    track = TrackCiTaskUseCase(repository).execute
+    reader, _ = create_ci_state_adapters(factory)
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     track(task_id, PR, HEAD)
     record(evidence(task_id, "BLOCKED"))
     engine = create_engine(
@@ -1115,12 +1142,12 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
     with PostgresFactory(engine) as failing:
         with pytest.raises(
             PersistenceUnavailableError,
-            match="^PostgreSQL Controller CI operation failed$",
+            match="^PostgreSQL unit of work failed$",
         ) as error:
-            RecordCiEvidenceUseCase(
-                SqlAlchemyCiStateRepository(failing.get_scoped_session)
-            ).execute(evidence(task_id))
-        assert type(error.value) is PersistenceUnavailableError
+            RecordCiEvidenceUseCase(PostgresCiWriteScope(failing)).execute(
+                evidence(task_id)
+            )
+        assert type(error.value) is PostgresUnavailableError
         assert error.value.__cause__ is None
 
     assert attempted == [2]
@@ -1131,22 +1158,24 @@ def test_verdict_write_failure_rolls_back_already_inserted_observation(setup):
     assert approved(task_id, HEAD)
 
 
-def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
+def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup, monkeypatch):
     config, factory, task_id, (notification, _) = setup
     handoff(factory, task_id, HEAD)
     sessions = []
+    original_scope = factory.get_scoped_session
 
     @contextmanager
     def session_scope():
-        with factory.get_scoped_session() as session:
+        with original_scope() as session:
             sessions.append(session)
             yield session
 
+    monkeypatch.setattr(factory, "get_scoped_session", session_scope)
     reader = SqlAlchemyCiStateReader(session_scope)
     repository = SqlAlchemyCiStateRepository(session_scope)
-    track = TrackCiTaskUseCase(repository).execute
+    track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
-    record = RecordCiEvidenceUseCase(repository).execute
+    record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
     acknowledge = AcknowledgeCiEventUseCase(repository).execute
     track(task_id, PR, HEAD)
     add_delivery(factory, notification)
@@ -1171,7 +1200,9 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup):
             connection.execute(text("SELECT 1 / 0"))
 
     event.listen(engine, "commit", fail_commit)
-    with pytest.raises(PersistenceUnavailableError, match="Controller CI operation"):
+    with pytest.raises(
+        PersistenceUnavailableError, match="PostgreSQL unit of work failed"
+    ):
         record(evidence(task_id))
     event.remove(engine, "commit", fail_commit)
     assert observations(factory, task_id) == []

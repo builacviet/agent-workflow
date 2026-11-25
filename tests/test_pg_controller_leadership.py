@@ -58,7 +58,7 @@ def fixture(acquired=True):
         handoff_provider=Mock(),
         dispatch=dispatch,
         ci_tracking=Mock(),
-        ci_repository=Mock(),
+        ci_write_scope=Mock(),
         ci_factory=Mock(),
         leadership=leader,
     )

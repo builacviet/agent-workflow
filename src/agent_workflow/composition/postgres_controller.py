@@ -3,17 +3,11 @@ Responsibility: Assemble PostgreSQL Controller dependencies on a shared open fac
 Dependencies: Application operations and PostgreSQL adapters.
 """
 
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
-
-from agent_workflow.application.ci.ports import ICiWriteRepository
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
-from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
-    SqlAlchemyCiStateRepository,
-)
 from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
     PostgresDispatchLedger,
 )
@@ -28,21 +22,11 @@ from agent_workflow.infrastructure.postgres_leadership import (
 
 
 @dataclass(frozen=True)
-class ControllerCiSessionProvider:
-    """Lend CI a deferred session scope from this Controller's factory."""
-
-    factory: PostgresFactory
-
-    def __call__(self) -> AbstractContextManager[Session]:
-        return self.factory.get_scoped_session()
-
-
-@dataclass(frozen=True)
 class ControllerDependencies:
     handoff_provider: PostgresHandoffProvider
     dispatch: PostgresDispatchLedger
     ci_tracking: TrackCiTaskUseCase
-    ci_repository: ICiWriteRepository
+    ci_write_scope: PostgresCiWriteScope
     ci_factory: PostgresFactory
     leadership: PostgresLeadershipLock
 
@@ -58,12 +42,12 @@ def compose_postgres_controller(factory: PostgresFactory) -> ControllerDependenc
     if getattr(factory, "_closed", True):
         raise PostgresUnavailableError("PostgreSQL factory is closed")
 
-    ci_repository = SqlAlchemyCiStateRepository(ControllerCiSessionProvider(factory))
+    ci_write_scope = PostgresCiWriteScope(factory)
     return ControllerDependencies(
         handoff_provider=PostgresHandoffProvider(factory),
         dispatch=PostgresDispatchLedger(factory, role="dev", phase="code"),
-        ci_tracking=TrackCiTaskUseCase(ci_repository),
-        ci_repository=ci_repository,
+        ci_tracking=TrackCiTaskUseCase(ci_write_scope),
+        ci_write_scope=ci_write_scope,
         ci_factory=factory,
         leadership=PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER),
     )

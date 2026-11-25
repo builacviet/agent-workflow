@@ -1,4 +1,7 @@
-"""Atomic PostgreSQL writes for the Controller CI watcher."""
+"""Layer: Infrastructure
+Responsibility: Persist CI binding, observations and inbox acknowledgments.
+Dependencies: SQLAlchemy Session and domain CI snapshots.
+"""
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
@@ -28,13 +31,18 @@ SessionScope = Callable[[], AbstractContextManager[Session]]
 
 
 class SqlAlchemyCiStateRepository:
-    """Atomic CI writes; a transaction yields a fresh session-bound adapter."""
+    """Session-bound CI writes; deferred legacy scope remains for ACK only."""
 
     def __init__(
-        self, session_scope: SessionScope, *, _session: Session | None = None
+        self,
+        session_scope: SessionScope | None = None,
+        *,
+        session: Session | None = None,
     ) -> None:
+        if (session_scope is None) == (session is None):
+            raise ValueError("CI repository requires exactly one Session or scope")
         self._session_scope = session_scope
-        self._session = _session
+        self._session = session
         self._record_binding: CITask | None = None
 
     @property
@@ -45,16 +53,16 @@ class SqlAlchemyCiStateRepository:
 
     @contextmanager
     def transaction(self):
-        """One physical commit or rollback for all Use Case read/decide/write steps."""
+        """Legacy ACK scope; Track and Record use the canonical UoW."""
+        if self._session_scope is None:
+            raise RuntimeError("CI repository is already session-bound")
         try:
             with self._session_scope() as session:
                 with session.begin():
                     _set_repository_transaction_options(
                         session.connection(), read_only=False
                     )
-                    yield SqlAlchemyCiStateRepository(
-                        self._session_scope, _session=session
-                    )
+                    yield SqlAlchemyCiStateRepository(session=session)
         except SQLAlchemyError:
             raise PersistenceUnavailableError(_OPERATION_ERROR) from None
 
