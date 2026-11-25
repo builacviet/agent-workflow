@@ -1,10 +1,11 @@
 """CI feature ports: transactions, projections and trusted read-only transport."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Protocol
 
 from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.ci_tracking import (
     CiApprovalSnapshot,
@@ -13,7 +14,7 @@ from agent_workflow.domain.ci_tracking import (
 )
 
 
-class ICiWriteTransaction(Protocol):
+class ICiBusinessWriteRepository(Protocol):
     def load_for_tracking(self, task_id: str) -> CiTrackingSnapshot: ...
 
     def track(self, task_id: str, pr_number: int, head_sha: str) -> None: ...
@@ -22,6 +23,12 @@ class ICiWriteTransaction(Protocol):
 
     def record(self, evidence: CiEvidence, verdict: str) -> None: ...
 
+CiWriteScope = Callable[
+    [], AbstractContextManager[tuple[IUnitOfWork, ICiBusinessWriteRepository]]
+]
+
+
+class ICiWriteTransaction(Protocol):
     def inbox_delivery_exists(self, delivery_id: str) -> bool: ...
 
     def mark_processed(self, delivery_id: str) -> None: ...
