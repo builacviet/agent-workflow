@@ -98,6 +98,9 @@ def test_repository_commits_before_return_and_uses_fresh_sessions(config, delive
             settings.append((statement, parameters))
 
     with PostgresFactory(engine) as factory:
+        # Exclude the factory's schema-readiness connection from operation counts.
+        outcomes.clear()
+        settings.clear()
         open_scope = factory.get_scoped_session
 
         @contextmanager
