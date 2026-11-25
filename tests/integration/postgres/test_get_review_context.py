@@ -167,20 +167,29 @@ def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> Non
                             prior_resolutions="{}",
                         )
                     )
-                    connection.execute(
-                        ReviewFinding.__table__.insert().values(
-                            review_id=review_id,
-                            finding_id=f"F{review_count}",
-                            task_id=task_id,
-                            severity="MAJOR",
-                            acceptance_criterion="AC4",
-                            file_path="src/example.py",
-                            line=1,
-                            description="Fixture finding",
-                            suggested_correction="Fixture correction",
-                            required_verification="Fixture verification",
-                        )
-                    )
+                    if review_count == 2:
+                        # Exercise an empty review first, then ordered findings
+                        # across both review IDs in the next persisted snapshot.
+                        for round_number, finding_id in (
+                            (2, "A2"),
+                            (1, "Z2"),
+                            (2, "A1"),
+                            (1, "Z1"),
+                        ):
+                            connection.execute(
+                                ReviewFinding.__table__.insert().values(
+                                    review_id=f"{task_id}-{round_number}",
+                                    finding_id=finding_id,
+                                    task_id=task_id,
+                                    severity="MAJOR",
+                                    acceptance_criterion="AC4",
+                                    file_path="src/example.py",
+                                    line=1,
+                                    description="Fixture finding",
+                                    suggested_correction="Fixture correction",
+                                    required_verification="Fixture verification",
+                                )
+                            )
                     connection.execute(
                         update(Task)
                         .where(Task.task_id == task_id)
@@ -227,7 +236,7 @@ def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> Non
                 for name, listener in listeners:
                     event.remove(engine, name, listener)
 
-            query_count = 3 + review_count
+            query_count = 3 + int(review_count > 0)
             counts = {name: statements.count(name) for name in set(statements)}
             assert counts == {
                 "isolation": 1,
@@ -237,12 +246,20 @@ def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> Non
             assert len(checkouts) == len(rollbacks) == 1
             assert rollbacks[0].closed
             assert commits == []
-            assert len(result.previous_reviews) == review_count
+            assert [review.round_number for review in result.previous_reviews] == list(
+                range(1, review_count + 1)
+            )
+            expected = {0: [], 1: [()], 2: [("Z1", "Z2"), ("A1", "A2")]}
             assert [
-                finding.finding_id
+                tuple(finding.finding_id for finding in review.findings)
                 for review in result.previous_reviews
-                for finding in review.findings
-            ] == [f"F{number}" for number in range(1, review_count + 1)]
+            ] == expected[review_count]
+            for review in result.previous_reviews:
+                assert all(
+                    finding.review_id == review.review_id
+                    and finding.task_id == task_id
+                    for finding in review.findings
+                )
 
 
 def test_context_read_failure_rolls_back_and_factory_can_be_reused(
