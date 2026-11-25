@@ -14,6 +14,16 @@ except ModuleNotFoundError as exc:
     postgres_mcp = None
 
 
+def postgres_review_queue_provider():
+    """Load settings for one authorized queue invocation."""
+    config = AppConfig.from_env()
+    if config.pg_runtime_dsn is None:
+        raise ValueError("PG_RUNTIME_DSN is required")
+    if postgres_mcp is None:
+        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    return postgres_mcp.postgres_mcp_review_queue(config)
+
+
 def postgres_review_reads_provider():
     """Load settings for a single authorized review query."""
     config = AppConfig.from_env()

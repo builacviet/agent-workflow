@@ -3,9 +3,8 @@ import sys
 from pathlib import Path
 
 from agent_workflow.infrastructure.database import models
-from agent_workflow.infrastructure.database.repositories import (
-    review_context_reader,
-    sqlalchemy_review_context_reader,
+from agent_workflow.infrastructure.database.readers.review_context_reader import (
+    SqlAlchemyReviewContextReader,
 )
 
 
@@ -36,10 +35,9 @@ def test_canonical_mappings_share_one_registry() -> None:
     assert len(models.Base.metadata.tables) == len(model_names)
 
 
-def test_review_reader_compatibility_import() -> None:
-    assert (
-        sqlalchemy_review_context_reader.SqlAlchemyReviewContextReader
-        is review_context_reader.SqlAlchemyReviewContextReader
+def test_review_context_reader_uses_canonical_module() -> None:
+    assert SqlAlchemyReviewContextReader.__module__ == (
+        "agent_workflow.infrastructure.database.readers.review_context_reader"
     )
 
 
@@ -59,7 +57,9 @@ with (
 ):
     import_module("agent_workflow.infrastructure.database.models")
     import_module("agent_workflow.infrastructure.database.session_factory")
+    import_module("agent_workflow.infrastructure.database.readers.review_context_reader")
     import_module("agent_workflow.composition.review_deps")
+    import_module("agent_workflow.composition.postgres_mcp")
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

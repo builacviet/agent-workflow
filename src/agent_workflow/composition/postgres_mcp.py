@@ -25,34 +25,49 @@ from agent_workflow.application.review.use_cases.submit_review import (
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
-from agent_workflow.composition.review_deps import create_get_review_context_use_case
+from agent_workflow.composition.review_deps import (
+    create_get_review_context_use_case,
+)
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
-    PostgresReviewQueueScope,
+    PostgresReviewQueueReader,
+)
+from agent_workflow.infrastructure.database.repositories.review_lease_repository import (
+    PostgresReviewLeaseRepository,
 )
 from agent_workflow.infrastructure.database.repositories.review_writes import (
     PostgresReviewWrites,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
+
+
+@contextmanager
+def postgres_mcp_review_queue(
+    app_config: AppConfig,
+) -> Iterator[ListReviewQueueUseCase]:
+    factory = PostgresFactory.open(app_config)
+    try:
+        with factory.get_scoped_session() as session:
+            yield ListReviewQueueUseCase(
+                SqlAlchemyUnitOfWork(session),
+                PostgresReviewLeaseRepository(session),
+                PostgresReviewQueueReader(session),
+                require_ci=app_config.ci_gate_required,
+                clock=time,
+            )
+    finally:
+        factory.close()
 
 
 @contextmanager
 def postgres_mcp_review_reads(
     app_config: AppConfig,
-) -> Iterator[
-    tuple[ListReviewQueueUseCase, GetReviewContextUseCase, GetReviewResultUseCase]
-]:
+) -> Iterator[tuple[GetReviewContextUseCase, GetReviewResultUseCase]]:
     factory = PostgresFactory.open(app_config)
     try:
         context = create_get_review_context_use_case(factory)
-        queue = ListReviewQueueUseCase(
-            PostgresReviewQueueScope(PostgresWorkflowRepository(factory)),
-            require_ci=app_config.ci_gate_required,
-            clock=time,
-        )
-        yield queue, context, GetReviewResultUseCase(context)
+        yield context, GetReviewResultUseCase(context)
     finally:
         factory.close()
 

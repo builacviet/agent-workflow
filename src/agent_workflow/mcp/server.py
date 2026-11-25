@@ -13,6 +13,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 
 from agent_workflow.bootstrap.mcp_runtime import (
+    postgres_review_queue_provider,
     postgres_review_reads_provider,
     postgres_review_writes_provider,
     postgres_task_operations_provider,
@@ -135,6 +136,7 @@ mcp.tool()(get_server_info)
 register_tools(
     mcp,
     postgres_task_operations_provider,
+    postgres_review_queue_provider,
     postgres_review_reads_provider,
     postgres_review_writes_provider,
 )

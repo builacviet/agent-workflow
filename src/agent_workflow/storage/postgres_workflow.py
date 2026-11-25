@@ -124,14 +124,6 @@ class PostgresWorkflowUnit:
             )
         )
 
-    def set_status(self, values: tuple = ()) -> None:
-        status, updated_at, task_id = values
-        self._execute(
-            update(Task)
-            .where(Task.task_id == task_id)
-            .values(status=status, updated_at=updated_at)
-        )
-
     def insert_task(self, values: tuple = ()) -> None:
         (
             task_id,
@@ -180,14 +172,6 @@ class PostgresWorkflowUnit:
             )
         )
 
-    def expire_claim(self, values: tuple = ()) -> None:
-        (token,) = values
-        self._execute(
-            update(ReviewAttempt)
-            .where(ReviewAttempt.token == token)
-            .values(status="EXPIRED")
-        )
-
     def find_task(self, values: tuple = ()) -> dict | None:
         (task_id,) = values
         stmt = select(Task).where(Task.task_id == task_id)
@@ -224,16 +208,6 @@ class PostgresWorkflowUnit:
                 ReviewAttempt.token == token, ReviewAttempt.task_id == task_id
             ),
             AttemptDTO,
-        )
-
-    def list_claimed_tasks(self, values: tuple = ()) -> list[dict]:
-        stmt = select(Task).where(Task.status == "IN_REVIEW").order_by(Task.task_id)
-        return self._all(stmt.with_for_update() if self.writable else stmt, TaskDTO)
-
-    def list_ready_tasks(self, values: tuple = ()) -> list[dict]:
-        return self._all(
-            select(Task).where(Task.status == "READY_IN_REVIEW").order_by(Task.task_id),
-            TaskDTO,
         )
 
     def list_reviews(self, values: tuple = ()) -> list[dict]:

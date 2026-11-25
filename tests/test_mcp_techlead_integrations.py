@@ -20,6 +20,7 @@ from agent_workflow.app_config import (
 )
 from agent_workflow.application.review.dtos import ReviewQueueItem
 from agent_workflow.bootstrap.mcp_runtime import (
+    postgres_review_queue_provider,
     postgres_review_reads_provider,
     postgres_review_writes_provider,
     postgres_task_operations_provider,
@@ -83,14 +84,15 @@ def auth_env(monkeypatch):
         monkeypatch.setenv(setting, value)
 
 
-def _server(review_reads_provider=postgres_review_reads_provider):
+def _server(review_queue_provider=postgres_review_queue_provider):
     mcp = create_mcp_server()
     mcp.tool()(ping)
     mcp.tool()(get_server_info)
     register_tools(
         mcp,
         postgres_task_operations_provider,
-        review_reads_provider,
+        review_queue_provider,
+        postgres_review_reads_provider,
         postgres_review_writes_provider,
     )
     return mcp
@@ -736,9 +738,7 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
         assert requested_effort == "medium"
         return (item,)
 
-    server = _server(
-        lambda: nullcontext((SimpleNamespace(execute=list_queue), None, None))
-    )
+    server = _server(lambda: nullcontext(SimpleNamespace(execute=list_queue)))
     assert server.settings.auth.required_scopes == [scope]
     server.settings.json_response = True
     server.settings.stateless_http = True
