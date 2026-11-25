@@ -1,10 +1,15 @@
-"""Feature-local CI persistence assembly; database specifics stay in Composition."""
+"""Layer: Composition
+Responsibility: Assemble CI readers, write scopes and watcher dependencies.
+Dependencies: Application CI operations and PostgreSQL adapters.
+"""
 
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.ci.ports import ICiBusinessWriteRepository, ICiChecksReader
 from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
     AcknowledgeCiEventUseCase,
 )
@@ -12,6 +17,7 @@ from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseC
 from agent_workflow.application.ci.use_cases.record_ci_evidence import (
     RecordCiEvidenceUseCase,
 )
+from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
     GuardedCiReader,
@@ -25,6 +31,22 @@ from agent_workflow.infrastructure.database.repositories.ci_state_repository imp
     SqlAlchemyCiStateRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+
+
+@dataclass(frozen=True)
+class PostgresCiWriteScope:
+    """Construct a fresh shared-Session UoW and repository per invocation."""
+
+    factory: PostgresFactory
+
+    @contextmanager
+    def __call__(self) -> Iterator[tuple[IUnitOfWork, ICiBusinessWriteRepository]]:
+        with self.factory.get_scoped_session() as session:
+            yield (
+                SqlAlchemyUnitOfWork(session, profile="ci_write"),
+                SqlAlchemyCiStateRepository(session=session),
+            )
 
 
 def create_ci_state_adapters(
@@ -55,7 +77,7 @@ def create_ci_reconcile_use_case(
     reconciler = ReconcileCiUseCase(
         GuardedCiReader(reader=reader, require_owner=leadership.require_owner),
         GuardedCiChecks(checks, leadership.require_owner),
-        recorder=RecordCiEvidenceUseCase(repository),
+        recorder=RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)),
         acknowledger=AcknowledgeCiEventUseCase(repository),
         leadership=leadership,
         installation_id=installation_id,
