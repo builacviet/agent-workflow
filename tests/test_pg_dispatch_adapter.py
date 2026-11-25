@@ -12,13 +12,17 @@ from pg_task_fixtures import authorize_task
 from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.orm import Session
 from test_agent_workflow import HEAD, NEXT, spec
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.application.exceptions import CorruptedPersistenceDataError
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    PersistenceUnavailableError,
+)
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
@@ -282,7 +286,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
 
 
 def test_evidence_identity_and_finish(setup):
-    ledger, _, task_id = setup
+    ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     evidence = (
         claim.dispatch_id,
@@ -300,13 +304,39 @@ def test_evidence_identity_and_finish(setup):
     with pytest.raises(BusinessRuleError):
         ledger.record_runtime_evidence(claim.dispatch_id, "wrong", *evidence[2:])
     ledger.record_runtime_evidence(*evidence)
-    with pytest.raises(IntegrityError):
+    with pytest.raises(
+        PersistenceUnavailableError, match="^PostgreSQL unit of work failed$"
+    ) as error:
         ledger.record_runtime_evidence(*evidence)
+    assert error.value.__suppress_context__
+    cause = error.value.__context__
+    assert isinstance(cause, IntegrityError)
+    assert getattr(cause.orig, "sqlstate", None) == "23505"
     with pytest.raises(BusinessRuleError, match="HEAD mismatch"):
         ledger.finish(claim.dispatch_id, NEXT)
     assert ledger.claim({task_id}, 60) is None
     ledger.finish(claim.dispatch_id, HEAD)
-    assert ledger.claim({task_id}, 60) is None
+    # Replays and terminal no-op operations must roll back, not commit.
+    outcomes = []
+
+    def on_rollback(connection):
+        outcomes.append(("rollback", connection))
+
+    def on_commit(connection):
+        outcomes.append(("commit", connection))
+
+    engine = factory._engine
+    event.listen(engine, "rollback", on_rollback)
+    event.listen(engine, "commit", on_commit)
+    try:
+        assert ledger.claim({task_id}, 60) is None
+        ledger.retire_pre_launch(claim.dispatch_id)
+        ledger.block(claim.dispatch_id)
+    finally:
+        event.remove(engine, "commit", on_commit)
+        event.remove(engine, "rollback", on_rollback)
+    assert [outcome for outcome, _ in outcomes] == ["rollback"] * 3
+    assert all(connection.closed for _, connection in outcomes)
 
 
 def test_unsupported_role_and_invalid_timeout(setup):
@@ -345,9 +375,15 @@ def test_lock_wait_is_bounded_and_retries(setup):
     with factory.transaction() as holder:
         holder.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
         started = time.monotonic()
-        with pytest.raises(DBAPIError):
+        with pytest.raises(
+            PersistenceUnavailableError, match="^PostgreSQL unit of work failed$"
+        ) as error:
             with dispatch_budget(time.time() + 0.6):
                 ledger.claim({task_id}, 60)
+        assert error.value.__suppress_context__
+        cause = error.value.__context__
+        assert isinstance(cause, DBAPIError)
+        assert getattr(cause.orig, "sqlstate", None) in {"55P03", "57014"}
         assert time.monotonic() - started < 3
     assert ledger.claim({task_id}, 60) is not None
 
@@ -445,27 +481,55 @@ def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
     assert ledger.claim({task_id}, 60) is not None
 
 
-@pytest.mark.parametrize("failed_check", [1, 2])
+@pytest.mark.parametrize(
+    "checkpoint", ["before-session-commit", "after-session-commit"]
+)
 def test_claim_deadline_before_outer_commit_releases_slot(
-    setup, monkeypatch, failed_check
+    setup, monkeypatch, checkpoint
 ):
     ledger, factory, task_id = setup
-    checks = 0
+    clock = SimpleNamespace(now=1000.0)
+    fake_time = SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now)
+    engine = factory._engine
+    outcomes = []
+    session_commits = []
 
-    def fail_at_deadline():
-        nonlocal checks
-        checks += 1
-        if checks == failed_check:
-            raise TimeoutError("deadline expired")
+    def on_flush(session, _context):
+        if checkpoint == "before-session-commit":
+            clock.now = 1002.0
 
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            "agent_workflow.infrastructure.database.repositories.dispatch_ledger.check_deadline",
-            fail_at_deadline,
-        )
-        with pytest.raises(TimeoutError, match="deadline expired"):
-            ledger.claim({task_id}, 60)
-    assert checks == failed_check
+    def on_session_commit(session):
+        session_commits.append(True)
+        if checkpoint == "after-session-commit":
+            clock.now = 1002.0
+
+    def on_rollback(connection):
+        outcomes.append(("rollback", connection))
+
+    def on_commit(connection):
+        outcomes.append(("commit", connection))
+
+    listeners = (
+        (Session, "after_flush", on_flush),
+        (Session, "after_commit", on_session_commit),
+        (engine, "rollback", on_rollback),
+        (engine, "commit", on_commit),
+    )
+    for target, name, listener in listeners:
+        event.listen(target, name, listener)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(budget, "time", fake_time)
+            with dispatch_budget(1001.0):
+                with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
+                    ledger.claim({task_id}, 60)
+    finally:
+        for target, name, listener in listeners:
+            event.remove(target, name, listener)
+
+    assert session_commits == ([True] if checkpoint == "after-session-commit" else [])
+    assert [outcome for outcome, _ in outcomes] == ["rollback"]
+    assert all(connection.closed for _, connection in outcomes)
     with factory.transaction() as connection:
         assert (
             connection.scalar(
