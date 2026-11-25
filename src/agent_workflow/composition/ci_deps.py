@@ -9,7 +9,10 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.ci.ports import ICiBusinessWriteRepository, ICiChecksReader
+from agent_workflow.application.ci.ports import (
+    ICiBusinessWriteRepository,
+    ICiChecksReader,
+)
 from agent_workflow.application.ci.use_cases.acknowledge_ci_event import (
     AcknowledgeCiEventUseCase,
 )
