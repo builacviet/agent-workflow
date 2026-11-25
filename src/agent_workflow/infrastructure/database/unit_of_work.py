@@ -168,5 +168,9 @@ class SqlAlchemyUnitOfWork:
                     transaction.commit()
                 else:
                     transaction.rollback()
+            # Successful implicit rollback can return a read or replay result.
+            # Check only after cleanup; never replace an error or explicit rollback.
+            if self._profile == "workflow" and self._decision is None:
+                check_deadline()
         except SQLAlchemyError:
             raise PostgresUnavailableError("PostgreSQL unit of work failed") from None
