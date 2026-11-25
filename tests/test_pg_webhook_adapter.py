@@ -200,9 +200,7 @@ def test_restart_replay(config, delivery):
     alternate = _alternate(delivery)
     first, second = _digest(delivery), _digest(delivery, "changed")
     with PostgresFactory.open(config) as factory:
-        pg = SqlAlchemyWebhookInboxRepository(
-            session_scope=factory.get_scoped_session
-        )
+        pg = SqlAlchemyWebhookInboxRepository(session_scope=factory.get_scoped_session)
         assert persisted_notification(factory, delivery.delivery_id) is None
         assert pg.record(delivery, first) is InboxResult.INSERTED
 
