@@ -6,7 +6,7 @@ import subprocess
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -411,7 +411,9 @@ def test_review_writes_use_cases_authorize_and_close(
         SubmitReviewOutput,
     )
 
-    factory = Mock()
+    factory = MagicMock(spec=PostgresFactory)
+    factory.__enter__.return_value = factory
+    session_scope = factory.get_scoped_session.return_value
     opened = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", opened)
     if name == "claim_review":
@@ -446,12 +448,16 @@ def test_review_writes_use_cases_authorize_and_close(
         with pytest.raises(ToolError, match="workflow OAuth authorization required"):
             asyncio.run(mcp.call_tool(name, arguments))
         opened.assert_not_called()
+        factory.get_scoped_session.assert_not_called()
     finally:
         auth_context_var.reset(reset)
     assert json.loads(asyncio.run(mcp.call_tool(name, arguments))[0].text) == expected
     assert execute.call_args.args[0].reviewer == ACTOR
     opened.assert_called_once()
-    factory.close.assert_called_once()
+    factory.get_scoped_session.assert_called_once_with()
+    session_scope.__enter__.assert_called_once_with()
+    session_scope.__exit__.assert_called_once_with(None, None, None)
+    factory.__exit__.assert_called_once_with(None, None, None)
 
 
 def test_submit_review_fastmcp_schema_matches_baseline():
