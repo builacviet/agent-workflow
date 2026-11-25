@@ -251,6 +251,8 @@ def test_review_reads_authorize_execute_and_close(
 ):
     factory = Mock()
     open_factory = Mock(return_value=factory)
+    if name == "list_review_queue":
+        factory.get_scoped_session.return_value = nullcontext(Session())
     execute = Mock(return_value=output)
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
     monkeypatch.setattr(use_case, "execute", execute)
@@ -269,6 +271,10 @@ def test_review_reads_authorize_execute_and_close(
     open_factory.assert_called_once()
     assert open_factory.call_args.args[0].pg_runtime_dsn == DSN
     execute.assert_called_once_with(request_arg)
+    if name == "list_review_queue":
+        factory.get_scoped_session.assert_called_once_with()
+    else:
+        factory.get_scoped_session.assert_not_called()
     factory.close.assert_called_once_with()
 
 
@@ -291,6 +297,8 @@ def test_exception_and_next_call_use_separate_scopes(
     open_factory = Mock(side_effect=[failed, successful])
     monkeypatch.setattr(PostgresFactory, "open", open_factory)
     if name == "list_review_queue":
+        for factory in (failed, successful):
+            factory.get_scoped_session.return_value = nullcontext(Session())
         arguments, use_case, result = {}, ListReviewQueueUseCase, ()
     elif name == "get_review_context":
         arguments, use_case, result = TASK, GetReviewContextUseCase, CONTEXT

@@ -1,9 +1,8 @@
 """Layer: Application
-Responsibility: Define the review read, lease persistence and transaction ports.
+Responsibility: Define review read and lease persistence ports.
 Dependencies: Immutable Application review DTOs.
 """
 
-from contextlib import AbstractContextManager
 from typing import Protocol
 
 from agent_workflow.application.review.dtos import (
@@ -44,13 +43,4 @@ class IReviewLeaseStore(Protocol):
 
     def record_transition(self, transition: ReviewLeaseTransition) -> None:
         """Persist the event and task status in the current transaction."""
-        ...
-
-
-ReviewQueueOperations = tuple[IReviewLeaseStore, IReviewQueueReader]
-
-
-class IReviewQueueScope(Protocol):
-    def __call__(self) -> AbstractContextManager[ReviewQueueOperations]:
-        """Provide lease persistence and a Reader in one transaction."""
         ...

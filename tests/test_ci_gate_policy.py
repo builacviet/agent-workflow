@@ -5,6 +5,7 @@ Tests never access live GitHub, Docker, credentials or production state.
 
 import json
 import sys
+from contextlib import nullcontext
 from unittest.mock import Mock
 
 import pytest
@@ -12,7 +13,7 @@ from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.bootstrap import controller_entrypoint as controller
-from agent_workflow.bootstrap.mcp_runtime import postgres_review_reads_provider
+from agent_workflow.bootstrap.mcp_runtime import postgres_review_queue_provider
 from agent_workflow.composition import (
     postgres_dispatch_deps,
     postgres_dispatch_entrypoint,
@@ -53,13 +54,14 @@ def test_mcp_provider_injects_ci_policy(monkeypatch, env_value, expected):
     )
     monkeypatch.delenv("WFC_POC_NO_AUTH", raising=False)
     factory = Mock()
+    factory.get_scoped_session.return_value = nullcontext(Mock())
     monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
     if env_value is None:
         monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
 
-    with postgres_review_reads_provider() as (queue, _, _):
+    with postgres_review_queue_provider() as queue:
         assert queue._require_ci is expected
     factory.close.assert_called_once_with()
 
@@ -113,7 +115,7 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     monkeypatch.setattr(sys, "argv", ["controller", str(config), "--once"])
 
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
-        postgres_review_reads_provider()
+        postgres_review_queue_provider()
     with pytest.raises(SystemExit) as error:
         controller.main()
 

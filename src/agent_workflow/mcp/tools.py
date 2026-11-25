@@ -61,6 +61,7 @@ def _review_result_response(output: GetReviewResultOutput) -> dict:
 def register_tools(
     mcp,
     task_operations_provider,
+    review_queue_provider,
     review_reads_provider,
     review_writes_provider,
 ):
@@ -70,7 +71,7 @@ def register_tools(
     def list_review_queue(ctx: Context, requested_effort: str | None = None) -> dict:
         """Authenticated: list reviewable tasks, optionally filtered by requested effort."""
         authorize_context(ctx)
-        with review_reads_provider() as (queue, _, _):
+        with review_queue_provider() as queue:
             return {"tasks": [asdict(item) for item in queue.execute(requested_effort)]}
 
     @mcp.tool()
@@ -78,7 +79,7 @@ def register_tools(
         """Authenticated: full task, immutable prior reviews/findings and GitHub references."""
         authorize_context(ctx)
         request = _review_request(task_id)
-        with review_reads_provider() as (_, context, _):
+        with review_reads_provider() as (context, _):
             return review_context_response(context.execute(request))
 
     @mcp.tool()
@@ -118,7 +119,7 @@ def register_tools(
         """Authenticated: persisted results, resolution history and approval validity."""
         authorize_context(ctx)
         request = _review_request(task_id)
-        with review_reads_provider() as (_, _, result):
+        with review_reads_provider() as (_, result):
             return _review_result_response(result.execute(request))
 
     @mcp.tool()

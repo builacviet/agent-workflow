@@ -187,8 +187,8 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "agent_workflow.composition.postgres_mcp.postgres_mcp_review_reads",
-        lambda config: nullcontext((SimpleNamespace(execute=list_queue), None, None)),
+        "agent_workflow.composition.postgres_mcp.postgres_mcp_review_queue",
+        lambda config: nullcontext(SimpleNamespace(execute=list_queue)),
     )
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

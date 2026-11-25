@@ -1,4 +1,7 @@
-"""Dependency assembly for the review use case."""
+"""Layer: Composition
+Responsibility: Assemble review context reads in their own read-only snapshot.
+Dependencies: Review use case, PostgreSQL reader and scoped repository adapters.
+"""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -6,7 +9,7 @@ from contextlib import contextmanager
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextUseCase,
 )
-from agent_workflow.infrastructure.database.repositories.review_context_reader import (
+from agent_workflow.infrastructure.database.readers.review_context_reader import (
     ReviewRepositories,
     SqlAlchemyReviewContextReader,
 )

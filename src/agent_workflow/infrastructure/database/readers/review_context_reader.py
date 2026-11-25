@@ -1,4 +1,7 @@
-"""Fulfill the review read port through a single repository scope."""
+"""Layer: Infrastructure
+Responsibility: Read a review context snapshot in a single read-only scope.
+Dependencies: Application review DTOs and scoped PostgreSQL repositories.
+"""
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
