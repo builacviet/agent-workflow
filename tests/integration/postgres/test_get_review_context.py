@@ -256,8 +256,7 @@ def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> Non
             ] == expected[review_count]
             for review in result.previous_reviews:
                 assert all(
-                    finding.review_id == review.review_id
-                    and finding.task_id == task_id
+                    finding.review_id == review.review_id and finding.task_id == task_id
                     for finding in review.findings
                 )
 
