@@ -583,11 +583,8 @@ def test_mcp_queue_read_failure_rolls_back_lease_recovery(
         mcp_postgres("list_review_queue", {})
 
     with (
-
         factory.get_scoped_session() as session,
-
         SqlAlchemyUnitOfWork(session, read_only=True),
-
     ):
         assert claim_row(session, claim["claim_token"], task_id).status == "ACTIVE"
     context = read_context(factory, task_id)
@@ -755,11 +752,8 @@ def test_queue_ci_query_failure_rolls_back_savepoint_and_still_recovers(
         assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
 
     with (
-
         factory.get_scoped_session() as session,
-
         SqlAlchemyUnitOfWork(session, read_only=True),
-
     ):
         assert claim_row(session, claim["claim_token"], task_id).status == "EXPIRED"
         assert task_row(session, task_id).status == "READY_IN_REVIEW"
@@ -827,11 +821,8 @@ def test_queue_holds_task_lock_against_competing_review_write(
         competing_claim = writer.result(timeout=5)
 
     with (
-
         factory.get_scoped_session() as session,
-
         SqlAlchemyUnitOfWork(session, read_only=True),
-
     ):
         assert claim_row(session, expired["claim_token"], task_id).status == "EXPIRED"
         assert task_row(session, task_id).completed_review_rounds == 0
@@ -1499,11 +1490,8 @@ def test_mcp_review_deadline_failure_rolls_back(
         arguments = claim_arguments
 
     with (
-
         factory.get_scoped_session() as session,
-
         SqlAlchemyUnitOfWork(session, read_only=True),
-
     ):
         original_task = task_row(session, task_id)
         original_events = event_rows(session, task_id)
