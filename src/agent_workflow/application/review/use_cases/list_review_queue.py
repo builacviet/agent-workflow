@@ -14,7 +14,6 @@ from agent_workflow.application.review.ports import (
     IReviewQueueReader,
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
-from agent_workflow.budget import check_deadline
 from agent_workflow.domain.review.events import ReviewEventAction
 from agent_workflow.domain.review.policy import require_ci
 from agent_workflow.domain.states import WorkflowStatus
@@ -51,8 +50,6 @@ class ListReviewQueueUseCase:
             )
             if recovered:
                 self._uow.commit()
-            else:
-                check_deadline()
             return items
 
     def _ci_allows(self, item: ReviewQueueItem) -> bool:
