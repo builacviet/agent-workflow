@@ -3,23 +3,18 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
 
-from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.infrastructure.database.unit_of_work import (
     PostgresUnavailableError as PostgresUnavailableError,
-)
-from agent_workflow.infrastructure.database.unit_of_work import (
-    _set_repository_transaction_options as _set_repository_transaction_options,
 )
 from agent_workflow.observability.correlation import (
     get_correlation_id,
@@ -124,44 +119,6 @@ class PostgresFactory:
             self.get_sync_session(connection) as session,
         ):
             yield session
-
-    @contextmanager
-    def unit_of_work_session(
-        self,
-        *,
-        read_only: bool = False,
-        after_session_commit: Callable[[], None] | None = None,
-    ) -> Iterator[Session]:
-        """Compatibility scope for callers that commit on successful return."""
-        with self.connect_session() as connection, connection.begin() as transaction:
-            if read_only:
-                connection.execute(
-                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                )
-            with self.get_sync_session(connection) as session:
-                yield session
-                if not read_only:
-                    session.commit()
-                    if after_session_commit is not None:
-                        after_session_commit()
-            transaction.commit()
-
-    @contextmanager
-    def repository_session(
-        self, *, error_message: str, read_only: bool = False
-    ) -> Iterator[Session]:
-        """Scope Webhook/CI work and flush only before a write commit."""
-        connection_scope = self.connect_session if read_only else self.transaction
-        try:
-            with connection_scope() as connection:
-                _set_repository_transaction_options(connection, read_only=read_only)
-                with self.get_sync_session(connection) as session:
-                    yield session
-                    if not read_only:
-                        session.flush()
-        except (SQLAlchemyError, ValidationError):
-            # Database and DTO errors can contain query parameters or row values.
-            raise PostgresUnavailableError(error_message) from None
 
     def connect_session(self) -> Connection:
         """Check out a connection until the caller closes or invalidates it."""
