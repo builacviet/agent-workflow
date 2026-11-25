@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Project persisted task fields for review context.
-Dependencies: Application review DTOs, SQLAlchemy models and session controls.
+Dependencies: Application review DTOs, SQLAlchemy models and the caller's Session.
 """
 
 import json
@@ -13,9 +13,6 @@ from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import canonical_repository
 from agent_workflow.infrastructure.database.models import Task
-from agent_workflow.infrastructure.database.unit_of_work import (
-    set_workflow_query_timeout,
-)
 
 _CONTEXT_PATHS = TypeAdapter(tuple[str, ...])
 
@@ -25,7 +22,6 @@ class SqlAlchemyTaskRepository:
         self._session = session
 
     def get_task(self, task_id: str) -> ReviewTask | None:
-        set_workflow_query_timeout(self._session)
         row = self._session.execute(
             select(Task).where(Task.task_id == task_id)
         ).scalar_one_or_none()

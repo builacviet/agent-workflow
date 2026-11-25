@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Project persisted review history and events in the caller's scope.
-Dependencies: Application review DTOs, SQLAlchemy models and session controls.
+Dependencies: Application review DTOs, SQLAlchemy models and the caller's Session.
 """
 
 from pydantic import TypeAdapter
@@ -17,9 +17,6 @@ from agent_workflow.infrastructure.database.models import Review, TaskEvent
 from agent_workflow.infrastructure.database.models import (
     ReviewFinding as ReviewFindingRow,
 )
-from agent_workflow.infrastructure.database.unit_of_work import (
-    set_workflow_query_timeout,
-)
 
 _PRIOR_RESOLUTIONS = TypeAdapter(dict[str, str])
 
@@ -29,7 +26,6 @@ class SqlAlchemyReviewRepository:
         self._session = session
 
     def list_reviews(self, task_id: str) -> tuple[PreviousReview, ...]:
-        set_workflow_query_timeout(self._session)
         rows = self._session.scalars(
             select(Review)
             .where(Review.task_id == task_id)
@@ -62,7 +58,6 @@ class SqlAlchemyReviewRepository:
         )
 
     def _list_findings(self, review_id: str) -> tuple[ReviewFinding, ...]:
-        set_workflow_query_timeout(self._session)
         rows = self._session.scalars(
             select(ReviewFindingRow)
             .where(ReviewFindingRow.review_id == review_id)
@@ -85,7 +80,6 @@ class SqlAlchemyReviewRepository:
         )
 
     def list_events(self, task_id: str) -> tuple[ReviewEvent, ...]:
-        set_workflow_query_timeout(self._session)
         rows = self._session.scalars(
             select(TaskEvent)
             .where(TaskEvent.task_id == task_id)

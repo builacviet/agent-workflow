@@ -131,6 +131,120 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
     assert use_case.execute(request).task.current_head_sha == HEAD
 
 
+def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> None:
+    factory, task_id = context_db
+    with create_authorize_task_use_case(factory) as operation:
+        operation.execute(
+            ProvisionTaskSpec.model_validate(task_spec(task_id)).to_command()
+        )
+
+    # The production schema allows at most two reviews. Seed valid persisted
+    # snapshots directly: this test exercises the reader, not review submission.
+    config = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
+    with PostgresFactory.open(config) as read_factory:
+        use_case = create_get_review_context_use_case(read_factory)
+        engine = read_factory._engine
+        for review_count in range(3):
+            if review_count:
+                reviewed_sha = ("b" if review_count == 1 else "c") * 40
+                review_id = f"{task_id}-{review_count}"
+                verdict = "CHANGES_REQUESTED" if review_count == 1 else "ESCALATED"
+                with factory.transaction() as connection:
+                    connection.execute(
+                        Review.__table__.insert().values(
+                            review_id=review_id,
+                            task_id=task_id,
+                            round_number=review_count,
+                            base_sha=BASE,
+                            reviewed_head_sha=reviewed_sha,
+                            verdict=verdict,
+                            summary="Reader baseline",
+                            requested_effort="medium",
+                            actual_effort="medium",
+                            verification_evidence="fixture",
+                            reviewer="fixture",
+                            reviewed_at=float(review_count),
+                            prior_resolutions="{}",
+                        )
+                    )
+                    connection.execute(
+                        ReviewFinding.__table__.insert().values(
+                            review_id=review_id,
+                            finding_id=f"F{review_count}",
+                            task_id=task_id,
+                            severity="MAJOR",
+                            acceptance_criterion="AC4",
+                            file_path="src/example.py",
+                            line=1,
+                            description="Fixture finding",
+                            suggested_correction="Fixture correction",
+                            required_verification="Fixture verification",
+                        )
+                    )
+                    connection.execute(
+                        update(Task)
+                        .where(Task.task_id == task_id)
+                        .values(
+                            completed_review_rounds=review_count,
+                            current_head_sha=reviewed_sha,
+                            status=verdict,
+                        )
+                    )
+
+            statements: list[str] = []
+            checkouts: list[object] = []
+            rollbacks: list[Connection] = []
+            commits: list[Connection] = []
+
+            def observe_sql(
+                _connection, _cursor, statement, _parameters, _context, _many
+            ):
+                sql = statement.lower()
+                if "set_config(" in sql:
+                    statements.append("timeout")
+                elif "set transaction isolation level" in sql:
+                    statements.append("isolation")
+                elif "select " in sql:
+                    statements.append("read")
+                else:
+                    statements.append("other")
+
+            def observe_checkout(*_args):
+                checkouts.append(object())
+
+            listeners = (
+                ("before_cursor_execute", observe_sql),
+                ("checkout", observe_checkout),
+                ("rollback", rollbacks.append),
+                ("commit", commits.append),
+            )
+            for name, listener in listeners:
+                event.listen(engine, name, listener)
+            try:
+                with dispatch_budget(time.time() + 15):
+                    result = use_case.execute(GetReviewContextInput(task_id))
+            finally:
+                for name, listener in listeners:
+                    event.remove(engine, name, listener)
+
+            query_count = 3 + review_count
+            counts = {name: statements.count(name) for name in set(statements)}
+            assert counts == {
+                "isolation": 1,
+                "timeout": 1 + query_count,
+                "read": query_count,
+            }
+            assert len(checkouts) == len(rollbacks) == 1
+            assert rollbacks[0].closed
+            assert commits == []
+            assert len(result.previous_reviews) == review_count
+            assert [
+                finding.finding_id
+                for review in result.previous_reviews
+                for finding in review.findings
+            ] == [f"F{number}" for number in range(1, review_count + 1)]
+
+
 def test_context_read_failure_rolls_back_and_factory_can_be_reused(
     context_db: ContextDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
