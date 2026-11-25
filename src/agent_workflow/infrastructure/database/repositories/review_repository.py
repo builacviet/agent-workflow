@@ -88,9 +88,7 @@ class SqlAlchemyReviewRepository:
                     required_verification=row.required_verification,
                 )
             )
-        return {
-            review_id: tuple(findings) for review_id, findings in grouped.items()
-        }
+        return {review_id: tuple(findings) for review_id, findings in grouped.items()}
 
     def list_events(self, task_id: str) -> tuple[ReviewEvent, ...]:
         rows = self._session.scalars(
