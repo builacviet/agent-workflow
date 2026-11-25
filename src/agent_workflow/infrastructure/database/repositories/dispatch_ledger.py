@@ -1,4 +1,7 @@
-"""Opt-in Dev/Code dispatch ledger over the shared PostgreSQL schema."""
+"""Layer: Infrastructure
+Responsibility: Persist Dev/Code dispatch claims and runtime evidence in PostgreSQL.
+Dependencies: Domain identity rules, execution budget, and database adapters.
+"""
 
 import re
 import time
