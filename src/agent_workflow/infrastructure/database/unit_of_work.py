@@ -32,17 +32,48 @@ def set_workflow_query_timeout(session: Session) -> None:
     )
 
 
+def _set_repository_transaction_options(
+    connection: Connection, *, read_only: bool
+) -> None:
+    # Webhook collision lookup must see the winner committed by a concurrent insert.
+    mode = ", READ ONLY" if read_only else ""
+    connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
+    connection.execute(
+        text(
+            "SELECT set_config('lock_timeout', :lock_timeout, true), "
+            "set_config('statement_timeout', :statement_timeout, true), "
+            "set_config('synchronous_commit', :synchronous_commit, true)"
+        ),
+        {
+            "lock_timeout": "5s",
+            "statement_timeout": "5s",
+            "synchronous_commit": "on",
+        },
+    )
+
+
 class SqlAlchemyUnitOfWork:
     def __init__(
         self,
         session: Session,
         *,
         read_only: bool = False,
+        profile: Literal["workflow", "ci_write"] = "workflow",
         after_session_commit: Callable[[], None] | None = check_deadline,
     ) -> None:
+        if profile not in ("workflow", "ci_write"):
+            raise ValueError("Unknown transaction profile")
+        if profile == "ci_write" and read_only:
+            raise ValueError("CI write profile cannot be read-only")
         self._session = session
         self._read_only = read_only
-        self._after_session_commit = after_session_commit
+        self._profile = profile
+        # CI writes retain their fixed short scope, not the dispatch budget.
+        self._after_session_commit = (
+            None
+            if profile == "ci_write" and after_session_commit is check_deadline
+            else after_session_commit
+        )
         self._scope: AbstractContextManager[None] | None = None
         self._decision: Literal["commit", "rollback"] | None = None
 
@@ -113,19 +144,25 @@ class SqlAlchemyUnitOfWork:
                             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
                         )
                     )
-                event.listen(session, "do_orm_execute", refresh_timeout)
-                event.listen(session, "before_flush", refresh_timeout)
+                if self._profile == "workflow":
+                    event.listen(session, "do_orm_execute", refresh_timeout)
+                    event.listen(session, "before_flush", refresh_timeout)
                 try:
-                    refresh_timeout()
+                    if self._profile == "ci_write":
+                        _set_repository_transaction_options(connection, read_only=False)
+                    else:
+                        refresh_timeout()
                     yield
                     if self._decision == "commit":
-                        refresh_timeout()
+                        if self._profile == "workflow":
+                            refresh_timeout()
                         session.commit()
                         if self._after_session_commit is not None:
                             self._after_session_commit()
                 finally:
-                    event.remove(session, "before_flush", refresh_timeout)
-                    event.remove(session, "do_orm_execute", refresh_timeout)
+                    if self._profile == "workflow":
+                        event.remove(session, "before_flush", refresh_timeout)
+                        event.remove(session, "do_orm_execute", refresh_timeout)
                     session.close()
                 if self._decision == "commit":
                     transaction.commit()

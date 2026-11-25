@@ -18,6 +18,9 @@ from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
 from agent_workflow.infrastructure.database.unit_of_work import (
     PostgresUnavailableError as PostgresUnavailableError,
 )
+from agent_workflow.infrastructure.database.unit_of_work import (
+    _set_repository_transaction_options as _set_repository_transaction_options,
+)
 from agent_workflow.observability.correlation import (
     get_correlation_id,
     is_valid_correlation_id,
@@ -52,26 +55,6 @@ def _register_correlation_listener(engine: Engine) -> None:
             event.listen(
                 engine, "before_cursor_execute", _correlate_statement, retval=True
             )
-
-
-def _set_repository_transaction_options(
-    connection: Connection, *, read_only: bool
-) -> None:
-    # Webhook collision lookup must see the winner committed by a concurrent insert.
-    mode = ", READ ONLY" if read_only else ""
-    connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
-    connection.execute(
-        text(
-            "SELECT set_config('lock_timeout', :lock_timeout, true), "
-            "set_config('statement_timeout', :statement_timeout, true), "
-            "set_config('synchronous_commit', :synchronous_commit, true)"
-        ),
-        {
-            "lock_timeout": "5s",
-            "statement_timeout": "5s",
-            "synchronous_commit": "on",
-        },
-    )
 
 
 class PostgresFactory:

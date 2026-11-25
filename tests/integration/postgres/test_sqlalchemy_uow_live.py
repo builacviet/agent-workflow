@@ -3,6 +3,7 @@
 import os
 import uuid
 from collections.abc import Iterator
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -201,3 +202,61 @@ def test_failures_rollback_and_close(
     assert connection.closed
     assert not session.in_transaction()
     assert not is_visible(factory, task_id)
+
+
+@pytest.mark.parametrize("decision", ["commit", "unset", "failure"])
+def test_ci_write_profile_preserves_settings_and_transaction_outcome(
+    transaction_task: tuple[PostgresFactory, Task], decision: str
+) -> None:
+    factory, task = transaction_task
+    task_id = task.task_id
+    with factory.connect_session() as connection:
+        # Deliberately differ from CI transaction-local settings.
+        connection.execute(
+            text(
+                "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE"
+            )
+        )
+        connection.execute(text("SET lock_timeout = '1s'"))
+        connection.execute(text("SET statement_timeout = '2s'"))
+        connection.execute(text("SET synchronous_commit = off"))
+        connection.commit()
+
+        expected_error = (
+            pytest.raises(ValueError, match="validation failed")
+            if decision == "failure"
+            else nullcontext()
+        )
+        with expected_error:
+            with (
+                factory.get_sync_session(connection) as session,
+                SqlAlchemyUnitOfWork(session, profile="ci_write") as unit,
+            ):
+                _, outcomes = observe_transaction(session)
+                assert (
+                    session.scalar(text("SHOW transaction_isolation"))
+                    == "read committed"
+                )
+                assert session.scalar(text("SHOW lock_timeout")) == "5s"
+                assert session.scalar(text("SHOW statement_timeout")) == "5s"
+                assert session.scalar(text("SHOW synchronous_commit")) == "on"
+                session.add(task)
+                session.flush()
+                assert not is_visible(factory, task_id)
+                if decision != "unset":
+                    unit.commit()
+                    assert not is_visible(factory, task_id)
+                if decision == "failure":
+                    raise ValueError("validation failed")
+                assert outcomes == []
+
+        assert outcomes == ["commit" if decision == "commit" else "rollback"]
+        assert not session.in_transaction()
+        assert not connection.in_transaction()
+        assert connection.scalar(text("SHOW transaction_isolation")) == "serializable"
+        assert connection.scalar(text("SHOW lock_timeout")) == "1s"
+        assert connection.scalar(text("SHOW statement_timeout")) == "2s"
+        assert connection.scalar(text("SHOW synchronous_commit")) == "off"
+
+    assert connection.closed
+    assert is_visible(factory, task_id) is (decision == "commit")

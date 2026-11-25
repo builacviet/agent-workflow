@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, call
 import pytest
 from sqlalchemy.engine import Connection
 
+from agent_workflow import budget
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
@@ -186,3 +187,37 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
     reviews.return_value.list_reviews.assert_called_once_with("R2-TEST")
     reviews.return_value.list_events.assert_called_once_with("R2-TEST")
     uow.commit.assert_not_called()
+
+
+def test_ci_write_profile_uses_fixed_options_without_workflow_hooks(
+    scopes, monkeypatch
+):
+    connection, session, transaction, _ = scopes
+    refresh = Mock()
+    deadline = Mock()
+    options = Mock()
+    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
+    monkeypatch.setattr(budget, "operation_timeout", deadline)
+    monkeypatch.setattr(unit_of_work, "_set_repository_transaction_options", options)
+
+    with SqlAlchemyUnitOfWork(session, profile="ci_write") as unit:
+        options.assert_called_once_with(connection, read_only=False)
+        unit.commit()
+        transaction.commit.assert_not_called()
+
+    refresh.assert_not_called()
+    deadline.assert_not_called()
+    unit_of_work.event.listen.assert_not_called()
+    unit_of_work.event.remove.assert_not_called()
+    session.commit.assert_called_once_with()
+    session.close.assert_called_once_with()
+    transaction.commit.assert_called_once_with()
+
+
+def test_invalid_ci_profile_configuration_never_opens_transaction(scopes):
+    connection, session, _, _ = scopes
+    with pytest.raises(ValueError, match="cannot be read-only"):
+        SqlAlchemyUnitOfWork(session, profile="ci_write", read_only=True)
+    with pytest.raises(ValueError, match="Unknown transaction profile"):
+        SqlAlchemyUnitOfWork(session, profile="unknown")
+    connection.begin.assert_not_called()
