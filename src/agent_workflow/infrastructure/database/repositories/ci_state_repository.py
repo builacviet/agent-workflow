@@ -144,7 +144,9 @@ class SqlAlchemyCiAcknowledgmentRepository:
                     session.execute(
                         insert(processed)
                         .values(delivery_id=delivery_id)
-                        .on_conflict_do_nothing(index_elements=[processed.c.delivery_id])
+                        .on_conflict_do_nothing(
+                            index_elements=[processed.c.delivery_id]
+                        )
                     )
             return True
         except SQLAlchemyError:
