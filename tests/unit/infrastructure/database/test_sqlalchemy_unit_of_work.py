@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call
 
@@ -97,10 +98,18 @@ def test_pre_commit_deadline_failure_never_commits(scopes, monkeypatch):
 
 @pytest.mark.parametrize("explicit", [False, True])
 def test_scope_without_commit_rolls_back(scopes, explicit, monkeypatch):
-    _, session, transaction, _ = scopes
+    connection, session, transaction, timeline = scopes
     refresh = Mock()
+    deadline = Mock(side_effect=TimeoutError("deadline expired"))
+    timeline.attach_mock(deadline, "deadline")
     monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
-    with SqlAlchemyUnitOfWork(session) as unit:
+    monkeypatch.setattr(unit_of_work, "check_deadline", deadline)
+    expected = (
+        nullcontext()
+        if explicit
+        else pytest.raises(TimeoutError, match="deadline expired")
+    )
+    with expected, SqlAlchemyUnitOfWork(session) as unit:
         if explicit:
             unit.rollback()
             with pytest.raises(
@@ -110,16 +119,32 @@ def test_scope_without_commit_rolls_back(scopes, explicit, monkeypatch):
     session.commit.assert_not_called()
     transaction.commit.assert_not_called()
     transaction.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
     refresh.assert_called_once_with(session)
+    assert connection.begin.return_value.__exit__.call_args.args[0] is None
+    if explicit:
+        deadline.assert_not_called()
+    else:
+        deadline.assert_called_once_with()
+        calls = [entry[0] for entry in timeline.mock_calls]
+        assert calls.index("session.close") < calls.index("transaction.rollback")
+        assert calls.index("transaction_scope.__exit__") < calls.index("deadline")
 
 
-def test_exception_after_commit_request_leaves_rollback_to_transaction_scope(scopes):
+@pytest.mark.parametrize("request_commit", [False, True])
+def test_exception_leaves_rollback_to_transaction_scope(
+    scopes, monkeypatch, request_commit
+):
     connection, session, transaction, _ = scopes
     error = ValueError("command validation failed")
+    deadline = Mock(side_effect=TimeoutError("deadline expired"))
+    monkeypatch.setattr(unit_of_work, "check_deadline", deadline)
     unit = SqlAlchemyUnitOfWork(session)
     with pytest.raises(ValueError) as exc, unit:
-        unit.commit()
+        if request_commit:
+            unit.commit()
         raise error
+    deadline.assert_not_called()
     assert exc.value is error
     session.close.assert_called_once_with()
     session.commit.assert_not_called()
