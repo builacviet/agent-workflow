@@ -610,7 +610,9 @@ def failed_handoff(setup):
         operation.execute(request)
 
     TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute(task_id, PR, HEAD)
-    RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute(evidence(task_id, "FAILURE"))
+    RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute(
+        evidence(task_id, "FAILURE")
+    )
     return config, provide_handoff, request
 
 
@@ -1198,7 +1200,9 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup, monkeypa
             connection.execute(text("SELECT 1 / 0"))
 
     event.listen(engine, "commit", fail_commit)
-    with pytest.raises(PersistenceUnavailableError, match="PostgreSQL unit of work failed"):
+    with pytest.raises(
+        PersistenceUnavailableError, match="PostgreSQL unit of work failed"
+    ):
         record(evidence(task_id))
     event.remove(engine, "commit", fail_commit)
     assert observations(factory, task_id) == []
