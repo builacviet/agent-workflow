@@ -31,6 +31,7 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiAcknowledgmentRepository,
     SqlAlchemyCiStateRepository,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
@@ -54,7 +55,7 @@ class PostgresCiWriteScope:
 
 def create_ci_state_adapters(
     factory: PostgresFactory,
-) -> tuple[SqlAlchemyCiStateReader, SqlAlchemyCiStateRepository]:
+) -> tuple[SqlAlchemyCiStateReader, SqlAlchemyCiAcknowledgmentRepository]:
     """Wire adapters without a technology-specific dependency bundle.
 
     Resolve sessions at invocation time for correct late binding, without
@@ -65,7 +66,10 @@ def create_ci_state_adapters(
         return factory.get_scoped_session()
 
     provider: SessionScope = session_scope
-    return SqlAlchemyCiStateReader(provider), SqlAlchemyCiStateRepository(provider)
+    return (
+        SqlAlchemyCiStateReader(provider),
+        SqlAlchemyCiAcknowledgmentRepository(provider),
+    )
 
 
 def create_ci_reconcile_use_case(
