@@ -178,17 +178,13 @@ def production_watcher(monkeypatch):
         watcher.effects.attach_mock(operation, name)
         operation.side_effect = observe_effect(name)
 
-    @contextmanager
-    def transaction():
-        tx = Mock()
-        tx.inbox_delivery_exists.return_value = True
-        yield tx
-        # Model legacy ACK effects at commit, before the ownership post-check.
-        if tx.mark_processed.called:
-            ack(*tx.mark_processed.call_args.args)
+    def mark_processed(delivery_id):
+        # Model the durable ACK effect before the ownership post-check.
+        ack(delivery_id)
+        return True
 
     repository = Mock()
-    repository.transaction.side_effect = transaction
+    repository.mark_processed.side_effect = mark_processed
     monkeypatch.setattr(
         ci_deps, "create_ci_state_adapters", Mock(return_value=(reader, repository))
     )

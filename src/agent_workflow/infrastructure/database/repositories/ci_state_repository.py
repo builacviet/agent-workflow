@@ -4,7 +4,7 @@ Dependencies: SQLAlchemy Session and domain CI snapshots.
 """
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -31,44 +31,15 @@ SessionScope = Callable[[], AbstractContextManager[Session]]
 
 
 class SqlAlchemyCiStateRepository:
-    """Session-bound CI writes; deferred legacy scope remains for ACK only."""
+    """Persist CI business writes on the Application UoW's Session."""
 
-    def __init__(
-        self,
-        session_scope: SessionScope | None = None,
-        *,
-        session: Session | None = None,
-    ) -> None:
-        if (session_scope is None) == (session is None):
-            raise ValueError("CI repository requires exactly one Session or scope")
-        self._session_scope = session_scope
+    def __init__(self, session: Session) -> None:
         self._session = session
         self._record_binding: CITask | None = None
 
-    @property
-    def _active_session(self) -> Session:
-        if self._session is None:
-            raise RuntimeError("CI write requires an active repository transaction")
-        return self._session
-
-    @contextmanager
-    def transaction(self):
-        """Legacy ACK scope; Track and Record use the canonical UoW."""
-        if self._session_scope is None:
-            raise RuntimeError("CI repository is already session-bound")
-        try:
-            with self._session_scope() as session:
-                with session.begin():
-                    _set_repository_transaction_options(
-                        session.connection(), read_only=False
-                    )
-                    yield SqlAlchemyCiStateRepository(session=session)
-        except SQLAlchemyError:
-            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
-
     def load_for_tracking(self, task_id: str) -> CiTrackingSnapshot:
         """Lock Task before binding; keep both locked until the Use Case exits."""
-        session = self._active_session
+        session = self._session
         task = session.get(Task, task_id, with_for_update=True)
         # Fail closed when authorization is absent; no ORM entity escapes.
         if task is None:
@@ -84,7 +55,7 @@ class SqlAlchemyCiStateRepository:
 
     def track(self, task_id: str, pr_number: int, head_sha: str) -> None:
         """Persist a binding authorized by TrackCiTaskUseCase in this transaction."""
-        self._active_session.add(
+        self._session.add(
             CITask(
                 task_id=task_id,
                 pr_number=pr_number,
@@ -95,7 +66,7 @@ class SqlAlchemyCiStateRepository:
 
     def load_for_record(self, task_id: str) -> CiRecordSnapshot:
         """Lock Task then binding and read same-SHA failure before inserting."""
-        session = self._active_session
+        session = self._session
         task = session.get(Task, task_id, with_for_update=True)
         binding = session.get(CITask, task_id, with_for_update=True)
         self._record_binding = binding
@@ -126,7 +97,7 @@ class SqlAlchemyCiStateRepository:
 
     def record(self, evidence: CiEvidence, verdict: str) -> None:
         """Append trusted evidence and update locked binding, no policy decisions."""
-        session = self._active_session
+        session = self._session
         binding = self._record_binding
         if binding is None:
             raise RuntimeError("CI evidence write requires loaded binding")
@@ -146,22 +117,37 @@ class SqlAlchemyCiStateRepository:
         session.flush()
         binding.verdict = verdict
 
-    def inbox_delivery_exists(self, delivery_id: str) -> bool:
-        """Lock inbox row for ACK; missing rows are judged in Application."""
-        return (
-            self._active_session.scalar(
-                select(WebhookInboxRow.delivery_id)
-                .where(WebhookInboxRow.delivery_id == delivery_id)
-                .with_for_update(read=True, key_share=True)
-            )
-            is not None
-        )
 
-    def mark_processed(self, delivery_id: str) -> None:
-        """Idempotently persist ACK of an already authorized inbox delivery."""
-        processed = CIProcessedDelivery.__table__
-        self._active_session.execute(
-            insert(processed)
-            .values(delivery_id=delivery_id)
-            .on_conflict_do_nothing(index_elements=[processed.c.delivery_id])
-        )
+class SqlAlchemyCiAcknowledgmentRepository:
+    """Own one short transaction for a known signed delivery's settlement."""
+
+    def __init__(self, session_scope: SessionScope) -> None:
+        self._session_scope = session_scope
+
+    def mark_processed(self, delivery_id: str) -> bool:
+        """Lock the inbox row and idempotently settle it before returning."""
+        try:
+            with self._session_scope() as session:
+                with session.begin() as transaction:
+                    _set_repository_transaction_options(
+                        session.connection(), read_only=False
+                    )
+                    known = session.scalar(
+                        select(WebhookInboxRow.delivery_id)
+                        .where(WebhookInboxRow.delivery_id == delivery_id)
+                        .with_for_update(read=True, key_share=True)
+                    )
+                    if known is None:
+                        transaction.rollback()
+                        return False
+                    processed = CIProcessedDelivery.__table__
+                    session.execute(
+                        insert(processed)
+                        .values(delivery_id=delivery_id)
+                        .on_conflict_do_nothing(
+                            index_elements=[processed.c.delivery_id]
+                        )
+                    )
+            return True
+        except SQLAlchemyError:
+            raise PersistenceUnavailableError(_OPERATION_ERROR) from None
