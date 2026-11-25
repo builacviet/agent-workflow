@@ -1,8 +1,8 @@
 # Agent Workflow
 
-**Documentation status (2026-11-20):** reconciled against merged `main@70b333be08d87a90190cdb06cdde0a9b1cb635f3` (PR #98). This repository contains both **PostgreSQL-first R2 implementations** and **legacy Phase 3.1/SQLite paths awaiting separately approved retirement**. Merged code and CI do not by themselves prove a deployed end-to-end product.
+**Source baseline:** merged main after #123; PostgreSQL-only persistence, R2 migration in progress. [Current architecture](docs/architecture.md) distinguishes source, target and unverified deployment.
 
-**Agent onboarding:** Start with [AGENTS.md](AGENTS.md) and the [documentation map](docs/INDEX.md), then the current approved task and only its relevant source/tests. [CURRENT architecture](docs/architecture.md) and [TARGET CL-12 ADR](docs/adr/CL-12-architecture.md) are different; merged design decisions are **not** deployed features. For handoff use the [short template](docs/templates/handoff.md); the [historical log](docs/history/handoff-log.md) is not required startup context.
+**Coder:** read [AGENTS.md](AGENTS.md) + approved task; consult only relevant [standards](docs/conventions/engineering-standards.md) sections/source/tests. [Index](docs/INDEX.md) is optional; old ADRs/runbooks are historical.
 
 The `agent_workflow` package contains the FastMCP workflow engine, storage and
 trusted Prepare/Publish Git worker. The trusted worker lives at
@@ -26,7 +26,7 @@ as an alias. GitHub requests and review links use `builacviet/agent-workflow`.
 
 The `mcp`, `test` and `postgres` extras provide the dependencies used by the
 full test suite. The retired `my_wfc` and `order_service` source packages are no
-longer distributed; some legacy Phase 3.1 processes still retain SQLite state.
+longer distributed; SQLite runtime persistence has been retired.
 
 **Local admin is PostgreSQL-only:** `provision --file <authorized-task-spec.json>`,
 `seed-history`, `seed-synthetic` and `reset-synthetic` require a validated
@@ -41,37 +41,13 @@ optional validated `CORRELATION_ID` (PR #98).
 
 The server defaults to loopback port 8000 and `/mcp`; do not start it on a port occupied by another service. The MCP source exposes **seven core workflow tools** and **six additional Tech Lead integration tools** with a separate Auth0 scope. In legacy Bearer mode `ping` and `get_server_info` are public, but **Auth0 OAuth mode protects all `/mcp` calls** (including ping/info). The Tech Lead integration tools require the `wfc:techlead` scope in addition to the workflow scope; configured scope and credentials must be verified before access. No verified-effort attestation is configured, so a task requiring verified High review remains blocked unless separately resolved. See [Tech Lead MCP scopes](docs/guides/mcp-techlead-integrations.md).
 
-**Separate runtime paths:** The source `agent_workflow.mcp.server` now composes a
-PostgreSQL workflow provider; the tracked root `compose.yaml` still includes
-legacy SQLite volume/environment wiring for its MCP/webhook stack and is **not
-a verified PostgreSQL end-to-end deployment configuration**. The legacy
-`WFC_DB_PATH` setting applies only to those older paths, **not** to the R2
-admin CLI. For the root local Controller stack, inspect
-`.runtime/controller-mcp.env.example` and [runtime configuration inventory](.runtime/README.md)
-before changing any service. Compose uses an ignored env file; the Python
-server does not auto-load it. Do not point these services at production or an
-unapproved database; deployment/cutover requires separate Owner authorization.
+**Deployment warning:** root `compose.yaml` still contains obsolete WFC_DB_PATH and SQLite state mount; it is not a verified PostgreSQL deployment. Source requires configured PostgreSQL. Do not use old SQLite runbooks or activate services/tunnels without separate approval. See [runtime inventory](.runtime/README.md), [DB guide](docs/guides/postgres-connection.md), and [architecture](docs/architecture.md).
 
-TASK-001 historical state is imported as ESCALATED, two completed rounds, with original SHAs and unverified effort. This is historical import, not a new review execution. The synthetic fixture uses a dedicated real branch `poc/review-baseline`, pinned to the original baseline; main may advance independently. Existing copied fixture metadata requires explicit operator handling described below.
-
-- [Project rules](AGENTS.md)
-- [Architecture](docs/architecture.md)
-- [Historical WFC workflow guide](docs/my-wfc.md)
-- [Historical migration provenance and state-copy record](docs/migration-my-wfc.md)
-- [Handoff and actual verification evidence](docs/handoff.md)
-- [Review policy](docs/review-policy.md)
-- [Historical TASK-001 specification](docs/tasks/TASK-001.md)
-
-**Historical Phase 2.2 note:** The original migration branch was submitted for
-Tech Lead review; it is not today's active implementation branch. Codex does
-not approve its own work or merge branches. The TASK-001 fixture is historical
-and importing it does not execute a new review.
-
+TASK-001 is historical import, not new review execution. See [historical task](docs/tasks/TASK-001.md), [migration record](docs/migration-my-wfc.md), and [handoff archive](docs/history/handoff-log.md) only when needed.
 
 ## V1 Controller-stack MCP, webhook and ngrok
 
-Use the root `compose.yaml` for the active local MCP, webhook receiver, router,
-and optional ngrok tunnel. The old standalone POC Compose definition and
+Root `compose.yaml` describes the local MCP, webhook receiver, router and optional ngrok tunnel; validate the PostgreSQL configuration before any separately authorized activation. The old standalone POC Compose definition and
 `.runtime/mcp.env.example` have been retired; do not use legacy POC setup commands.
 MCP defaults to Auth0 in the **Controller stack configuration template**
 (`.runtime/controller-mcp.env.example`) and requires verified local Auth0 values.

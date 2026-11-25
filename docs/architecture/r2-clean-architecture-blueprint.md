@@ -1,6 +1,6 @@
-# R2 — Clean Architecture blueprint (design contract, not implemented)
+# R2 — Clean Architecture blueprint (target; partially implemented)
 
-**Status:** PROPOSED — Owner review. This document authorizes **no** code, policy, CI, DB, credential, deployment or runtime edits by itself.
+**Status:** Merged design reference; selected R2 slices implemented. See [current source status](../architecture.md). This document authorizes **no** code, policy, CI, DB, credential, deployment or runtime edits by itself.
 **Source baseline:** `main@33cebc9d7b53094477c48e24852cc06a936b9bbe`, after PR #88. **Reference:** [Owner's clean_arch_demo](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145).
 **Related:** [ADR-AW-001](../adr/AW-001-clean-architecture-governance.md), [current architecture](../architecture.md), [R2 quality and test contract](r2-quality-gates-and-tests.md), [worker runtime contract](worker-runtime-plugins.md), [development task contract](../templates/agent-task-contract.md).
 
@@ -16,7 +16,7 @@ Make workflow business behavior discoverable by **feature and use case**, as in 
 - `bootstrap` = process startup, registration and shutdown; may connect DI providers to Interfaces, but **per-request dependencies may flow directly from Composition to Presentation** (for example, via FastAPI `Depends`). It is not a compulsory hop for each request.
 - `workers/trusted_git` = separate trusted Prepare/Publish executable and GitHub App authority. Split by responsibility, **not** a second nested Domain/Application stack. Its sole credential boundary remains independent of credential-free Code/Test containers and workflow DB.
 
-**PostgreSQL-only R2 investment:** Legacy SQLite source remains in the as-built repository, but **is not an R2 feature, refactor, unit-test or 90% coverage target**. Do not write new SQLite repositories, compatibility facades, migration shims or tests. Inventory and retire remaining active SQLite entrypoints under a separately authorized bounded cleanup/cutover; retain only essential safety/operational checks until that path is actually retired. All new Domain/Application/Repository/UoW work is PostgreSQL-oriented. Remove dead SQLite code early when its consumers are safely replaced, rather than preserving it until the end of R2.
+**PostgreSQL-only R2:** SQLite runtime persistence retired in #113–119. Do not resurrect it or add coverage/compatibility shims. Retain historical evidence; actual deployment/cutover requires independent evidence. Use the [canonical DB access policy](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for all remaining DB migrations.
 
 **Source layout choice:** For the first R2 refactor PRs, retain the current `src/agent_workflow/` physical layout and `agent_workflow.*` import names. The final optional shorter tree `agent_workflow/` at repository root (removing **only `src/`**) is a distinct, late packaging change requiring isolated approval, CI, wheel/Docker checks and migration verification. Do not combine relocation with business refactoring.
 
@@ -102,7 +102,7 @@ agent-workflow/
 └── pyproject.toml
 ```
 
-The braces group *candidate* files, not a request to add empty placeholders. Existing source, `tests/test_r2_00_characterization.py`, and critical **PostgreSQL/security** tests remain as the behavior baseline until their replacements are verified. SQLite-only tests are **retirement inventory**, not targets for new tests, coverage repair or one-for-one porting; delete them alongside the approved removal of their obsolete code after checking active consumers. Do not rename imports, `src/`, `mcp` or the worker executable across the codebase in a single commit.
+The braces group *candidate* files, not a request to add empty placeholders. Existing source, `tests/test_r2_00_characterization.py`, and critical **PostgreSQL/security** tests remain as the behavior baseline until their replacements are verified. Retired SQLite-only tests are not coverage targets; retain tests of active PostgreSQL and security behavior. Do not rename imports, `src/`, `mcp` or the worker executable across the codebase in a single commit.
 
 ### Source-module ownership
 
@@ -123,97 +123,19 @@ For the single mandatory R2 DI/layer/file-header convention, see [Engineering St
 
 Example method names are design targets; **do not invent new workflow states, policy semantics, or public APIs** in a rename PR. In particular, published GitHub operations cannot be made atomic with a PostgreSQL transaction.
 
-## 3. Minimal executable coding style (illustrative skeletons, not a drop-in patch)
+## 3. Coding patterns (consult actual merged source)
 
 ### 3.1 Domain is pure; Application ports are Protocols
 
-```python
-# domain/review/policies.py
-from agent_workflow.domain.states import WorkflowStatus  # existing canonical enum
-
-def ensure_reviewable(status: WorkflowStatus, completed_rounds: int) -> None:
-    if status is not WorkflowStatus.READY_IN_REVIEW or completed_rounds >= 2:
-        raise ReviewNotAllowed()  # pure domain error, no database or HTTP
-
-# application/review/ports.py
-from typing import Protocol
-
-class IReviewRepository(Protocol):
-    def get_for_update(self, task_id: str) -> ReviewTask | None: ...
-    def save(self, review: ReviewTask) -> None: ...
-
-# application/shared/unit_of_work.py
-class IReviewUnitOfWork(Protocol):
-    reviews: IReviewRepository
-    def __enter__(self) -> "IReviewUnitOfWork": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
-    def commit(self) -> None: ...
-```
-
-The snippets omit imports, error fields and version-specific protocol details for readability. Production implementations must use typed DTOs and real entity models. **One UoW owns the transaction and exposes repositories bound to that same session**; use cases must not separately construct/commit a `Session`, and repositories must not create independent transactions. Use optimistic/row-level locking, idempotency and fencing where the existing workflow requires them.
-
-#### Fixed state values — canonical `StrEnum`, never scattered strings
-
-**Existing merged implementation:** [`src/agent_workflow/domain/states.py`](../../src/agent_workflow/domain/states.py) already defines `WorkflowStatus(StrEnum)`, `DispatchStatus(StrEnum)` and `CiVerdict(StrEnum)` (merged R2-01A-P1, PR #43). **Reuse these exact enum classes and values first**; R2 must not define shadow `WorkflowStatus`/`DispatchStatus`/`CiVerdict` classes elsewhere.
-
-```python
-from enum import StrEnum
-
-class ReviewResolution(StrEnum):  # example of a NEW closed set only, if approved
-    FIXED = "FIXED"
-    NOT_FIXED = "NOT_FIXED"
-    PARTIALLY_FIXED = "PARTIALLY_FIXED"
-    NOT_VERIFIED = "NOT_VERIFIED"
-
-# For current workflow states, import and use the existing canonical definition:
-# from agent_workflow.domain.states import WorkflowStatus
-# status = WorkflowStatus.READY_IN_REVIEW
-```
-
-- Define a `StrEnum` for **finite, stable domain state, verdict or resolution sets**. Members are named constants, with **explicit persisted/wire values**; never use `auto()` where a serialized value is a contract. Compare in Domain/Application with `WorkflowStatus.READY_IN_REVIEW`, not `"READY_IN_REVIEW"`; annotate entity state and UseCase commands/results with canonical enum types. Derive transition sets from enum members, not copy-pasted string arrays.
-- One **authoritative definition per bounded domain concept**. The eventual feature-sliced target may relocate `WorkflowStatus` under a canonical workflow feature, `DispatchStatus` under `domain/dispatch/states.py` and `CiVerdict` under `domain/ci/states.py`, but **move one at a time and temporarily re-export the SAME enum class** from the old path when necessary. Never redefine it under both paths; migrate consumer imports only with tests.
-- Preserve current exact uppercase enum `.value` values, database text, JSON/MCP representations and public DTO validation. Convert strings to enums once at the boundary; reject unknown values explicitly (no silent fallback). Existing Pydantic/`Literal` wire DTOs are **migration constraints**, not justification for a second Domain enum or unapproved public schema changes.
-- Do **not** use `StrEnum` for open-ended identifiers such as task/branch names, provider names, arbitrary plugin/role IDs or externally configured values. A new enum requires a genuine closed business set, not a style-only class.
-- Future CI architecture tests must reject: new raw known status-string comparisons/assignments inside migrated core, duplicate enum definitions/shadow classes, use of an untyped `str` for new closed Domain state, unknown-status acceptance, and accidental change of persisted/serialized enum values. Use focused positive/negative fixtures so legitimate transport parsing and legacy paths are not falsely marked PASS.
+Follow the [canonical layer and validation rules](../conventions/engineering-standards.md#r2-layer-di-and-file-header-contract). Domain has pure policies/errors, Application typed inputs/ports; Interfaces validate transport, Infrastructure maps persistent values. Reuse canonical `WorkflowStatus`, `DispatchStatus`, `CiVerdict` in [states.py](../../src/agent_workflow/domain/states.py) for finite states. Preserve exact persisted/wire values; no duplicate/shadow enums, unknown-state defaults or new enums for open identifiers. Use negative tests for new raw state strings, duplicate definitions and invalid states; no false passes for transport or legacy exceptions.
 
 ### 3.2 One named Use Case — small and auditable
 
-```python
-# application/review/use_cases/claim_review.py
-class ClaimReviewUseCase:
-    def __init__(self, uow: IReviewUnitOfWork, ci: ICiEvidencePort, clock: IClock):
-        self._uow = uow
-        self._ci = ci
-        self._clock = clock
-
-    def execute(self, command: ClaimReviewInput) -> ClaimReviewOutput:
-        with self._uow as tx:
-            review = tx.reviews.get_for_update(command.task_id)
-            # Require matching SHA, lease/round eligibility and verified CI
-            # in this transaction before changing the state.
-            result = claim_review_with_policy(review, command, self._ci, self._clock)
-            tx.reviews.save(review)
-            tx.commit()
-            return result
-```
-
-This is an **API shape**, not a validated implementation of `claim_review`. CI observation must not silently cross a race/transaction boundary. Real R2 code must specify whether CI evidence is read through the same trusted DB scope, use a pinned observation, and retest concurrent claims and idempotency. External effects occur outside the DB transaction with explicit reconciliation.
+Use [RegisterTaskHandoffUseCase](../../src/agent_workflow/application/task/use_cases/register_task_handoff.py) and [AuthorizeTaskUseCase](../../src/agent_workflow/application/task/use_cases/authorize_task.py) as merged business transaction examples. Inject existing `IUnitOfWork` and feature repository ports **separately** (not a repository-container UoW). Validate before entering the transaction, execute policy against locked facts, request commit only after successful mutation. Independent reads and atomic persistence writes need no Application UoW. See [three DB patterns](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership). CI observation must not cross a race boundary; preserve exact trusted binding, leases, idempotency and concurrency. External effects outside DB with reconciliation.
 
 ### 3.3 Composition reads like the demo
 
-```python
-# composition/database.py
-def create_db_factory(config: AppConfig) -> PostgresSessionFactory:
-    return PostgresSessionFactory(config)
-
-# composition/review_deps.py
-def create_claim_review_use_case(
-    uow: IReviewUnitOfWork, ci: ICiEvidencePort, clock: IClock
-) -> ClaimReviewUseCase:
-    return ClaimReviewUseCase(uow=uow, ci=ci, clock=clock)
-```
-
-These composition functions show the desired discoverability: `database.py` exposes factory/session providers, `review_deps.py` shows exactly what a review use case needs. The entrypoint holds the factory for a process/service lifetime and supplies a **fresh session/UoW per request or task**; it disposes engines on shutdown. No eager connection, global shared `Session`, hidden I/O on module import, or extra framework DI container. Existing MCP/Controller/Worker identity and lifetime validation must remain.
+See [task dependency assembly](../../src/agent_workflow/composition/task_deps.py), [handoff provider](../../src/agent_workflow/composition/task_handoff_deps.py) and [review reader wiring](../../src/agent_workflow/composition/review_deps.py). Fresh shared Session/UoW/repository per invocation where required; no eager session, hidden I/O, global Session or long-running Worker transaction. Caller owns factory lifecycle. Composition constructs/injects, caller invokes execute. Preserve exact MCP/Controller/Worker identity and lifetimes.
 
 ### 3.4 PostgreSQL factory, AppConfig and sync/async
 
@@ -247,12 +169,12 @@ Runtime adapter contracts stay plug-and-play for approved `Dev/Code` only. Intro
 | Slice | Scope and acceptance | Existing implementation to migrate | Gate |
 | --- | --- | --- | --- |
 | **R2-ARCH-00 Docs** (this PR) | Blueprint + quality/test contract; no runtime/CI edits | ADR-AW-001, tests, policy, demo | Documentation diff only |
-| **R2-01 Baseline** | Capture PostgreSQL-first architecture graph, exceptions, core test/type/complexity counts and public DTOs; inventory legacy SQLite solely for retirement, with no coverage remediation; no silent exemptions | `tests/test_r2_00_characterization.py`, `tests/test_architecture_policy.py`, `architecture/policy.toml` | Baseline report + negative regression fixtures; current CI remains required |
+| **R2-01 Baseline** | Capture PostgreSQL-first architecture graph, exceptions, core test/type/complexity counts and public DTOs; no silent exemptions | `tests/test_r2_00_characterization.py`, `tests/test_architecture_policy.py`, `architecture/policy.toml` | Baseline report + negative regression fixtures; current CI remains required |
 | **R2-02 Domain/Application** | Split task/review/CI policies and named use cases, typed DTOs/ports; legacy facade forwards temporarily | `domain/service.py` (~531 lines), `domain/contracts.py`, `mcp/tools.py` | Unit + characterization + contract tests, remove exact exemptions as fixed |
-| **R2-03 DB/Config** | PostgreSQL-only UoW owns transaction; repositories map typed entities; sync first, optional async factory; safe config consolidation; retire obsolete SQLite paths when no longer active | `storage/postgres_*.py`, `storage/repository.py`, `app_config.py`, `composition/postgres_*.py` | PostgreSQL concurrency, Alembic, rollback, scope/lifetime, failures |
+| **R2-03 DB/Config** | three canonical DB patterns; typed persistence; sync first, optional async only with consumer; safe config consolidation | `storage/postgres_*.py`, `infrastructure/database/`, `app_config.py`, `composition/postgres_*.py` | PostgreSQL concurrency, Alembic, rollback, scope/lifetime, failures |
 | **R2-04 Dispatch/Runtime** | Extract dispatch/reconcile use cases, backend/plugin interfaces; simplify trusted worker | `orchestration/*`, `runners/*`, `workers/trusted_git/*` | Sandbox, credential isolation, uncertain publish, leadership, pinned image tests |
 | **R2-05 Interfaces/Observability** | Move inbound MCP/webhook/CLI adapters under `interfaces/`; one `composition/`; JSON logging and service-scoped health | `mcp/*`, `bootstrap/*`, `integrations/webhook_http.py` | Auth0, webhook signature, secret-safe logs, correlation, health failure tests |
-| **R2-06 Quality enforcement** | Independently enable full mandatory quality gates on the completed PostgreSQL-first package; remove obsolete SQLite code/tests instead of remediating them to satisfy new coverage targets; retire only remaining temporary facades after consumers migrate | `.github/workflows/v1-ci.yml`, `pyproject.toml`, architecture/security tests | All five new gates plus existing exact-SHA, PG and sandbox gates |
+| **R2-06 Quality enforcement** | Independently enable full mandatory quality gates on the completed PostgreSQL-first package; retire only remaining temporary facades after consumers migrate | `.github/workflows/v1-ci.yml`, `pyproject.toml`, architecture/security tests | All five new gates plus existing exact-SHA, PG and sandbox gates |
 
 Slices are an ordering proposal, **not preauthorization of protected files**. Each source/CI/policy/schema change requires a specific approved Notion task (PRIMARY/RELATED/PROTECTED envelope), one Draft PR, exact-HEAD CI and independent TL review; **Owner alone merges**. Never modify CI/policy and use that same PR's green checks as independent evidence of gate integrity.
 

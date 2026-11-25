@@ -34,13 +34,13 @@ The demo additionally contains JSON logging with `ContextVar` request ID and `/h
 
 The existing exact-HEAD push/PR evidence, PostgreSQL migration/locks/leadership, sandbox and credential-isolation tests are **not replaceable** by these five checks.
 
-**Owner decision — PostgreSQL-only R2:** Do **not** spend R2 effort raising coverage, fixing types/style or writing new tests for legacy SQLite implementations that are marked for removal. The 90% line/branch target applies to **new and retained Domain/Application code**, including PostgreSQL-facing use cases; obsolete SQLite modules are a **deletion target**, not a denominator to artificially exclude. During transition, record legacy SQLite test/coverage debt separately without requiring remediation. Remove stale SQLite code/tests together after confirming active callers have been migrated and an explicit cleanup/cutover task authorizes removal. Preserve only necessary checks for an actually still-active legacy path until cutover; no one-for-one SQLite port or feature-parity work.
+**PostgreSQL-only R2:** SQLite runtime persistence was retired in #113–119. Do not resurrect it or its retired tests for coverage. All retained Domain/Application code counts; remove demonstrably dead code only through approved retirement, never exclude active code to meet a gate. Current full-tree enforcement remains R2-QG-01; see [as-built source](../architecture.md).
 
 ## 2. Five new CI gates — final, mandatory target
 
 | Gate | Intended command / implementation | Pass criteria |
 | --- | --- | --- |
-| **Q1 Ruff** | `python -m ruff format --check src tests alembic` + `python -m ruff check src tests alembic`, `select = ["E","F","I","C901"]`, `max-complexity = 10` | Final target: zero findings across the **retained** tree. First remove obsolete SQLite source/tests through approved retirement, rather than formatting/refactoring them solely to make the full-tree gate green. No catch-all excludes. |
+| **Q1 Ruff** | `python -m ruff format --check src tests alembic` + `python -m ruff check src tests alembic`, `select = ["E","F","I","C901"]`, `max-complexity = 10` | Final target: zero findings across the **retained** tree. No catch-all excludes. |
 | **Q2 Import Linter + AST** | `lint-imports` with root package `agent_workflow`; run `python -m pytest -q tests/test_architecture_policy.py tests/architecture` | No forbidden import (including nested parent alias, relative/`*` and direct imports), no stale exceptions, no new dependency cycles; positive composition imports remain valid |
 | **Q3 Mypy Strict** | `python -m mypy --strict src/agent_workflow` (final target) | Zero errors, including untyped use-case ctor/`execute`, leaking `Any`, unsafe generics; strict exceptions narrowly documented and approved |
 | **Q4 Core unit + coverage** | `python -m pytest -q`, then coverage run with `branch = true` and targets `agent_workflow.domain` + `agent_workflow.application` | All newly introduced use cases have meaningful tests; core line and branch coverage **each ≥90%**, including error/rollback logic; observed skip count documented |
@@ -65,7 +65,7 @@ python -m alembic -c alembic.ini upgrade head
 python -m alembic -c alembic.ini check
 ```
 
-The core coverage command above is **not sufficient to prove both packages separately hit 90%**; the actual gate must report and fail on **per-package line and branch** metrics (e.g., coverage JSON analyzed by a tested checker) and must run any tests needed for both core packages. Confirm coverage data includes the entire **retained, migrated** Domain/Application core, not just newly touched modules. A low-content/empty package must never satisfy a threshold vacuously. **Do not exclude active code to inflate the metric**; remove obsolete SQLite code under a separately reviewed cleanup PR instead.
+The core coverage command above is **not sufficient to prove both packages separately hit 90%**; the actual gate must report and fail on **per-package line and branch** metrics (e.g., coverage JSON analyzed by a tested checker) and must run any tests needed for both core packages. Confirm coverage data includes the entire **retained, migrated** Domain/Application core, not just newly touched modules. A low-content/empty package must never satisfy a threshold vacuously. **Do not exclude active code to inflate the metric**; remove only confirmed dead code under approved cleanup instead.
 
 ### R2 import-linter contract
 
@@ -100,7 +100,7 @@ Apply to the **`agent_workflow` namespace**, not demo's installable `src` namesp
 | `test_core_pure_imports` | `domain` or `application` imports SQLAlchemy/Pydantic/HTTP/MCP, including aliases and late imports; no undeclared grandfathering |
 | `test_layer_dependency_direction` | Application imports concrete adapters; interfaces import DB; infrastructure imports interfaces; composition-only concrete assembly restriction |
 | `test_feature_independence` | Direct unauthorized review→dispatch/task implementation imports instead of approved ports |
-| `test_ports_are_protocols_and_typed` | Non-`Protocol` ports, missing type annotations, `Any` dependencies in new UseCase constructors; keep sane style naming `IReviewRepository`/`IReviewUnitOfWork` |
+| `test_ports_are_protocols_and_typed` | Non-`Protocol` ports, missing type annotations, `Any` dependencies in new UseCase constructors; keep sane style naming `IReviewRepository`/`IUnitOfWork` |
 | `test_each_use_case_has_behavior_tests` | New `*UseCase` with no unit test **or** only an empty/smoke assertion; check scenario metadata/behavior manifest, not only filename existence |
 | `test_domain_entities_are_pure` | Entity inherits ORM/Pydantic base class or performs filesystem/network/DB I/O |
 | `test_canonical_strenum_states` | New closed Domain state is typed as raw `str`, known status comparisons use magic strings, duplicate/shadow `WorkflowStatus`/`DispatchStatus`/`CiVerdict` declarations appear, invalid wire enum value is silently accepted or an existing persisted value changes |
@@ -137,7 +137,7 @@ AST source tests should use fixture strings, synthetic package trees and determi
 | --- | --- |
 | Review | Exact-HEAD CI before claim and submission; lease expiration; two rounds max; duplicate payload idempotency; prior findings; effort verification; no stale SHA |
 | Dispatch | One-slot/claim fencing; no automatic relaunch on ambiguous Prepare/Publish; leadership loss fail-closed; persisted reconciliation after restart |
-| PostgreSQL | All repositories in a UoW share one session; atomic rollback on fault/deadline; concurrency claims; row locks/advisory ownership; correct isolation and idempotent migration |
+| PostgreSQL | Three DB patterns: read-only snapshot/close, independent write commit/rollback, shared-Session UoW atomic rollback at both deadline checkpoints; concurrency claims, row/advisory ownership, isolation and idempotent migration |
 | GitHub/Worker | GitHub App identity; ordinary branch push/Draft PR only; no Owner merge; sanitized credential-free Code/Test; image pin/digest, snapshot and symlink/denylist checks |
 | MCP/Webhook | Auth0 scopes/Bearer compatibility, fail-closed unauthorized access, signature replay/delivery uniqueness, transport payload bounds and stable tool/DTO signatures |
 | CI evidence | Verify actor/check provenance, SHA, run ID and sticky prior failures; no self-attestation; actual push and PR check status for the reviewed HEAD |
@@ -147,9 +147,9 @@ No new PR may silently remove or skip **retained-behavior** test categories to r
 
 ## 6. Gating rollout and evidence to capture
 
-1. **R2-01 baseline:** Run current full CI and standalone `ruff`/`lint-imports`/`mypy`/`coverage`/`alembic check` on a disposable environment; record actual failures and imports in a CI/PR report, **separating PostgreSQL/retained core from SQLite retirement debt; do not fix or increase SQLite coverage**. Do **not** declare missing tools PASS. Check whether `alembic check` autogenerate is meaningful on the existing SQLAlchemy metadata before enabling it.
-2. **During R2-02 through R2-05:** New or materially rewritten **retained** `domain`/`application` files must pass strict types, C901, import rules, unit cases and coverage immediately. Existing SQLite-specific debt is inventoried **only for removal**, not covered, reformatted or ported; replace its active consumers with PostgreSQL before retiring it. Any other remaining legacy exception must be explicit and shrinking. Never add broad `exclude`/`ignore_errors`/`pragma: no cover` or quietly remove active core code from coverage's denominator.
-3. **R2-06 full enforcement:** Retire obsolete SQLite implementations and their linked SQLite-only tests via approved changes instead of repairing them for quality metrics; eliminate remaining **retained-source** exemptions; make all five gates mandatory and green on the retained source/tests. Preserve the existing three CI **job categories** and exact-SHA/PG/security verification while replacing obsolete SQLite-specific assertions with relevant PostgreSQL checks. Add negative tests for the gate itself. `alembic check` must run with fresh, migrated PostgreSQL and the correct model metadata.
+1. **R2-01 baseline:** Run current full CI and standalone `ruff`/`lint-imports`/`mypy`/`coverage`/`alembic check` on a disposable environment; record actual failures and imports in a CI/PR report, **all retained source; retired SQLite is historical**. Do **not** declare missing tools PASS. Check whether `alembic check` autogenerate is meaningful on the existing SQLAlchemy metadata before enabling it.
+2. **During R2-02 through R2-05:** New or materially rewritten **retained** `domain`/`application` files must pass strict types, C901, import rules, unit cases and coverage immediately. Any other remaining legacy exception must be explicit and shrinking. Never add broad `exclude`/`ignore_errors`/`pragma: no cover` or quietly remove active core code from coverage's denominator.
+3. **R2-06 full enforcement:** eliminate remaining **retained-source** exemptions; make all five gates mandatory and green on the retained source/tests. Preserve the existing three CI **job categories** and exact-SHA/PG/security verification while replacing obsolete SQLite-specific assertions with relevant PostgreSQL checks. Add negative tests for the gate itself. `alembic check` must run with fresh, migrated PostgreSQL and the correct model metadata.
 4. **Review:** PR descriptions give `base SHA`, `head SHA`, exact commands/results, per-gate tests/skips, changed paths, protected approvals, coverage line+branch breakdown, Mypy/import debt and runtime risks. Review against real code/CI on the exact PR HEAD, never text claims alone.
 5. **Independent integrity:** When a PR changes `v1-ci.yml` or its policy/gates, require out-of-PR (trusted baseline or separately reviewed) negative canaries that prove malicious imports, untyped code, no tests, model drift and credentials are rejected. **Green CI from modified gates is not independent gate-integrity evidence.**
 

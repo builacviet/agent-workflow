@@ -1,6 +1,6 @@
 # PostgreSQL runtime connections — current R2 boundary
 
-**Source verified:** merged `main@70b333be08d87a90190cdb06cdde0a9b1cb635f3` (2026-11-20), after [PR #96](https://github.com/builacviet/agent-workflow/pull/96), [PR #97](https://github.com/builacviet/agent-workflow/pull/97) and [PR #98](https://github.com/builacviet/agent-workflow/pull/98). This guide describes an **implemented source/API boundary**, not a verified production deployment or a complete runtime cutover.
+**Source baseline:** merged main after [#123](https://github.com/builacviet/agent-workflow/pull/123), `e3688b6897a7db2c1d2e9600ea7b498eef7d9368`. PostgreSQL-only runtime persistence; no verified production activation. Read [canonical DB rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for selection and transaction ownership.
 
 ## Configuration and readiness
 
@@ -8,7 +8,7 @@
 
 `agent_workflow.infrastructure.database.session_factory.PostgresFactory.open(AppConfig.from_env())` explicitly creates a factory; importing the package never connects. The local `agent_workflow.admin` commands use `AppConfig.for_local_task_authorization()` and **require a loopback host** (`127.0.0.1` or `::1`). The factory checks the reviewed Alembic head **`pg02d_webhook_digest`** on opening (see `EXPECTED_REVISION` in source); schema missing, empty or mismatched fails closed with a sanitized persistence exception. No implicit DDL, auto migration or SQLite fallback.
 
-Use factory-scoped sessions and the explicit `SqlAlchemyUnitOfWork` for Task/Review Application operations. `commit()` requests a transaction decision; the physical PostgreSQL commit occurs on successful UoW context exit. Existing `PostgresFactory.transaction()` and `repository_session()` support other legacy PostgreSQL paths and preserve their own ownership rules. Connections close after use; the factory applies a bounded connect timeout and safe error translation. Do not change lock/isolation/transaction semantics without separate Owner approval.
+Use scoped Sessions for Readers and independent Repository writes; use the existing `SqlAlchemyUnitOfWork` for coordinated business transactions. `commit()` records intent; context exit checks deadlines, commits the Session, then commits the outer connection. Review context retains its read-only snapshot. Legacy `unit_of_work_session()` and remaining transaction APIs are migration inventory; do not remove while active callers remain. Preserve lock/isolation/timeout/durability and pinned leadership. Connections close after use; bounded connect timeout and sanitized errors remain.
 
 ## Local CLI contract
 
