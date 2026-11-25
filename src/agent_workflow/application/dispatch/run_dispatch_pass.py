@@ -1,4 +1,7 @@
-"""Run one dispatch under the Controller's existing leadership fence."""
+"""Layer: Application
+Responsibility: Run one dispatch under the Controller leadership fence.
+Dependencies: Dispatch ports, execution budget, and Domain rules.
+"""
 
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar
@@ -65,38 +68,38 @@ class RunDispatchPassUseCase:
             if claim is None:
                 return False
             try:
-                with dispatch_budget(claim["deadline"]):
+                with dispatch_budget(claim.deadline):
                     context = _fenced(
-                        guard, self._assignment.get_coder_assignment, claim["task_id"]
+                        guard, self._assignment.get_coder_assignment, claim.task_id
                     )
                     if (
-                        context["completed_review_rounds"] != claim["round_number"]
+                        context["completed_review_rounds"] != claim.round_number
                         or context["status"]
                         not in {
                             WorkflowStatus.AWAITING_HANDOFF,
                             WorkflowStatus.CHANGES_REQUESTED,
                         }
                         or (context["current_head_sha"] or context["base_sha"])
-                        != claim["input_sha"]
+                        != claim.input_sha
                     ):
                         raise BusinessRuleError("assignment changed after dispatch")
                     if (
-                        claim["task_id"] not in task_ids
-                        or context.get("task_id") != claim["task_id"]
+                        claim.task_id not in task_ids
+                        or context.get("task_id") != claim.task_id
                     ):
                         raise BusinessRuleError("dispatch outside exact task allowlist")
                     sha = _fenced(guard, self._execute_worker, claim, context, guard)
-                    _fenced(guard, self._dispatch.finish, claim["dispatch_id"], sha)
+                    _fenced(guard, self._dispatch.finish, claim.dispatch_id, sha)
             except BaseException:
                 # A lost owner leaves the active slot for operator reconciliation.
                 if leadership.is_held() is True:
-                    _fenced(guard, self._dispatch.block, claim["dispatch_id"])
+                    _fenced(guard, self._dispatch.block, claim.dispatch_id)
                 raise
             # Finish has committed. Cleanup failure leaves it terminal and the
             # engine pin available for explicit operator recovery.
             if self._on_finished is not None:
                 try:
-                    _fenced(guard, self._on_finished, claim["dispatch_id"])
+                    _fenced(guard, self._on_finished, claim.dispatch_id)
                 except Exception:
                     raise BusinessRuleError(
                         "terminal dispatch cleanup unconfirmed; reconcile engine pin"

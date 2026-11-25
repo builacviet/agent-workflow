@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
@@ -11,13 +12,13 @@ from agent_workflow.composition.postgres_controller import (
 from agent_workflow.integrations.github import WorkflowError
 
 SHA = "a" * 40
-CLAIM = {
-    "dispatch_id": "dispatch",
-    "task_id": "T",
-    "round_number": 0,
-    "input_sha": SHA,
-    "deadline": 9999999999.0,
-}
+CLAIM = DispatchClaim(
+    dispatch_id="dispatch",
+    task_id="T",
+    round_number=0,
+    input_sha=SHA,
+    deadline=9999999999.0,
+)
 ASSIGNMENT = {
     "task_id": "T",
     "completed_review_rounds": 0,
@@ -49,7 +50,7 @@ class Leader:
 def fixture(acquired=True):
     leader = Leader(acquired)
     dispatch = Mock()
-    dispatch.claim.return_value = CLAIM.copy()
+    dispatch.claim.return_value = CLAIM
     assignment = Mock()
     assignment.get_coder_assignment.return_value = ASSIGNMENT.copy()
     execute = Mock(return_value=SHA)

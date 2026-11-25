@@ -16,7 +16,9 @@ from test_agent_workflow import HEAD, NEXT, spec
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
@@ -26,6 +28,7 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.database.repositories import dispatch_ledger
 from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
     PostgresDispatchLedger,
 )
@@ -89,20 +92,24 @@ def test_concurrent_claim_block_restart_and_replay(setup):
     claims = [result for result in results if result is not None]
     assert len(claims) == 1
     claim = claims[0]
+    assert isinstance(claim, DispatchClaim)
+    assert claim.task_id == task_id
+    assert claim.round_number == 0
+    assert claim.deadline == 1060.0
     restarted = PostgresDispatchLedger(
         factory, role="dev", phase="code", clock=lambda: 1000.0
     )
-    assert restarted.is_pre_launch(claim["dispatch_id"])
-    restarted.retire_pre_launch(claim["dispatch_id"])
-    assert not restarted.is_pre_launch(claim["dispatch_id"])
-    restarted.block(claim["dispatch_id"])
+    assert restarted.is_pre_launch(claim.dispatch_id)
+    restarted.retire_pre_launch(claim.dispatch_id)
+    assert not restarted.is_pre_launch(claim.dispatch_id)
+    restarted.block(claim.dispatch_id)
     assert restarted.claim({task_id}, 60) is None
     with pytest.raises(BusinessRuleError):
-        restarted.finish(claim["dispatch_id"], HEAD)
-    restarted.acknowledge(claim["dispatch_id"])
+        restarted.finish(claim.dispatch_id, HEAD)
+    restarted.acknowledge(claim.dispatch_id)
     assert restarted.claim({task_id}, 60) is None
     with pytest.raises(BusinessRuleError):
-        restarted.acknowledge(claim["dispatch_id"])
+        restarted.acknowledge(claim.dispatch_id)
 
 
 def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
@@ -124,10 +131,10 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
         ).execute({task_id})
 
     assert not next_owner_attempt()
-    assert ledger.is_pre_launch(claim["dispatch_id"])
-    ledger.block(claim["dispatch_id"])
+    assert ledger.is_pre_launch(claim.dispatch_id)
+    ledger.block(claim.dispatch_id)
     assert not next_owner_attempt()
-    ledger.acknowledge(claim["dispatch_id"])
+    ledger.acknowledge(claim.dispatch_id)
     assert not next_owner_attempt()
     simulated_publish.assert_not_called()
 
@@ -144,14 +151,14 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
     def execute(claim, context, guard):
         assert context["task_id"] == task_id
         guard()
-        dispatch_id = claim["dispatch_id"]
+        dispatch_id = claim.dispatch_id
         ledger.retire_pre_launch(dispatch_id)
         if fault == "uncertain-publish":
             raise BusinessRuleError(diagnostic)
         ledger.record_runtime_evidence(
             dispatch_id,
             task_id,
-            claim["input_sha"],
+            claim.input_sha,
             "codex",
             "1.0",
             None,
@@ -162,9 +169,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         monkeypatch.setattr(
             budget,
             "time",
-            SimpleNamespace(
-                time=lambda: claim["deadline"] + 1, monotonic=time.monotonic
-            ),
+            SimpleNamespace(time=lambda: claim.deadline + 1, monotonic=time.monotonic),
         )
         return HEAD
 
@@ -219,9 +224,9 @@ def test_evidence_identity_and_finish(setup):
     ledger, _, task_id = setup
     claim = ledger.claim({task_id}, 60)
     evidence = (
-        claim["dispatch_id"],
+        claim.dispatch_id,
         task_id,
-        claim["input_sha"],
+        claim.input_sha,
         "codex",
         "1.0",
         None,
@@ -230,18 +235,16 @@ def test_evidence_identity_and_finish(setup):
         HEAD,
     )
     with pytest.raises(BusinessRuleError):
-        ledger.record_runtime_evidence(
-            claim["dispatch_id"], task_id, NEXT, *evidence[3:]
-        )
+        ledger.record_runtime_evidence(claim.dispatch_id, task_id, NEXT, *evidence[3:])
     with pytest.raises(BusinessRuleError):
-        ledger.record_runtime_evidence(claim["dispatch_id"], "wrong", *evidence[2:])
+        ledger.record_runtime_evidence(claim.dispatch_id, "wrong", *evidence[2:])
     ledger.record_runtime_evidence(*evidence)
     with pytest.raises(IntegrityError):
         ledger.record_runtime_evidence(*evidence)
     with pytest.raises(BusinessRuleError, match="HEAD mismatch"):
-        ledger.finish(claim["dispatch_id"], NEXT)
+        ledger.finish(claim.dispatch_id, NEXT)
     assert ledger.claim({task_id}, 60) is None
-    ledger.finish(claim["dispatch_id"], HEAD)
+    ledger.finish(claim.dispatch_id, HEAD)
     assert ledger.claim({task_id}, 60) is None
 
 
@@ -292,9 +295,9 @@ def test_new_round_and_sha_are_new_identity(setup):
     ledger, factory, task_id = setup
     first = ledger.claim({task_id}, 60)
     ledger.record_runtime_evidence(
-        first["dispatch_id"],
+        first.dispatch_id,
         task_id,
-        first["input_sha"],
+        first.input_sha,
         "codex",
         "1",
         None,
@@ -302,7 +305,7 @@ def test_new_round_and_sha_are_new_identity(setup):
         "d" * 64,
         HEAD,
     )
-    ledger.finish(first["dispatch_id"], HEAD)
+    ledger.finish(first.dispatch_id, HEAD)
     with factory.transaction() as conn:
         conn.execute(
             text(
@@ -311,8 +314,8 @@ def test_new_round_and_sha_are_new_identity(setup):
             {"sha": HEAD, "task": task_id},
         )
     second = ledger.claim({task_id}, 60)
-    assert second["round_number"] == 1 and second["input_sha"] == HEAD
-    assert second["dispatch_id"] != first["dispatch_id"]
+    assert second.round_number == 1 and second.input_sha == HEAD
+    assert second.dispatch_id != first.dispatch_id
 
 
 def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
@@ -320,7 +323,7 @@ def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
     claim = ledger.claim({task_id}, 60)
     evidence = (
         task_id,
-        claim["input_sha"],
+        claim.input_sha,
         "codex",
         "1",
         None,
@@ -333,35 +336,42 @@ def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
     with factory.transaction() as conn:
         conn.execute(
             text("UPDATE agent_dispatches SET role='other' WHERE dispatch_id=:id"),
-            {"id": claim["dispatch_id"]},
+            {"id": claim.dispatch_id},
         )
     with pytest.raises(BusinessRuleError, match="no active matching dispatch"):
-        ledger.record_runtime_evidence(claim["dispatch_id"], *evidence)
+        ledger.record_runtime_evidence(claim.dispatch_id, *evidence)
     with pytest.raises(BusinessRuleError, match="lease lost"):
-        ledger.finish(claim["dispatch_id"], HEAD)
+        ledger.finish(claim.dispatch_id, HEAD)
     with factory.transaction() as conn:
         assert (
             conn.execute(
                 text("SELECT status FROM agent_dispatches WHERE dispatch_id=:id"),
-                {"id": claim["dispatch_id"]},
+                {"id": claim.dispatch_id},
             ).scalar_one()
             == "ACTIVE"
         )
 
 
 def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
-    from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
-        DevClaim,
-    )
-
     ledger, factory, task_id = setup
+    project = dispatch_ledger._project_claim
 
-    def fail_validation(*args, **kwargs):
-        raise RuntimeError("injected failure after flush")
+    def fail_validation(row):
+        return project(
+            SimpleNamespace(
+                dispatch_id=row.dispatch_id,
+                task_id=None,
+                input_sha=row.input_sha,
+                deadline=row.deadline,
+                round_number=row.round_number,
+            )
+        )
 
     with monkeypatch.context() as patch:
-        patch.setattr(DevClaim, "model_validate", fail_validation)
-        with pytest.raises(RuntimeError, match="injected failure"):
+        patch.setattr(dispatch_ledger, "_project_claim", fail_validation)
+        with pytest.raises(
+            CorruptedPersistenceDataError, match="invalid persisted dispatch claim"
+        ):
             ledger.claim({task_id}, 60)
     with factory.transaction() as conn:
         assert (
@@ -410,20 +420,20 @@ def test_finish_without_evidence_fails_and_retains_slot(setup):
     ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     with pytest.raises(BusinessRuleError, match="runtime evidence required"):
-        ledger.finish(claim["dispatch_id"], HEAD)
+        ledger.finish(claim.dispatch_id, HEAD)
     with factory.transaction() as conn:
         row = conn.execute(
             text(
                 "SELECT status,slot,result_sha FROM agent_dispatches WHERE dispatch_id=:id"
             ),
-            {"id": claim["dispatch_id"]},
+            {"id": claim.dispatch_id},
         ).one()
         assert tuple(row) == ("ACTIVE", 1, None)
     assert ledger.claim({task_id}, 60) is None
     ledger.record_runtime_evidence(
-        claim["dispatch_id"],
+        claim.dispatch_id,
         task_id,
-        claim["input_sha"],
+        claim.input_sha,
         "codex",
         "1",
         None,
@@ -431,13 +441,13 @@ def test_finish_without_evidence_fails_and_retains_slot(setup):
         "d" * 64,
         HEAD,
     )
-    ledger.finish(claim["dispatch_id"], HEAD)
+    ledger.finish(claim.dispatch_id, HEAD)
     with factory.transaction() as conn:
         row = conn.execute(
             text(
                 "SELECT status,slot,result_sha FROM agent_dispatches WHERE dispatch_id=:id"
             ),
-            {"id": claim["dispatch_id"]},
+            {"id": claim.dispatch_id},
         ).one()
         assert tuple(row) == ("DONE", None, HEAD)
 
@@ -446,9 +456,9 @@ def test_tampered_evidence_identity_keeps_slot(setup):
     ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     ledger.record_runtime_evidence(
-        claim["dispatch_id"],
+        claim.dispatch_id,
         task_id,
-        claim["input_sha"],
+        claim.input_sha,
         "codex",
         "1",
         None,
@@ -461,10 +471,10 @@ def test_tampered_evidence_identity_keeps_slot(setup):
             text(
                 "UPDATE agent_execution_evidence SET input_sha=:sha WHERE dispatch_id=:id"
             ),
-            {"sha": NEXT, "id": claim["dispatch_id"]},
+            {"sha": NEXT, "id": claim.dispatch_id},
         )
     with pytest.raises(BusinessRuleError, match="identity mismatch"):
-        ledger.finish(claim["dispatch_id"], HEAD)
+        ledger.finish(claim.dispatch_id, HEAD)
     assert ledger.claim({task_id}, 60) is None
 
 
@@ -534,6 +544,19 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
         def execute(claim, context):
             leadership_guard()
+            with observer.transaction() as conn:
+                persisted = (
+                    conn.execute(
+                        text(
+                            "SELECT dispatch_id,task_id,input_sha,deadline,round_number "
+                            "FROM agent_dispatches WHERE dispatch_id=:id"
+                        ),
+                        {"id": claim["dispatch_id"]},
+                    )
+                    .mappings()
+                    .one()
+                )
+            assert claim == dict(persisted)
             dispatch_ids.append(claim["dispatch_id"])
             assert claim["task_id"] == task_id
             assert deps.dispatch.is_pre_launch(claim["dispatch_id"])

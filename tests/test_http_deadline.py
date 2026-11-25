@@ -12,6 +12,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import cleanup_budget, dispatch_budget
 from agent_workflow.integrations.github import WorkflowError
@@ -141,13 +142,13 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback):
     ports = Mock()
     ports.leadership.try_acquire.return_value = True
     ports.leadership.is_held.return_value = True
-    ports.ledger.claim.return_value = {
-        "dispatch_id": "dispatch",
-        "task_id": task_id,
-        "round_number": 0,
-        "input_sha": sha,
-        "deadline": time.time() + 5,
-    }
+    ports.ledger.claim.return_value = DispatchClaim(
+        dispatch_id="dispatch",
+        task_id=task_id,
+        round_number=0,
+        input_sha=sha,
+        deadline=time.time() + 5,
+    )
     ports.assignment.get_coder_assignment.return_value = {
         "task_id": task_id,
         "status": "AWAITING_HANDOFF",

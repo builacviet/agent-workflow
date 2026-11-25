@@ -7,11 +7,7 @@ from collections.abc import Callable
 from typing import cast
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.dispatch.ports import (
-    CoderAssignment,
-    DispatchClaim,
-    IDispatchRepository,
-)
+from agent_workflow.application.dispatch.ports import CoderAssignment, DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
@@ -58,7 +54,7 @@ def create_dispatch_use_case(
 
     return RunDispatchPassUseCase(
         dependencies.leadership,
-        cast(IDispatchRepository, dependencies.dispatch),
+        dependencies.dispatch,
         assignment,
         execute_worker,
         on_finished=finished,

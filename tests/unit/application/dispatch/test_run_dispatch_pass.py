@@ -1,9 +1,11 @@
+from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
 
 from agent_workflow import budget
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
@@ -17,13 +19,13 @@ def ports():
     effects = Mock()
     effects.leadership.try_acquire.return_value = True
     effects.leadership.is_held.return_value = True
-    effects.dispatch.claim.return_value = {
-        "dispatch_id": "pass",
-        "task_id": "T",
-        "input_sha": HEAD,
-        "deadline": 9_999_999_999.0,
-        "round_number": 1,
-    }
+    effects.dispatch.claim.return_value = DispatchClaim(
+        dispatch_id="pass",
+        task_id="T",
+        input_sha=HEAD,
+        deadline=9_999_999_999.0,
+        round_number=1,
+    )
     effects.assignment.get_coder_assignment.return_value = {
         "task_id": "T",
         "status": "CHANGES_REQUESTED",
@@ -48,6 +50,8 @@ def use_case(ports):
 def test_success_fences_each_effect_and_cleans_up_before_release(ports):
     claim = ports.dispatch.claim.return_value
     assignment = ports.assignment.get_coder_assignment.return_value
+    with pytest.raises(FrozenInstanceError):
+        claim.task_id = "OTHER"
     guards = []
 
     def worker(actual_claim, actual_assignment, guard):
@@ -134,7 +138,9 @@ def test_ineligible_task_blocks_before_worker_callback(
 
 
 def test_expired_claim_stops_before_assignment_and_releases_budget(ports):
-    ports.dispatch.claim.return_value["deadline"] = 0.0
+    ports.dispatch.claim.return_value = replace(
+        ports.dispatch.claim.return_value, deadline=0.0
+    )
 
     with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
         use_case(ports).execute({"T"})
@@ -155,7 +161,9 @@ def test_worker_deadline_allows_cleanup_and_blocks_before_release(ports, monkeyp
         "time",
         SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.monotonic),
     )
-    ports.dispatch.claim.return_value["deadline"] = 105.0
+    ports.dispatch.claim.return_value = replace(
+        ports.dispatch.claim.return_value, deadline=105.0
+    )
 
     def worker(*_):
         assert operation_timeout(10.0) == 5.0

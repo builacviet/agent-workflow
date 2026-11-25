@@ -16,6 +16,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
@@ -318,13 +319,13 @@ def test_single_factory_lazy_worker_and_terminal_order(
     deps = compose_postgres_controller(factory)
     events = []
     held = True
-    claim = {
-        "dispatch_id": "a" * 32,
-        "task_id": "T",
-        "input_sha": INPUT,
-        "round_number": 0,
-        "deadline": 9999999999.0,
-    }
+    claim = DispatchClaim(
+        dispatch_id="a" * 32,
+        task_id="T",
+        input_sha=INPUT,
+        round_number=0,
+        deadline=9999999999.0,
+    )
     context = {
         "task_id": "T",
         "status": "AWAITING_HANDOFF",
@@ -335,7 +336,8 @@ def test_single_factory_lazy_worker_and_terminal_order(
     if outcome == "wrong_head":
         context["base_sha"] = HEAD
     if outcome == "wrong_task":
-        claim["task_id"] = context["task_id"] = "OTHER"
+        claim = replace(claim, task_id="OTHER")
+        context["task_id"] = "OTHER"
     if outcome == "wrong_assignment_task":
         context["task_id"] = "OTHER"
     monkeypatch.setattr(deps.leadership, "try_acquire", lambda: outcome != "contended")
@@ -354,7 +356,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
 
     def get_assignment(_service, task_id):
         nonlocal held
-        assert held and task_id == claim["task_id"]
+        assert held and task_id == claim.task_id
         if outcome == "leadership_lost_after_assignment":
             held = False
         return context
@@ -387,7 +389,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
 
         def clear(dispatch_id):
             leadership_guard()
-            assert dispatch_id == claim["dispatch_id"] and events[-1] == "finish"
+            assert dispatch_id == claim.dispatch_id and events[-1] == "finish"
             events.append("clear")
             if outcome == "cleanup_error":
                 raise RuntimeError("pin retained")
@@ -499,13 +501,13 @@ def test_pg_once_runs_native_dev_stages(
     stage = (
         Path(config["tasks"]["T"]["worktree"]) / ".runtime" / "dispatch" / dispatch_id
     )
-    claim = {
-        "dispatch_id": dispatch_id,
-        "task_id": "T",
-        "input_sha": base_sha,
-        "round_number": 0,
-        "deadline": coder_runtime.time.time() + 120,
-    }
+    claim = DispatchClaim(
+        dispatch_id=dispatch_id,
+        task_id="T",
+        input_sha=base_sha,
+        round_number=0,
+        deadline=coder_runtime.time.time() + 120,
+    )
     context_paths = (handoff_path, "src/value.txt")
     snapshot = GetReviewContextOutput(
         task=ReviewTask(

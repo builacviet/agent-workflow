@@ -1,10 +1,15 @@
-"""Contracts for one leadership-gated dispatch pass."""
+"""Layer: Application
+Responsibility: Define contracts for a leadership-gated dispatch pass.
+Dependencies: Python standard library only.
+"""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
 
-class DispatchClaim(TypedDict):
+@dataclass(frozen=True, slots=True)
+class DispatchClaim:
     dispatch_id: str
     task_id: str
     input_sha: str
