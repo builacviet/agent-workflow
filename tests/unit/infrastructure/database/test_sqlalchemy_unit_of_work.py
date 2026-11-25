@@ -189,7 +189,9 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
     uow.commit.assert_not_called()
 
 
-def test_ci_write_profile_uses_fixed_options_without_workflow_hooks(scopes, monkeypatch):
+def test_ci_write_profile_uses_fixed_options_without_workflow_hooks(
+    scopes, monkeypatch
+):
     connection, session, transaction, _ = scopes
     refresh = Mock()
     deadline = Mock()
