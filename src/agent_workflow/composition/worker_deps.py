@@ -14,6 +14,9 @@ from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
+from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
+    PostgresDispatchLedger,
+)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -21,7 +24,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
 )
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
-from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 
 
 def compose_postgres_worker(

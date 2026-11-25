@@ -26,12 +26,14 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
+    PostgresDispatchLedger,
+)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
 
 
 @pytest.fixture
@@ -348,7 +350,9 @@ def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
 
 
 def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
-    from agent_workflow.storage.postgres_dispatch import DevClaim
+    from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
+        DevClaim,
+    )
 
     ledger, factory, task_id = setup
 
@@ -385,7 +389,7 @@ def test_claim_deadline_before_outer_commit_releases_slot(
 
     with monkeypatch.context() as patch:
         patch.setattr(
-            "agent_workflow.storage.postgres_dispatch.check_deadline",
+            "agent_workflow.infrastructure.database.repositories.dispatch_ledger.check_deadline",
             fail_at_deadline,
         )
         with pytest.raises(TimeoutError, match="deadline expired"):
