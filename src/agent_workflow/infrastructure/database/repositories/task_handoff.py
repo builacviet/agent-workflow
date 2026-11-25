@@ -5,7 +5,7 @@ Dependencies: Task handoff contracts, canonical mappings and SQLAlchemy Session.
 
 import json
 
-from sqlalchemy import event, exists, select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -23,23 +23,11 @@ from agent_workflow.infrastructure.database.models import (
     Task,
     TaskEvent,
 )
-from agent_workflow.infrastructure.database.unit_of_work import (
-    set_workflow_query_timeout,
-)
-
-
-def _before_commit(session: Session) -> None:
-    # Closing the evidence savepoint is not the Session's final commit.
-    if not session.in_nested_transaction():
-        set_workflow_query_timeout(session)
 
 
 class PostgresHandoffRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
-        # Flush and statement deadlines are enforced by the Unit of Work.
-        # Refresh the budget at commit even after the last explicit flush.
-        event.listen(session, "before_commit", _before_commit)
 
     def lock_task(self, task_id: str) -> HandoffTask | None:
         row = self._session.scalar(

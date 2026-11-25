@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 from sqlalchemy.engine import Connection
@@ -42,10 +42,13 @@ def scopes(monkeypatch):
     return connection, session, transaction, timeline
 
 
-def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes):
+def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes, monkeypatch):
     connection, session, transaction, timeline = scopes
     deadline = Mock()
+    refresh = Mock()
     timeline.attach_mock(deadline, "deadline")
+    timeline.attach_mock(refresh, "refresh")
+    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
     concrete = SqlAlchemyUnitOfWork(session, after_session_commit=deadline)
     unit: IUnitOfWork = concrete
     connection.begin.assert_not_called()
@@ -58,7 +61,9 @@ def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes):
     session.commit.assert_called_once_with()
     transaction.commit.assert_called_once_with()
     transaction.rollback.assert_not_called()
-    calls = [call[0] for call in timeline.mock_calls]
+    assert refresh.call_args_list == [call(session), call(session)]
+    calls = [entry[0] for entry in timeline.mock_calls]
+    assert calls[calls.index("session.commit") - 1] == "refresh"
     positions = [
         calls.index(name)
         for name in (
@@ -72,9 +77,28 @@ def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes):
     assert positions == sorted(positions)
 
 
+def test_pre_commit_deadline_failure_never_commits(scopes, monkeypatch):
+    connection, session, transaction, _ = scopes
+    refresh = Mock(side_effect=[None, TimeoutError("deadline expired")])
+    deadline = Mock()
+    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
+    with pytest.raises(TimeoutError, match="deadline expired"):
+        with SqlAlchemyUnitOfWork(session, after_session_commit=deadline) as unit:
+            unit.commit()
+
+    assert refresh.call_args_list == [call(session), call(session)]
+    session.commit.assert_not_called()
+    deadline.assert_not_called()
+    session.close.assert_called_once_with()
+    transaction.commit.assert_not_called()
+    assert connection.begin.return_value.__exit__.call_args.args[0] is TimeoutError
+
+
 @pytest.mark.parametrize("explicit", [False, True])
-def test_scope_without_commit_rolls_back(scopes, explicit):
+def test_scope_without_commit_rolls_back(scopes, explicit, monkeypatch):
     _, session, transaction, _ = scopes
+    refresh = Mock()
+    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
     with SqlAlchemyUnitOfWork(session) as unit:
         if explicit:
             unit.rollback()
@@ -85,6 +109,7 @@ def test_scope_without_commit_rolls_back(scopes, explicit):
     session.commit.assert_not_called()
     transaction.commit.assert_not_called()
     transaction.rollback.assert_called_once_with()
+    refresh.assert_called_once_with(session)
 
 
 def test_exception_after_commit_request_leaves_rollback_to_transaction_scope(scopes):

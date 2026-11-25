@@ -108,8 +108,13 @@ def test_observer_sees_only_explicit_commit_and_connection_closes(
     assert is_visible(factory, task_id) is (decision == "commit")
 
 
+@pytest.mark.parametrize(
+    "explicit_flush", [True, False], ids=["before-commit", "during-commit"]
+)
 def test_deadline_after_orm_flush_prevents_physical_commit(
-    transaction_task: tuple[PostgresFactory, Task], monkeypatch: pytest.MonkeyPatch
+    transaction_task: tuple[PostgresFactory, Task],
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_flush: bool,
 ) -> None:
     factory, task = transaction_task
     task_id = task.task_id
@@ -137,6 +142,8 @@ def test_deadline_after_orm_flush_prevents_physical_commit(
 
                 event.listen(session, "after_flush", expire_after_flush)
                 session.add(task)
+                if explicit_flush:
+                    session.flush()
                 unit.commit()
 
     assert outcomes == ["rollback"]

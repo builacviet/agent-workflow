@@ -119,6 +119,7 @@ class SqlAlchemyUnitOfWork:
                     refresh_timeout()
                     yield
                     if self._decision == "commit":
+                        refresh_timeout()
                         session.commit()
                         if self._after_session_commit is not None:
                             self._after_session_commit()
