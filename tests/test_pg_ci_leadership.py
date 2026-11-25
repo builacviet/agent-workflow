@@ -206,9 +206,7 @@ def production_watcher(monkeypatch):
         uow.__exit__.side_effect = persist
         yield uow, tx
 
-    monkeypatch.setattr(
-        ci_deps, "PostgresCiWriteScope", Mock(return_value=write_scope)
-    )
+    monkeypatch.setattr(ci_deps, "PostgresCiWriteScope", Mock(return_value=write_scope))
     return watcher
 
 
