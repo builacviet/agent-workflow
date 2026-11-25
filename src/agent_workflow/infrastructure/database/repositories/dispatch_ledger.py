@@ -27,6 +27,9 @@ from agent_workflow.infrastructure.database.models import (
     Task,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.database.unit_of_work import (
+    set_workflow_query_timeout,
+)
 
 _PRE_LAUNCH = "PRE_LAUNCH"
 _BLOCKED = "Operator reconciliation required; do not retry automatically"
@@ -163,19 +166,35 @@ class PostgresDispatchLedger:
         return None
 
     def is_pre_launch(self, dispatch_id: str) -> bool:
-        with self._transaction() as session:
-            return (
-                session.execute(
-                    select(AgentDispatch.dispatch_id).where(
-                        AgentDispatch.dispatch_id == dispatch_id,
-                        AgentDispatch.role == self.role,
-                        AgentDispatch.phase == self.phase,
-                        AgentDispatch.slot == 1,
-                        AgentDispatch.detail == _PRE_LAUNCH,
-                    )
-                ).first()
-                is not None
-            )
+        """Read persisted pre-launch evidence without committing a transaction."""
+        check_deadline()
+        with (
+            self.factory.get_scoped_session() as session,
+            session.begin() as transaction,
+        ):
+            try:
+                session.connection().execute(
+                    text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
+                )
+                set_workflow_query_timeout(session)
+                result = (
+                    session.execute(
+                        select(AgentDispatch.dispatch_id).where(
+                            AgentDispatch.dispatch_id == dispatch_id,
+                            AgentDispatch.role == self.role,
+                            AgentDispatch.phase == self.phase,
+                            AgentDispatch.slot == 1,
+                            AgentDispatch.detail == _PRE_LAUNCH,
+                        )
+                    ).first()
+                    is not None
+                )
+                check_deadline()
+            finally:
+                if transaction.is_active:
+                    transaction.rollback()
+        check_deadline()
+        return result
 
     def retire_pre_launch(self, dispatch_id: str) -> None:
         with self._transaction() as session:
