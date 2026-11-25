@@ -131,9 +131,7 @@ def test_context_preserves_snapshot_and_closes_borrowed_read_scope(
     assert use_case.execute(request).task.current_head_sha == HEAD
 
 
-def test_review_context_sql_statement_budget(
-    context_db: ContextDatabase,
-) -> None:
+def test_review_context_sql_statement_budget(context_db: ContextDatabase) -> None:
     factory, task_id = context_db
     with create_authorize_task_use_case(factory) as operation:
         operation.execute(
