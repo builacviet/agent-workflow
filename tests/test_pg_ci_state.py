@@ -63,7 +63,7 @@ from agent_workflow.infrastructure.database.repositories.ci_state_reader import 
     SqlAlchemyCiStateReader,
 )
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
-    SqlAlchemyCiStateRepository,
+    SqlAlchemyCiAcknowledgmentRepository,
 )
 from agent_workflow.infrastructure.database.repositories.task_handoff import (
     PostgresHandoffRepository,
@@ -150,7 +150,7 @@ def test_ci_dependencies_resolve_scoped_session_after_composition():
 
     reader, repository = create_ci_state_adapters(factory)
     assert isinstance(reader, SqlAlchemyCiStateReader)
-    assert isinstance(repository, SqlAlchemyCiStateRepository)
+    assert isinstance(repository, SqlAlchemyCiAcknowledgmentRepository)
     assert reader._session_scope is repository._session_scope
 
     original_scope.assert_not_called()
@@ -1172,7 +1172,7 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup, monkeypa
 
     monkeypatch.setattr(factory, "get_scoped_session", session_scope)
     reader = SqlAlchemyCiStateReader(session_scope)
-    repository = SqlAlchemyCiStateRepository(session_scope)
+    repository = SqlAlchemyCiAcknowledgmentRepository(session_scope)
     track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
@@ -1207,6 +1207,19 @@ def test_ci_reader_sessions_and_repository_commit_rollback_retry(setup, monkeypa
     event.remove(engine, "commit", fail_commit)
     assert observations(factory, task_id) == []
     assert reader.tracked()[0].verdict == "BLOCKED"
+
+    # An ACK commit failure must retain the inbox event for retry as well.
+    should_fail = True
+    event.listen(engine, "commit", fail_commit)
+    try:
+        with pytest.raises(
+            PersistenceUnavailableError,
+            match="^PostgreSQL Controller CI operation failed$",
+        ):
+            acknowledge(notification.delivery_id)
+    finally:
+        event.remove(engine, "commit", fail_commit)
+    assert reader.pending_events() == [notification]
 
     # The retry commits before returning and is visible through another Session.
     commits.clear()
