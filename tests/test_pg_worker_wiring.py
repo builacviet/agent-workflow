@@ -133,7 +133,12 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
 
 @pytest.mark.parametrize(
     "foreign",
-    [("dispatch",), ("ci_factory",), ("leadership",), ("ci_tracking", "ci_write_scope")],
+    [
+        ("dispatch",),
+        ("ci_factory",),
+        ("leadership",),
+        ("ci_tracking", "ci_write_scope"),
+    ],
 )
 def test_mixed_factories_are_rejected(
     wiring, forbid_worker_effects, monkeypatch, foreign
