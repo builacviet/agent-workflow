@@ -195,7 +195,15 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
 
     assert not next_owner_attempt()
     assert ledger.is_pre_launch(claim.dispatch_id)
-    ledger.block(claim.dispatch_id)
+    commits = []
+    event.listen(factory._engine, "commit", commits.append)
+    try:
+        ledger.block(claim.dispatch_id)
+        ledger.block(claim.dispatch_id)
+    finally:
+        event.remove(factory._engine, "commit", commits.append)
+    assert len(commits) == 1
+    assert commits[0].closed
     assert ledger.is_pre_launch(claim.dispatch_id)
     assert not next_owner_attempt()
     ledger.acknowledge(claim.dispatch_id)
@@ -315,8 +323,7 @@ def test_evidence_identity_and_finish(setup):
     with pytest.raises(BusinessRuleError, match="HEAD mismatch"):
         ledger.finish(claim.dispatch_id, NEXT)
     assert ledger.claim({task_id}, 60) is None
-    ledger.finish(claim.dispatch_id, HEAD)
-    # Replays and terminal no-op operations must roll back, not commit.
+    # Finishing commits; replays and terminal no-op operations roll back.
     outcomes = []
 
     def on_rollback(connection):
@@ -329,13 +336,14 @@ def test_evidence_identity_and_finish(setup):
     event.listen(engine, "rollback", on_rollback)
     event.listen(engine, "commit", on_commit)
     try:
+        ledger.finish(claim.dispatch_id, HEAD)
         assert ledger.claim({task_id}, 60) is None
         ledger.retire_pre_launch(claim.dispatch_id)
         ledger.block(claim.dispatch_id)
     finally:
         event.remove(engine, "commit", on_commit)
         event.remove(engine, "rollback", on_rollback)
-    assert [outcome for outcome, _ in outcomes] == ["rollback"] * 3
+    assert [outcome for outcome, _ in outcomes] == ["commit"] + ["rollback"] * 3
     assert all(connection.closed for _, connection in outcomes)
 
 
