@@ -196,12 +196,16 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
     assert not next_owner_attempt()
     assert ledger.is_pre_launch(claim.dispatch_id)
     commits = []
-    event.listen(factory._engine, "commit", commits.append)
+
+    def on_commit(connection):
+        commits.append(connection)
+
+    event.listen(factory._engine, "commit", on_commit)
     try:
         ledger.block(claim.dispatch_id)
         ledger.block(claim.dispatch_id)
     finally:
-        event.remove(factory._engine, "commit", commits.append)
+        event.remove(factory._engine, "commit", on_commit)
     assert len(commits) == 1
     assert commits[0].closed
     assert ledger.is_pre_launch(claim.dispatch_id)
