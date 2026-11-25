@@ -230,18 +230,50 @@ def test_webhook_core_and_adapter_preserve_layer_boundaries():
         isinstance(node, ast.Name) and node.id == "PostgresFactory"
         for node in ast.walk(repo_tree)
     )
-    assert not any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"commit", "rollback"}
-        for node in ast.walk(repo_tree)
-    )
     repository = next(
         node
         for node in repo_tree.body
         if isinstance(node, ast.ClassDef)
         and node.name == "SqlAlchemyWebhookInboxRepository"
     )
+    record = next(
+        node
+        for node in repository.body
+        if isinstance(node, ast.FunctionDef) and node.name == "record"
+    )
+    # Only the transaction bound by Session.begin() may roll back a no-insert
+    # outcome. Session.commit()/rollback() and every explicit commit stay banned.
+    transaction_scope = next(
+        node
+        for node in ast.walk(record)
+        if isinstance(node, ast.With)
+        and any(
+            ast.unparse(item.context_expr) == "session.begin()"
+            and item.optional_vars is not None
+            and ast.unparse(item.optional_vars) == "transaction"
+            for item in node.items
+        )
+    )
+    no_insert = next(
+        node
+        for node in transaction_scope.body
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "result is not InboxResult.INSERTED"
+    )
+    allowed_rollback = next(
+        node.value
+        for node in no_insert.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and ast.unparse(node.value) == "transaction.rollback()"
+    )
+    assert [
+        node
+        for node in ast.walk(repo_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"commit", "rollback"}
+    ] == [allowed_rollback]
     init = next(
         node
         for node in repository.body

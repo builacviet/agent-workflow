@@ -35,19 +35,19 @@ from agent_workflow.infrastructure.database.session_factory import (
 )
 
 
-class _SessionInbox:
-    """Test helper that exposes the repository's owned Session scope."""
-
-    def __init__(self, factory):
-        self._repository = SqlAlchemyWebhookInboxRepository(
-            session_scope=factory.get_scoped_session
-        )
-
-    def record(self, notification, digest):
-        return self._repository.record(notification, digest)
-
-    def get(self, delivery_id):
-        return self._repository.get(delivery_id)
+def persisted_notification(
+    factory: PostgresFactory, delivery_id: str
+) -> WebhookNotification | None:
+    """Observe committed inbox data through an independent connection."""
+    with factory.connect_session() as connection:
+        row = connection.execute(
+            text(
+                "SELECT delivery_id, event, action, repository, installation_id, "
+                "subject_id, head_sha FROM webhook_inbox WHERE delivery_id=:delivery_id"
+            ),
+            {"delivery_id": delivery_id},
+        ).one_or_none()
+        return WebhookNotification(*row) if row is not None else None
 
 
 def test_repository_owns_a_scoped_session_transaction():
@@ -76,31 +76,19 @@ def test_repository_owns_a_scoped_session_transaction():
     session.rollback.assert_not_called()
 
 
-def test_repository_get_uses_a_fresh_read_only_scope_without_commit():
-    session = MagicMock(spec=Session)
-    session.get.return_value = None
-    scope = MagicMock()
-    scope.__enter__.return_value = session
-    session_scope = MagicMock(return_value=scope)
-    repository = SqlAlchemyWebhookInboxRepository(session_scope=session_scope)
-
-    assert repository.get("00000000-0000-4000-8000-000000000001") is None
-
-    session_scope.assert_called_once_with()
-    scope.__enter__.assert_called_once_with()
-    scope.__exit__.assert_called_once_with(None, None, None)
-    assert str(session.connection.return_value.execute.call_args_list[0].args[0]) == (
-        "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY"
-    )
-    session.begin.assert_not_called()
-    session.commit.assert_not_called()
-    session.rollback.assert_not_called()
-
-
 def test_repository_commits_before_return_and_uses_fresh_sessions(config, delivery):
     engine = create_engine(config.pg_runtime_dsn, poolclass=NullPool)
     sessions = []
     settings = []
+    outcomes = []
+
+    @event.listens_for(engine, "commit")
+    def capture_commit(connection):
+        outcomes.append(("commit", connection))
+
+    @event.listens_for(engine, "rollback")
+    def capture_rollback(connection):
+        outcomes.append(("rollback", connection))
 
     @event.listens_for(engine, "before_cursor_execute")
     def capture_settings(conn, cursor, statement, parameters, context, executemany):
@@ -110,6 +98,9 @@ def test_repository_commits_before_return_and_uses_fresh_sessions(config, delive
             settings.append((statement, parameters))
 
     with PostgresFactory(engine) as factory:
+        # Exclude the factory's schema-readiness connection from operation counts.
+        outcomes.clear()
+        settings.clear()
         open_scope = factory.get_scoped_session
 
         @contextmanager
@@ -121,6 +112,17 @@ def test_repository_commits_before_return_and_uses_fresh_sessions(config, delive
         repository = SqlAlchemyWebhookInboxRepository(session_scope=capture_session)
         digest = _digest(delivery)
         assert repository.record(delivery, digest) is InboxResult.INSERTED
+
+        assert repository.record(delivery, digest) is InboxResult.DUPLICATE
+        assert repository.record(delivery, _digest(delivery, "changed")) is (
+            InboxResult.CONFLICT
+        )
+        assert [outcome for outcome, _ in outcomes] == [
+            "commit",
+            "rollback",
+            "rollback",
+        ]
+        assert all(connection.closed for _, connection in outcomes)
 
         # A separate Connection sees the row as soon as record() returns.
         with engine.connect() as connection:
@@ -135,28 +137,19 @@ def test_repository_commits_before_return_and_uses_fresh_sessions(config, delive
                 == digest
             )
 
-        assert repository.get(delivery.delivery_id) == delivery
+        assert persisted_notification(factory, delivery.delivery_id) == delivery
 
-    assert len(sessions) == 2
-    assert sessions[0] is not sessions[1]
-    assert any(
-        statement.endswith("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-        for statement, _ in settings
-    )
-    assert any(
-        statement.endswith("SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY")
-        for statement, _ in settings
-    )
-    set_config = next(
-        params
-        for statement, params in settings
-        if "set_config('lock_timeout'" in statement
-    )
-    assert set_config == {
-        "lock_timeout": "5s",
-        "statement_timeout": "5s",
-        "synchronous_commit": "on",
-    }
+    assert len(sessions) == 3
+    assert len({id(session) for session in sessions}) == 3
+    assert len(settings) == 6
+    for isolation, profile in zip(settings[::2], settings[1::2], strict=True):
+        assert isolation[0].endswith("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        assert "set_config('lock_timeout'" in profile[0]
+        assert profile[1] == {
+            "lock_timeout": "5s",
+            "statement_timeout": "5s",
+            "synchronous_commit": "on",
+        }
 
 
 @pytest.fixture
@@ -207,20 +200,22 @@ def test_restart_replay(config, delivery):
     alternate = _alternate(delivery)
     first, second = _digest(delivery), _digest(delivery, "changed")
     with PostgresFactory.open(config) as factory:
-        pg = _SessionInbox(factory)
-        assert pg.get(delivery.delivery_id) is None
+        pg = SqlAlchemyWebhookInboxRepository(session_scope=factory.get_scoped_session)
+        assert persisted_notification(factory, delivery.delivery_id) is None
         assert pg.record(delivery, first) is InboxResult.INSERTED
 
     with PostgresFactory.open(config) as restarted:
-        pg = _SessionInbox(restarted)
-        assert pg.get(delivery.delivery_id) == delivery
+        pg = SqlAlchemyWebhookInboxRepository(
+            session_scope=restarted.get_scoped_session
+        )
+        assert persisted_notification(restarted, delivery.delivery_id) == delivery
         for notification, digest, expected in [
             (delivery, first, InboxResult.DUPLICATE),
             (delivery, second, InboxResult.CONFLICT),
             (alternate, first, InboxResult.DUPLICATE),
         ]:
             assert pg.record(notification, digest) is expected
-        assert pg.get(alternate.delivery_id) is None
+        assert persisted_notification(restarted, alternate.delivery_id) is None
         assert pg.record(alternate, second) is InboxResult.INSERTED
         # Delivery ID conflict wins even when another delivery owns the digest.
         assert pg.record(delivery, second) is InboxResult.CONFLICT
@@ -249,7 +244,9 @@ def test_concurrent_collision(config, delivery, same_id, same_digest, other_resu
     first = _digest(delivery)
     second = first if same_digest else _digest(delivery, "changed")
     with PostgresFactory(engine) as factory:
-        inbox = _SessionInbox(factory)
+        inbox = SqlAlchemyWebhookInboxRepository(
+            session_scope=factory.get_scoped_session
+        )
         with ThreadPoolExecutor(max_workers=2) as pool:
             requests = [
                 pool.submit(inbox.record, delivery, first),
@@ -261,15 +258,17 @@ def test_concurrent_collision(config, delivery, same_id, same_digest, other_resu
             [InboxResult.INSERTED.name, other_result.name]
         )
         winner = (delivery, alternate)[outcomes.index(InboxResult.INSERTED)]
-        assert inbox.get(winner.delivery_id) == winner
+        assert persisted_notification(factory, winner.delivery_id) == winner
         if not same_id:
             loser = (delivery, alternate)[outcomes.index(other_result)]
-            assert inbox.get(loser.delivery_id) is None
+            assert persisted_notification(factory, loser.delivery_id) is None
 
 
 def test_invalid_input_is_rejected_before_connecting():
     factory = MagicMock(spec=PostgresFactory)
-    use_case = ReceiveWebhookUseCase(_SessionInbox(factory))
+    use_case = ReceiveWebhookUseCase(
+        SqlAlchemyWebhookInboxRepository(session_scope=factory.get_scoped_session)
+    )
     notification = WebhookNotification(
         str(uuid.uuid4()),
         "pull_request",
@@ -293,11 +292,13 @@ def test_invalid_input_is_rejected_before_connecting():
     factory.get_scoped_session.assert_not_called()
 
 
-def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, delivery):
+def test_commit_failure_rolls_back_and_collision_failure_is_sanitized(config, delivery):
     engine = create_engine(config.pg_runtime_dsn, poolclass=NullPool)
     digest = _digest(delivery)
     with PostgresFactory(engine) as factory:
-        inbox = _SessionInbox(factory)
+        inbox = SqlAlchemyWebhookInboxRepository(
+            session_scope=factory.get_scoped_session
+        )
 
         def fail_commit(conn):
             # Confirm the write reached PostgreSQL before aborting its transaction.
@@ -320,30 +321,35 @@ def test_commit_failure_rolls_back_and_read_failure_is_sanitized(config, deliver
             assert exc.value.__suppress_context__
         finally:
             event.remove(engine, "commit", fail_commit)
-        assert inbox.get(delivery.delivery_id) is None
+        assert persisted_notification(factory, delivery.delivery_id) is None
         assert inbox.record(delivery, digest) is InboxResult.INSERTED
 
         event.listen(engine, "commit", fail_commit)
         try:
-            assert inbox.get(delivery.delivery_id) == delivery
+            assert inbox.record(delivery, digest) is InboxResult.DUPLICATE
+            assert inbox.record(delivery, _digest(delivery, "changed")) is (
+                InboxResult.CONFLICT
+            )
         finally:
             event.remove(engine, "commit", fail_commit)
 
-        def fail_read(conn, cursor, statement, parameters, context, executemany):
+        def fail_collision(conn, cursor, statement, parameters, context, executemany):
             if statement.startswith("SELECT webhook_inbox."):
-                return "SELECT missing_read_test_column", {}
+                return "SELECT missing_collision_test_column", {}
             return statement, parameters
 
-        event.listen(engine, "before_cursor_execute", fail_read, retval=True)
+        event.listen(engine, "before_cursor_execute", fail_collision, retval=True)
         try:
             with pytest.raises(
                 PersistenceUnavailableError,
                 match="^PostgreSQL webhook inbox operation failed$",
-            ):
-                inbox.get(delivery.delivery_id)
+            ) as exc:
+                inbox.record(delivery, digest)
+            assert exc.value.__suppress_context__
         finally:
-            event.remove(engine, "before_cursor_execute", fail_read)
-        assert inbox.get(delivery.delivery_id) == delivery
+            event.remove(engine, "before_cursor_execute", fail_collision)
+        assert persisted_notification(factory, delivery.delivery_id) == delivery
+        assert inbox.record(delivery, digest) is InboxResult.DUPLICATE
 
 
 def test_live_signed_http_pg_selection_and_replay(
@@ -429,7 +435,7 @@ def test_live_signed_http_pg_selection_and_replay(
         assert post(body(), delivery.delivery_id, signature=False) == 403
         assert post(body(installation=4), delivery.delivery_id) == 403
         with PostgresFactory.open(config) as check:
-            assert _SessionInbox(check).get(delivery.delivery_id) is None
+            assert persisted_notification(check, delivery.delivery_id) is None
 
         def refuse_commit(connection):
             connection.execute(text("SELECT missing_webhook_commit_test_column"))
@@ -441,11 +447,11 @@ def test_live_signed_http_pg_selection_and_replay(
         finally:
             event.remove(engine, "commit", refuse_commit)
         with PostgresFactory.open(config) as check:
-            assert _SessionInbox(check).get(delivery.delivery_id) is None
+            assert persisted_notification(check, delivery.delivery_id) is None
 
         assert post(body(), delivery.delivery_id) == 202
         with PostgresFactory.open(config) as check:
-            persisted = _SessionInbox(check).get(delivery.delivery_id)
+            persisted = persisted_notification(check, delivery.delivery_id)
             assert persisted is not None
             assert persisted.subject_id == delivery.subject_id
         assert post(body(), delivery.delivery_id) == 200
