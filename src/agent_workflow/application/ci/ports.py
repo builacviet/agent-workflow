@@ -29,14 +29,10 @@ CiWriteScope = Callable[
 ]
 
 
-class ICiWriteTransaction(Protocol):
-    def inbox_delivery_exists(self, delivery_id: str) -> bool: ...
-
-    def mark_processed(self, delivery_id: str) -> None: ...
-
-
-class ICiWriteRepository(Protocol):
-    def transaction(self) -> AbstractContextManager[ICiWriteTransaction]: ...
+class ICiAcknowledgmentRepository(Protocol):
+    def mark_processed(self, delivery_id: str) -> bool:
+        """Settle a known delivery atomically; return False if it is unknown."""
+        ...
 
 
 class ICiApprovalReader(Protocol):
