@@ -31,9 +31,14 @@ class SqlAlchemyReviewRepository:
             .where(Review.task_id == task_id)
             .order_by(Review.round_number)
         ).all()
-        return tuple(self._to_review(row) for row in rows)
+        if not rows:
+            return ()
+        findings = self._list_findings(tuple(row.review_id for row in rows))
+        return tuple(self._to_review(row, findings[row.review_id]) for row in rows)
 
-    def _to_review(self, row: Review) -> PreviousReview:
+    def _to_review(
+        self, row: Review, findings: tuple[ReviewFinding, ...]
+    ) -> PreviousReview:
         try:
             prior_resolutions = _PRIOR_RESOLUTIONS.validate_json(row.prior_resolutions)
         except ValueError:
@@ -54,30 +59,38 @@ class SqlAlchemyReviewRepository:
             reviewed_at=row.reviewed_at,
             imported_at=row.imported_at,
             prior_resolutions=tuple(prior_resolutions.items()),
-            findings=self._list_findings(row.review_id),
+            findings=findings,
         )
 
-    def _list_findings(self, review_id: str) -> tuple[ReviewFinding, ...]:
+    def _list_findings(
+        self, review_ids: tuple[str, ...]
+    ) -> dict[str, tuple[ReviewFinding, ...]]:
         rows = self._session.scalars(
             select(ReviewFindingRow)
-            .where(ReviewFindingRow.review_id == review_id)
-            .order_by(ReviewFindingRow.finding_id)
+            .where(ReviewFindingRow.review_id.in_(review_ids))
+            .order_by(ReviewFindingRow.review_id, ReviewFindingRow.finding_id)
         )
-        return tuple(
-            ReviewFinding(
-                review_id=row.review_id,
-                finding_id=row.finding_id,
-                task_id=row.task_id,
-                severity=row.severity,
-                acceptance_criterion=row.acceptance_criterion,
-                file_path=row.file_path,
-                line=row.line,
-                description=row.description,
-                suggested_correction=row.suggested_correction,
-                required_verification=row.required_verification,
+        grouped: dict[str, list[ReviewFinding]] = {
+            review_id: [] for review_id in review_ids
+        }
+        for row in rows:
+            grouped[row.review_id].append(
+                ReviewFinding(
+                    review_id=row.review_id,
+                    finding_id=row.finding_id,
+                    task_id=row.task_id,
+                    severity=row.severity,
+                    acceptance_criterion=row.acceptance_criterion,
+                    file_path=row.file_path,
+                    line=row.line,
+                    description=row.description,
+                    suggested_correction=row.suggested_correction,
+                    required_verification=row.required_verification,
+                )
             )
-            for row in rows
-        )
+        return {
+            review_id: tuple(findings) for review_id, findings in grouped.items()
+        }
 
     def list_events(self, task_id: str) -> tuple[ReviewEvent, ...]:
         rows = self._session.scalars(
