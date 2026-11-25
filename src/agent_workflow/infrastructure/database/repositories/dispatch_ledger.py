@@ -16,6 +16,7 @@ from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.budget import check_deadline, operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.states import DispatchStatus, WorkflowStatus
 from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
     canonical_repository,
@@ -122,7 +123,12 @@ class PostgresDispatchLedger:
                 select(Task)
                 .where(
                     Task.task_id.in_(task_ids),
-                    Task.status.in_(["AWAITING_HANDOFF", "CHANGES_REQUESTED"]),
+                    Task.status.in_(
+                        [
+                            WorkflowStatus.AWAITING_HANDOFF.value,
+                            WorkflowStatus.CHANGES_REQUESTED.value,
+                        ]
+                    ),
                     Task.completed_review_rounds < 2,
                 )
                 .order_by(Task.task_id)
@@ -154,7 +160,7 @@ class PostgresDispatchLedger:
                     task_id=task.task_id,
                     round_number=round_number,
                     input_sha=sha,
-                    status="ACTIVE",
+                    status=DispatchStatus.ACTIVE.value,
                     slot=1,
                     deadline=self.clock() + timeout,
                     detail=_PRE_LAUNCH if track_pre_launch else "",
@@ -200,7 +206,7 @@ class PostgresDispatchLedger:
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1 and row.detail == _PRE_LAUNCH:
-                if row.status != "ACTIVE":
+                if row.status != DispatchStatus.ACTIVE.value:
                     raise BusinessRuleError(
                         "could not retire dispatch pre-launch evidence"
                     )
@@ -240,7 +246,7 @@ class PostgresDispatchLedger:
             if (
                 row is None
                 or row.slot != 1
-                or row.status != "ACTIVE"
+                or row.status != DispatchStatus.ACTIVE.value
                 or row.task_id != task_id
                 or row.input_sha != input_sha
             ):
@@ -270,7 +276,7 @@ class PostgresDispatchLedger:
         validate_sha(sha)
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
-            if row is None or row.status != "ACTIVE" or row.slot != 1:
+            if row is None or row.status != DispatchStatus.ACTIVE.value or row.slot != 1:
                 raise BusinessRuleError("dispatch lease lost")
             self._timeout(session)
             evidence = session.get(AgentExecutionEvidence, dispatch_id)
@@ -287,7 +293,7 @@ class PostgresDispatchLedger:
                 raise BusinessRuleError("runtime evidence identity mismatch")
             if evidence.published_head_sha != sha:
                 raise BusinessRuleError("runtime evidence HEAD mismatch")
-            row.status, row.slot, row.result_sha = "DONE", None, sha
+            row.status, row.slot, row.result_sha = DispatchStatus.DONE.value, None, sha
             self._timeout(session)
             session.flush()
 
@@ -295,7 +301,7 @@ class PostgresDispatchLedger:
         with self._transaction() as session:
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1:
-                row.status = "BLOCKED"
+                row.status = DispatchStatus.BLOCKED.value
                 if row.detail != _PRE_LAUNCH:
                     row.detail = _BLOCKED
                 self._timeout(session)
@@ -307,7 +313,7 @@ class PostgresDispatchLedger:
             row = self._locked(session, dispatch_id)
             if row is None or row.slot != 1:
                 raise BusinessRuleError("unknown active dispatch")
-            row.status, row.slot = "ACKNOWLEDGED", None
+            row.status, row.slot = DispatchStatus.ACKNOWLEDGED.value, None
             if row.detail == _PRE_LAUNCH:
                 row.detail = ""
             self._timeout(session)
