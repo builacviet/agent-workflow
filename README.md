@@ -1,6 +1,6 @@
 # Agent Workflow
 
-**Source baseline:** merged main after #123; PostgreSQL-only persistence, R2 migration in progress. [Current architecture](docs/architecture.md) distinguishes source, target and unverified deployment.
+**Source baseline:** merged [main after #128](https://github.com/builacviet/agent-workflow/tree/14fe974e67f56175bed3710b20bc36fb69b79cd0); PostgreSQL-only persistence, legacy `storage/` package retired, R2 migration in progress. Review claim/submit and queue recovery use the canonical Unit of Work. The dispatch ledger now lives in Infrastructure; immutable dispatch claim migration remains pending at this baseline. [Current architecture](docs/architecture.md) distinguishes source, target and unverified deployment.
 
 **Coder:** read [AGENTS.md](AGENTS.md) + approved task; consult only relevant [standards](docs/conventions/engineering-standards.md) sections/source/tests. [Index](docs/INDEX.md) is optional; old ADRs/runbooks are historical.
 
