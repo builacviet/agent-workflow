@@ -6,7 +6,6 @@ Dependencies: Application ports, Domain rules, execution budget, and database ad
 import re
 import time
 import uuid
-from contextlib import contextmanager
 from typing import Callable
 
 from sqlalchemy import select, text
@@ -14,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import CorruptedPersistenceDataError
-from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.budget import check_deadline
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import DispatchStatus, WorkflowStatus
 from agent_workflow.domain.workflow_identity import (
@@ -29,6 +28,7 @@ from agent_workflow.infrastructure.database.models import (
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import (
+    SqlAlchemyUnitOfWork,
     set_workflow_query_timeout,
 )
 
@@ -73,28 +73,7 @@ class PostgresDispatchLedger:
             raise BusinessRuleError("unsupported dispatch role or phase")
         self.factory, self.role, self.phase, self.clock = factory, role, phase, clock
 
-    @staticmethod
-    def _timeout(session: Session) -> None:
-        milliseconds = max(1, int(operation_timeout(30) * 1000))
-        session.connection().execute(
-            text(
-                "SELECT set_config('lock_timeout', :timeout, true), set_config('statement_timeout', :timeout, true)"
-            ),
-            {"timeout": f"{milliseconds}ms"},
-        )
-
-    @contextmanager
-    def _transaction(self):
-        with self.factory.unit_of_work_session(
-            after_session_commit=check_deadline
-        ) as session:
-            self._timeout(session)
-            yield session
-            check_deadline()
-            self._timeout(session)
-
     def _locked(self, session: Session, dispatch_id: str):
-        self._timeout(session)
         return session.execute(
             select(AgentDispatch)
             .where(
@@ -110,15 +89,16 @@ class PostgresDispatchLedger:
     ) -> DispatchClaim | None:
         if type(timeout) is not int or not 60 <= timeout <= 3600:
             raise BusinessRuleError("runtime timeout must be 60..3600 seconds")
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             # Serialize the empty-slot check across independent host connections.
             session.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
-            self._timeout(session)
             if session.execute(
                 select(AgentDispatch.dispatch_id).where(AgentDispatch.slot == 1)
             ).first():
                 return None
-            self._timeout(session)
             candidates = session.execute(
                 select(Task)
                 .where(
@@ -140,7 +120,6 @@ class PostgresDispatchLedger:
                 sha = task.current_head_sha or task.base_sha
                 validate_sha(sha)
                 round_number = task.completed_review_rounds
-                self._timeout(session)
                 exists = session.execute(
                     select(AgentDispatch.dispatch_id).where(
                         AgentDispatch.task_id == task.task_id,
@@ -166,9 +145,10 @@ class PostgresDispatchLedger:
                     detail=_PRE_LAUNCH if track_pre_launch else "",
                 )
                 session.add(dispatch)
-                self._timeout(session)
                 session.flush()
-                return _project_claim(dispatch)
+                claim = _project_claim(dispatch)
+                unit.commit()
+                return claim
         return None
 
     def is_pre_launch(self, dispatch_id: str) -> bool:
@@ -203,7 +183,10 @@ class PostgresDispatchLedger:
         return result
 
     def retire_pre_launch(self, dispatch_id: str) -> None:
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1 and row.detail == _PRE_LAUNCH:
                 if row.status != DispatchStatus.ACTIVE.value:
@@ -211,8 +194,8 @@ class PostgresDispatchLedger:
                         "could not retire dispatch pre-launch evidence"
                     )
                 row.detail = ""
-                self._timeout(session)
                 session.flush()
+                unit.commit()
 
     def record_runtime_evidence(
         self,
@@ -241,7 +224,10 @@ class PostgresDispatchLedger:
             or not re.fullmatch(r"[a-f0-9]{64}", tested_digest)
         ):
             raise BusinessRuleError("invalid runtime evidence")
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             row = self._locked(session, dispatch_id)
             if (
                 row is None
@@ -269,12 +255,15 @@ class PostgresDispatchLedger:
                     recorded_at=self.clock(),
                 )
             )
-            self._timeout(session)
             session.flush()
+            unit.commit()
 
     def finish(self, dispatch_id: str, sha: str) -> None:
         validate_sha(sha)
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             row = self._locked(session, dispatch_id)
             if (
                 row is None
@@ -282,7 +271,6 @@ class PostgresDispatchLedger:
                 or row.slot != 1
             ):
                 raise BusinessRuleError("dispatch lease lost")
-            self._timeout(session)
             evidence = session.get(AgentExecutionEvidence, dispatch_id)
             if evidence is None:
                 raise BusinessRuleError(
@@ -298,27 +286,34 @@ class PostgresDispatchLedger:
             if evidence.published_head_sha != sha:
                 raise BusinessRuleError("runtime evidence HEAD mismatch")
             row.status, row.slot, row.result_sha = DispatchStatus.DONE.value, None, sha
-            self._timeout(session)
             session.flush()
+            unit.commit()
 
     def block(self, dispatch_id: str) -> None:
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             row = self._locked(session, dispatch_id)
             if row is not None and row.slot == 1:
                 row.status = DispatchStatus.BLOCKED.value
                 if row.detail != _PRE_LAUNCH:
                     row.detail = _BLOCKED
-                self._timeout(session)
-                session.flush()
+                if session.is_modified(row):
+                    session.flush()
+                    unit.commit()
 
     def acknowledge(self, dispatch_id: str) -> None:
         """Called only after operator reconciliation of external effects."""
-        with self._transaction() as session:
+        with (
+            self.factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as unit,
+        ):
             row = self._locked(session, dispatch_id)
             if row is None or row.slot != 1:
                 raise BusinessRuleError("unknown active dispatch")
             row.status, row.slot = DispatchStatus.ACKNOWLEDGED.value, None
             if row.detail == _PRE_LAUNCH:
                 row.detail = ""
-            self._timeout(session)
             session.flush()
+            unit.commit()
