@@ -24,7 +24,7 @@ from agent_workflow.infrastructure.database.models import (
     Task,
     WebhookInboxRow,
 )
-from agent_workflow.infrastructure.database.session_factory import (
+from agent_workflow.infrastructure.database.unit_of_work import (
     _set_repository_transaction_options,
 )
 

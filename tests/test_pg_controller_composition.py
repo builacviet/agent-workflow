@@ -52,8 +52,7 @@ def test_composition_borrows_factory_and_builds_only_dispatch_dependencies(monke
         "connect_session",
         "get_scoped_session",
         "transaction",
-        "unit_of_work_session",
-        "repository_session",
+        "get_sync_session",
         "close",
     ):
         monkeypatch.setattr(PostgresFactory, method, forbidden)

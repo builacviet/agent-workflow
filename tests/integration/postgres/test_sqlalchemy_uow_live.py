@@ -65,21 +65,6 @@ def is_visible(factory: PostgresFactory, task_id: str) -> bool:
         return persisted_id is not None
 
 
-def test_legacy_read_scope_retains_read_only_profile_and_outer_commit(
-    transaction_task: tuple[PostgresFactory, Task],
-) -> None:
-    factory, _ = transaction_task
-    with factory.unit_of_work_session(read_only=True) as session:
-        connection, outcomes = observe_transaction(session)
-        assert session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
-        assert session.scalar(text("SHOW transaction_read_only")) == "on"
-        assert outcomes == []
-
-    assert outcomes == ["commit"]
-    assert connection.closed
-    assert not session.in_transaction()
-
-
 @pytest.mark.parametrize("decision", ["commit", "unset", "rollback", "cancel commit"])
 def test_observer_sees_only_explicit_commit_and_connection_closes(
     transaction_task: tuple[PostgresFactory, Task], decision: str
