@@ -18,8 +18,9 @@ from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.server.fastmcp.exceptions import ToolError
 from pg_task_fixtures import authorize_task, record_handoff
-from sqlalchemy import event, select, text
+from sqlalchemy import event, insert, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.orm import Session
 from test_agent_workflow import BASE, HEAD, NEXT, REPO, payload, spec
 
 from agent_workflow import budget
@@ -41,7 +42,14 @@ from agent_workflow.composition.postgres_mcp import (
 )
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
-from agent_workflow.infrastructure.database.models import CITask, ReviewFinding, Task
+from agent_workflow.infrastructure.database.models import (
+    CITask,
+    Review,
+    ReviewAttempt,
+    ReviewFinding,
+    Task,
+    TaskEvent,
+)
 from agent_workflow.infrastructure.database.readers.review_queue_reader import (
     PostgresReviewQueueReader,
 )
@@ -60,7 +68,6 @@ from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.review_assignment_response import review_context_response
 from agent_workflow.mcp.server import mcp
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 @pytest.mark.parametrize("require_ci", [True, False])
@@ -200,16 +207,15 @@ def setup():
         pytest.skip("disposable PG_TEST_DSN not supplied")
     task_id = "PG02B-" + uuid.uuid4().hex
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
-        repo = PostgresWorkflowRepository(factory)
         try:
-            yield repo, task_id, factory
+            yield factory, task_id
         finally:
             clean_test_tasks(factory, [task_id])
 
 
 @pytest.fixture
 def queue_tasks(setup):
-    _, task_id, factory = setup
+    factory, task_id = setup
     extra_ids = [f"{task_id}-{label}" for label in ("a", "m", "z")]
     try:
         yield extra_ids
@@ -217,17 +223,58 @@ def queue_tasks(setup):
         clean_test_tasks(factory, extra_ids)
 
 
-def ready(repo, task_id):
-    authorize_task(repo.factory, spec(task_id))
+# Detached-safe scalar row snapshots for independent persisted-state assertions.
+def task_row(session: Session, task_id: str):
+    return session.execute(
+        select(Task.__table__).where(Task.task_id == task_id)
+    ).one_or_none()
+
+
+def active_claim_row(session: Session, task_id: str):
+    return session.execute(
+        select(ReviewAttempt.__table__).where(
+            ReviewAttempt.task_id == task_id, ReviewAttempt.status == "ACTIVE"
+        )
+    ).one_or_none()
+
+
+def claim_row(session: Session, token: str, task_id: str):
+    return session.execute(
+        select(ReviewAttempt.__table__).where(
+            ReviewAttempt.token == token, ReviewAttempt.task_id == task_id
+        )
+    ).one_or_none()
+
+
+def event_rows(session: Session, task_id: str):
+    return session.execute(
+        select(TaskEvent.__table__)
+        .where(TaskEvent.task_id == task_id)
+        .order_by(TaskEvent.event_id)
+    ).all()
+
+
+def review_ids(session: Session, task_id: str) -> list[str]:
+    return list(
+        session.scalars(
+            select(Review.review_id)
+            .where(Review.task_id == task_id)
+            .order_by(Review.round_number)
+        )
+    )
+
+
+def ready(factory, task_id):
+    authorize_task(factory, spec(task_id))
     record_handoff(
-        repo.factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
+        factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
     )
 
 
 def claim_task(
-    repo, task_id, head, reviewer, *, require_ci=False, clock=None, lease=900
+    factory, task_id, head, reviewer, *, require_ci=False, clock=None, lease=900
 ):
-    with repo.factory.get_scoped_session() as session:
+    with factory.get_scoped_session() as session:
         operation = ClaimReviewUseCase(
             SqlAlchemyUnitOfWork(session),
             PostgresReviewWrites(session),
@@ -239,8 +286,8 @@ def claim_task(
         return asdict(operation.execute(ClaimReviewInput(task_id, head, reviewer)))
 
 
-def submit_task(repo, data, reviewer, *, clock=None, require_ci=False):
-    with repo.factory.get_scoped_session() as session:
+def submit_task(factory, data, reviewer, *, clock=None, require_ci=False):
+    with factory.get_scoped_session() as session:
         operation = SubmitReviewUseCase(
             SqlAlchemyUnitOfWork(session),
             PostgresReviewWrites(session),
@@ -253,8 +300,8 @@ def submit_task(repo, data, reviewer, *, clock=None, require_ci=False):
         )
 
 
-def read_context(repo, task_id):
-    operation = create_get_review_context_use_case(repo.factory)
+def read_context(factory, task_id):
+    operation = create_get_review_context_use_case(factory)
     return review_context_response(operation.execute(GetReviewContextInput(task_id)))
 
 
@@ -289,9 +336,9 @@ def mcp_postgres(setup, monkeypatch):
 
 
 def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
-    repo, task_id, _ = setup
-    authorize_task(repo.factory, spec(task_id))
-    assert read_context(repo, task_id)["current_head_sha"] is None
+    factory, task_id = setup
+    authorize_task(factory, spec(task_id))
+    assert read_context(factory, task_id)["current_head_sha"] is None
     handoff = mcp_postgres(
         "register_task_handoff",
         {
@@ -314,8 +361,20 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
     assert context["current_head_sha"] == HEAD
     assert context["status"] == "READY_IN_REVIEW"
     assert context["events"][-1]["action"] == "HANDOFF"
-    with repo.read() as unit:
-        assert unit.find_head_handoff(task_id, HEAD)["metadata"] == (
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert session.scalar(
+            select(TaskEvent.metadata_text)
+            .where(
+                TaskEvent.task_id == task_id,
+                TaskEvent.sha == HEAD,
+                TaskEvent.action.in_(("HANDOFF", "CI_REPAIR_HANDOFF")),
+            )
+            .order_by(TaskEvent.event_id.desc())
+            .limit(1)
+        ) == (
             '{"handoff_file_path":"docs/handoff.md",'
             '"test_summary":"PostgreSQL MCP fixture",'
             '"verification":"reporter_supplied_not_remotely_verified"}'
@@ -324,8 +383,8 @@ def test_mcp_handoff_persists_across_tool_invocations(setup, mcp_postgres):
 
 
 def test_mcp_handoff_idempotent_and_empty_assignment(setup, mcp_postgres):
-    repo, task_id, _ = setup
-    authorize_task(repo.factory, spec(task_id))
+    factory, task_id = setup
+    authorize_task(factory, spec(task_id))
     arguments = {
         "task_id": task_id,
         "repository": REPO,
@@ -343,18 +402,18 @@ def test_mcp_handoff_idempotent_and_empty_assignment(setup, mcp_postgres):
         ]
         == []
     )
-    with repo.read() as unit:
-        assert (
-            len([e for e in unit.list_events((task_id,)) if e["action"] == "HANDOFF"])
-            == 1
-        )
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert sum(e.action == "HANDOFF" for e in event_rows(session, task_id)) == 1
 
 
 def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
-    submit_task(repo, payload(claim, "CHANGES_REQUESTED"), "lead")
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
+    submit_task(factory, payload(claim, "CHANGES_REQUESTED"), "lead")
     actual = mcp_postgres("get_coder_assignment", {"task_id": task_id})
     assert actual["status"] == "CHANGES_REQUESTED"
     assert actual["current_head_sha"] == HEAD
@@ -364,8 +423,8 @@ def test_mcp_assignment_preserves_unresolved_findings(setup, mcp_postgres):
 
 
 def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
-    repo, task_id, _ = setup
-    authorize_task(repo.factory, spec(task_id))
+    factory, task_id = setup
+    authorize_task(factory, spec(task_id))
     original = PostgresHandoffRepository.record
 
     def fail_after_writes(self, *args):
@@ -375,7 +434,7 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
     monkeypatch.setattr(PostgresHandoffRepository, "record", fail_after_writes)
     with pytest.raises(RuntimeError, match="synthetic write failure"):
         record_handoff(
-            repo.factory,
+            factory,
             task_id,
             REPO,
             "task/test",
@@ -384,11 +443,14 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
             "docs/handoff.md",
             "fixture",
         )
-    with repo.read() as unit:
-        task = unit.find_task((task_id,))
-        assert task["current_head_sha"] is None
-        assert task["status"] == "AWAITING_HANDOFF"
-        assert [event["action"] for event in unit.list_events((task_id,))] == [
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        task = task_row(session, task_id)
+        assert task.current_head_sha is None
+        assert task.status == "AWAITING_HANDOFF"
+        assert [event.action for event in event_rows(session, task_id)] == [
             "LOCAL_AUTHORIZATION"
         ]
 
@@ -397,10 +459,10 @@ def test_handoff_write_failure_rolls_back_head_and_event(setup, monkeypatch):
 def test_mcp_context_and_result_preserve_persisted_history(
     setup, mcp_postgres, verdict
 ):
-    repo, task_id, _ = setup
+    factory, task_id = setup
     arguments = {"task_id": task_id}
     authorize_task(
-        repo.factory, {**spec(task_id), "context_paths": ["docs/review context.md"]}
+        factory, {**spec(task_id), "context_paths": ["docs/review context.md"]}
     )
 
     def assert_history(status, head, rounds):
@@ -426,7 +488,7 @@ def test_mcp_context_and_result_preserve_persisted_history(
         (NEXT, verdict, {"F-1": "FIXED" if verdict == "APPROVED" else "NOT_FIXED"}),
     ):
         record_handoff(
-            repo.factory,
+            factory,
             task_id,
             REPO,
             "task/test",
@@ -435,9 +497,9 @@ def test_mcp_context_and_result_preserve_persisted_history(
             "docs/review context.md",
             "test",
         )
-        claim = claim_task(repo, task_id, sha, "lead")
+        claim = claim_task(factory, task_id, sha, "lead")
         submit_task(
-            repo,
+            factory,
             payload(
                 claim,
                 outcome,
@@ -457,18 +519,21 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
     setup,
     mcp_postgres,
 ):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
-    assert read_context(repo, task_id)["status"] == "IN_REVIEW"
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
+    assert read_context(factory, task_id)["status"] == "IN_REVIEW"
 
     # Even an effort filter with no matches recovers stale leases.
     assert mcp_postgres("list_review_queue", {"requested_effort": "invalid"}) == {
         "tasks": []
     }
-    with repo.read() as unit:
-        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "EXPIRED"
-    assert read_context(repo, task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, claim["claim_token"], task_id).status == "EXPIRED"
+    assert read_context(factory, task_id)["events"][-1]["action"] == "LEASE_EXPIRED"
 
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with factory.transaction() as conn:
@@ -506,9 +571,9 @@ def test_mcp_queue_filters_and_recovers_a_lease_in_the_workflow_transaction(
 def test_mcp_queue_read_failure_rolls_back_lease_recovery(
     setup, mcp_postgres, monkeypatch
 ):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
 
     def fail_read(self, requested_effort):
         raise RuntimeError("synthetic queue read failure")
@@ -517,9 +582,12 @@ def test_mcp_queue_read_failure_rolls_back_lease_recovery(
     with pytest.raises(ToolError, match="synthetic queue read failure"):
         mcp_postgres("list_review_queue", {})
 
-    with repo.read() as unit:
-        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
-    context = read_context(repo, task_id)
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, claim["claim_token"], task_id).status == "ACTIVE"
+    context = read_context(factory, task_id)
     assert context["status"] == "IN_REVIEW"
     assert context["events"][-1]["action"] == "CLAIM"
 
@@ -527,15 +595,15 @@ def test_mcp_queue_read_failure_rolls_back_lease_recovery(
 def test_queue_expiry_boundary_missing_claim_and_order(
     setup, queue_tasks, mcp_postgres, monkeypatch
 ):
-    repo, task_id, factory = setup
+    factory, task_id = setup
     null_head_id, nonexpired_id, missing_claim_id = queue_tasks
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     monkeypatch.setattr("agent_workflow.composition.postgres_mcp.time", lambda: 1000.0)
     for candidate in (missing_claim_id, nonexpired_id, null_head_id, task_id):
-        ready(repo, candidate)
-    expired = claim_task(repo, task_id, HEAD, "lead", clock=lambda: 990.0, lease=10)
+        ready(factory, candidate)
+    expired = claim_task(factory, task_id, HEAD, "lead", clock=lambda: 990.0, lease=10)
     active = claim_task(
-        repo, nonexpired_id, HEAD, "lead", clock=lambda: 991.0, lease=10
+        factory, nonexpired_id, HEAD, "lead", clock=lambda: 991.0, lease=10
     )
     with factory.transaction() as connection:
         connection.execute(
@@ -546,16 +614,16 @@ def test_queue_expiry_boundary_missing_claim_and_order(
             text("UPDATE tasks SET current_head_sha=NULL WHERE task_id=:task_id"),
             {"task_id": null_head_id},
         )
-    with repo.transaction() as unit:
-        unit.insert_event(
-            (
-                null_head_id,
-                "READY_IN_REVIEW",
-                "READY_IN_REVIEW",
-                "CI_REPAIR_HANDOFF",
-                None,
-                1000.0,
-                "{}",
+    with factory.transaction() as connection:
+        connection.execute(
+            insert(TaskEvent.__table__).values(
+                task_id=null_head_id,
+                previous_status="READY_IN_REVIEW",
+                next_status="READY_IN_REVIEW",
+                action="CI_REPAIR_HANDOFF",
+                sha=None,
+                timestamp=1000.0,
+                metadata="{}",
             )
         )
 
@@ -564,37 +632,38 @@ def test_queue_expiry_boundary_missing_claim_and_order(
         (task_id, HEAD),
         (null_head_id, None),
     ]
-    with repo.read() as unit:
-        assert unit.find_claim((expired["claim_token"], task_id))["status"] == "EXPIRED"
-        assert (
-            unit.find_active_claim((nonexpired_id,))["token"] == active["claim_token"]
-        )
-        assert unit.find_task((missing_claim_id,))["status"] == "IN_REVIEW"
-        assert unit.find_active_claim((missing_claim_id,)) is None
-        event_row = unit.list_events((task_id,))[-1]
-        assert event_row["action"] == "LEASE_EXPIRED"
-        assert event_row["timestamp"] == 1000.0
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, expired["claim_token"], task_id).status == "EXPIRED"
+        assert active_claim_row(session, nonexpired_id).token == active["claim_token"]
+        assert task_row(session, missing_claim_id).status == "IN_REVIEW"
+        assert active_claim_row(session, missing_claim_id) is None
+        event_row = event_rows(session, task_id)[-1]
+        assert event_row.action == "LEASE_EXPIRED"
+        assert event_row.timestamp == 1000.0
 
 
 def test_queue_reader_only_reads_and_uses_latest_matching_handoff(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    with repo.transaction() as unit:
+    factory, task_id = setup
+    ready(factory, task_id)
+    with factory.transaction() as connection:
         for action, sha in (
             ("CI_REPAIR_HANDOFF", HEAD),
             ("HANDOFF", NEXT),
             ("CI_REPAIR_HANDOFF", None),
             ("CLAIM", HEAD),
         ):
-            unit.insert_event(
-                (
-                    task_id,
-                    "READY_IN_REVIEW",
-                    "READY_IN_REVIEW",
-                    action,
-                    sha,
-                    1000.0,
-                    "{}",
+            connection.execute(
+                insert(TaskEvent.__table__).values(
+                    task_id=task_id,
+                    previous_status="READY_IN_REVIEW",
+                    next_status="READY_IN_REVIEW",
+                    action=action,
+                    sha=sha,
+                    timestamp=1000.0,
+                    metadata="{}",
                 )
             )
     with (
@@ -612,13 +681,16 @@ def test_queue_reader_only_reads_and_uses_latest_matching_handoff(setup):
 def test_queue_projection_corruption_rolls_back_recovery_and_allows_retry(
     setup, mcp_postgres, monkeypatch
 ):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    with repo.read() as unit:
-        original_task = unit.find_task((task_id,))
-        original_events = unit.list_events((task_id,))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        original_task = task_row(session, task_id)
+        original_events = event_rows(session, task_id)
 
     def store_metadata(value):
         with factory.transaction() as connection:
@@ -631,12 +703,15 @@ def test_queue_projection_corruption_rolls_back_recovery_and_allows_retry(
     with pytest.raises(ToolError, match="invalid persisted review queue task") as error:
         mcp_postgres("list_review_queue", {})
     assert "private-canary" not in str(error.value)
-    with repo.read() as unit:
-        assert unit.find_active_claim((task_id,))["token"] == claim["claim_token"]
-        assert unit.find_task((task_id,))["status"] == original_task["status"]
-        assert unit.list_events((task_id,)) == original_events
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert active_claim_row(session, task_id).token == claim["claim_token"]
+        assert task_row(session, task_id).status == original_task.status
+        assert event_rows(session, task_id) == original_events
 
-    store_metadata(original_task["metadata"])
+    store_metadata(original_task.metadata)
     result = mcp_postgres("list_review_queue", {})["tasks"]
     assert [item["task_id"] for item in result] == [task_id]
 
@@ -644,9 +719,9 @@ def test_queue_projection_corruption_rolls_back_recovery_and_allows_retry(
 def test_queue_ci_query_failure_rolls_back_savepoint_and_still_recovers(
     setup, mcp_postgres, monkeypatch
 ):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
     with factory.transaction() as connection:
         connection.execute(
             text(
@@ -676,9 +751,12 @@ def test_queue_ci_query_failure_rolls_back_savepoint_and_still_recovers(
         )
         assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
 
-    with repo.read() as unit:
-        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "EXPIRED"
-        assert unit.find_task((task_id,))["status"] == "READY_IN_REVIEW"
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, claim["claim_token"], task_id).status == "EXPIRED"
+        assert task_row(session, task_id).status == "READY_IN_REVIEW"
     result = mcp_postgres("list_review_queue", {})["tasks"]
     assert [item["task_id"] for item in result] == [task_id]
 
@@ -687,9 +765,9 @@ def test_queue_ci_query_failure_rolls_back_savepoint_and_still_recovers(
 def test_queue_holds_task_lock_against_competing_review_write(
     setup, mcp_postgres, monkeypatch, operation
 ):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    expired = claim_task(repo, task_id, HEAD, "lead", clock=lambda: 990.0, lease=10)
+    factory, task_id = setup
+    ready(factory, task_id)
+    expired = claim_task(factory, task_id, HEAD, "lead", clock=lambda: 990.0, lease=10)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     monkeypatch.setattr("agent_workflow.composition.postgres_mcp.time", lambda: 1000.0)
     locked, release = Event(), Event()
@@ -711,9 +789,9 @@ def test_queue_holds_task_lock_against_competing_review_write(
 
     def compete():
         if operation == "claim":
-            return claim_task(repo, task_id, HEAD, "next")
+            return claim_task(factory, task_id, HEAD, "next")
         with pytest.raises(WorkflowError, match="claim expired"):
-            submit_task(repo, payload(expired), "lead", clock=lambda: 999.0)
+            submit_task(factory, payload(expired), "lead", clock=lambda: 999.0)
         return None
 
     monkeypatch.setattr(
@@ -742,18 +820,21 @@ def test_queue_holds_task_lock_against_competing_review_write(
         ]
         competing_claim = writer.result(timeout=5)
 
-    with repo.read() as unit:
-        assert unit.find_claim((expired["claim_token"], task_id))["status"] == "EXPIRED"
-        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
-        assert unit.list_reviews((task_id,)) == []
-        assert [row["action"] for row in unit.list_events((task_id,))].count(
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, expired["claim_token"], task_id).status == "EXPIRED"
+        assert task_row(session, task_id).completed_review_rounds == 0
+        assert review_ids(session, task_id) == []
+        assert [row.action for row in event_rows(session, task_id)].count(
             "LEASE_EXPIRED"
         ) == 1
-        active = unit.find_active_claim((task_id,))
+        active = active_claim_row(session, task_id)
         if competing_claim is None:
             assert active is None
         else:
-            assert active["token"] == competing_claim["claim_token"]
+            assert active.token == competing_claim["claim_token"]
             assert competing_claim["review_round"] == 1
 
 
@@ -763,15 +844,18 @@ def test_queue_holds_task_lock_against_competing_review_write(
 def test_queue_deadline_guards_rollback_and_allows_retry(
     setup, mcp_postgres, monkeypatch, checkpoint
 ):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     if checkpoint != "no-recovery":
-        claim_task(repo, task_id, HEAD, "lead")
+        claim_task(factory, task_id, HEAD, "lead")
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
-    with repo.read() as unit:
-        original_task = unit.find_task((task_id,))
-        original_claim = unit.find_active_claim((task_id,))
-        original_events = unit.list_events((task_id,))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        original_task = task_row(session, task_id)
+        original_claim = active_claim_row(session, task_id)
+        original_events = event_rows(session, task_id)
     clock = SimpleNamespace(now=1000.0)
     fake_time = SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now)
     session_commits = []
@@ -799,145 +883,87 @@ def test_queue_deadline_guards_rollback_and_allows_retry(
                 mcp_postgres("list_review_queue", {})
 
     assert session_commits == ([True] if checkpoint == "after-session-commit" else [])
-    with repo.read() as unit:
-        assert unit.find_task((task_id,)) == original_task
-        assert unit.find_active_claim((task_id,)) == original_claim
-        assert unit.list_events((task_id,)) == original_events
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert task_row(session, task_id) == original_task
+        assert active_claim_row(session, task_id) == original_claim
+        assert event_rows(session, task_id) == original_events
     result = mcp_postgres("list_review_queue", {})["tasks"]
     assert [item["task_id"] for item in result] == [task_id]
 
 
-def test_rollback_and_constraints(setup):
-    repo, task_id, _ = setup
-    with pytest.raises(RuntimeError):
-        with repo.transaction() as db:
-            db.insert_task(
-                (
-                    task_id,
-                    "{}",
-                    REPO,
-                    "branch",
-                    BASE,
-                    "medium",
-                    0,
-                    "AWAITING_HANDOFF",
-                    1.0,
-                    1.0,
+def test_active_claim_constraint_rolls_back_head_change(setup):
+    factory, task_id = setup
+    ready(factory, task_id)
+    with pytest.raises(PersistenceUnavailableError) as error:
+        with (
+            factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session) as uow,
+        ):
+            session.execute(
+                update(Task)
+                .where(Task.task_id == task_id)
+                .values(current_head_sha=NEXT)
+            )
+            session.add_all(
+                ReviewAttempt(
+                    token=token,
+                    task_id=task_id,
+                    expected_sha=HEAD,
+                    reviewer="lead",
+                    claimed_at=1.0,
+                    expires_at=2.0,
+                    status="ACTIVE",
                 )
+                for token in (f"{task_id}-one", f"{task_id}-two")
             )
-            db.insert_event(
-                (task_id, None, "AWAITING_HANDOFF", "CREATE", None, 1.0, "{}")
-            )
-            raise RuntimeError("rollback")
-    with repo.read() as db:
-        assert db.find_task((task_id,)) is None
-    ready(repo, task_id)
-    with pytest.raises(IntegrityError):
-        with repo.transaction() as db:
-            db.set_head((NEXT, task_id))
-            db.insert_claim(("one", task_id, HEAD, "lead", 1.0, 2.0))
-            db.insert_claim(("two", task_id, HEAD, "lead", 1.0, 2.0))
-    with repo.read() as db:
-        assert db.find_task((task_id,))["current_head_sha"] == HEAD
-        assert db.find_active_claim((task_id,)) is None
-
-
-def test_read_keeps_repeatable_read_snapshot_and_rejects_writes(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    with repo.read() as db:
-        assert (
-            db.session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
-        )
-        assert db.session.scalar(text("SHOW transaction_read_only")) == "on"
-        assert db.find_task((task_id,))["current_head_sha"] == HEAD
-        with factory.transaction() as connection:
-            connection.execute(
-                text("UPDATE tasks SET current_head_sha=:sha WHERE task_id=:task_id"),
-                {"sha": NEXT, "task_id": task_id},
-            )
-        assert db.find_task((task_id,))["current_head_sha"] == HEAD
-    with pytest.raises(DBAPIError):
-        with repo.read() as db:
-            db.session.execute(
-                text("UPDATE tasks SET current_head_sha=:sha WHERE task_id=:task_id"),
-                {"sha": HEAD, "task_id": task_id},
-            )
-    with repo.read() as db:
-        assert db.find_task((task_id,))["current_head_sha"] == NEXT
-
-
-@pytest.mark.parametrize("failed_check", [1, 2])
-def test_deadline_before_outer_commit_rolls_back(setup, monkeypatch, failed_check):
-    repo, task_id, factory = setup
-    checks = 0
-
-    def fail_at_deadline():
-        nonlocal checks
-        checks += 1
-        if checks == failed_check:
-            raise TimeoutError("deadline expired")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            "agent_workflow.storage.postgres_workflow.check_deadline",
-            fail_at_deadline,
-        )
-        with pytest.raises(TimeoutError, match="deadline expired"):
-            with repo.transaction() as db:
-                db.insert_task(
-                    (
-                        task_id,
-                        "{}",
-                        REPO,
-                        "branch",
-                        BASE,
-                        "medium",
-                        0,
-                        "AWAITING_HANDOFF",
-                        1.0,
-                        1.0,
-                    )
-                )
-    assert checks == failed_check
-    with factory.transaction() as connection:
-        assert (
-            connection.scalar(
-                text("SELECT count(*) FROM tasks WHERE task_id=:task_id"),
-                {"task_id": task_id},
-            )
-            == 0
-        )
+            session.flush()
+            uow.commit()
+    cause = error.value.__context__
+    assert isinstance(cause, IntegrityError)
+    assert cause.orig.sqlstate == "23505"
+    assert cause.orig.diag.constraint_name == "one_active_claim"
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert task_row(session, task_id).current_head_sha == HEAD
+        assert active_claim_row(session, task_id) is None
 
 
 def test_competing_claims_and_ci_fail_closed(setup):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     with pytest.raises(WorkflowError, match="CI"):
-        claim_task(repo, task_id, HEAD, "lead", require_ci=True)
+        claim_task(factory, task_id, HEAD, "lead", require_ci=True)
 
     start_together = Barrier(2)
 
     def claim():
         start_together.wait(timeout=5)
         try:
-            return claim_task(repo, task_id, HEAD, "lead")
+            return claim_task(factory, task_id, HEAD, "lead")
         except WorkflowError:
             return None
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         claims = list(pool.map(lambda _: claim(), range(2)))
     assert sum(c is not None for c in claims) == 1
-    with repo.read() as db:
-        assert db.find_active_claim((task_id,)) is not None
-        assert not db.ci_approved((task_id, NEXT))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert active_claim_row(session, task_id) is not None
+        assert not PostgresReviewQueueReader(session).has_successful_ci(task_id, NEXT)
 
 
 def test_claim_ci_query_failure_rolls_back_savepoint_and_fails_closed(
     setup, monkeypatch
 ):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     original = PostgresReviewWrites.has_successful_ci
 
     def query_with_unavailable_evidence(self, task_id, sha):
@@ -963,15 +989,18 @@ def test_claim_ci_query_failure_rolls_back_savepoint_and_fails_closed(
         PostgresReviewWrites, "has_successful_ci", query_with_unavailable_evidence
     )
     with pytest.raises(WorkflowError, match="verified exact-HEAD CI"):
-        claim_task(repo, task_id, HEAD, "lead", require_ci=True)
-    with repo.read() as unit:
-        assert unit.find_active_claim((task_id,)) is None
-        assert unit.find_task((task_id,))["status"] == "READY_IN_REVIEW"
+        claim_task(factory, task_id, HEAD, "lead", require_ci=True)
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert active_claim_row(session, task_id) is None
+        assert task_row(session, task_id).status == "READY_IN_REVIEW"
 
 
 def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monkeypatch):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     with factory.transaction() as conn:
         conn.execute(
             text(
@@ -981,7 +1010,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
         )
     with pytest.raises(WorkflowError, match="not authorized"):
         record_handoff(
-            repo.factory,
+            factory,
             task_id,
             REPO,
             "task/test",
@@ -998,7 +1027,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             {"id": task_id, "head": HEAD},
         )
     record_handoff(
-        repo.factory,
+        factory,
         task_id,
         REPO,
         "task/test",
@@ -1007,59 +1036,74 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
         "docs/handoff.md",
         "repair",
     )
-    with repo.read() as db:
-        assert not db.ci_approved((task_id, NEXT))
-        assert db.find_head_handoff(task_id, NEXT)["action"] == "CI_REPAIR_HANDOFF"
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert not PostgresReviewQueueReader(session).has_successful_ci(task_id, NEXT)
+        assert (
+            PostgresReviewQueueReader(session).latest_head_handoff_action(task_id, NEXT)
+            == "CI_REPAIR_HANDOFF"
+        )
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
     with pytest.raises(WorkflowError, match="CI"):
-        claim_task(repo, task_id, NEXT, "lead")
+        claim_task(factory, task_id, NEXT, "lead")
     with factory.transaction() as conn:
         conn.execute(
             text("UPDATE controller_ci_tasks SET verdict='SUCCESS' WHERE task_id=:id"),
             {"id": task_id},
         )
-    with repo.read() as db:
-        assert db.ci_approved((task_id, NEXT))
-        assert not db.ci_approved((task_id, HEAD))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert PostgresReviewQueueReader(session).has_successful_ci(task_id, NEXT)
+        assert not PostgresReviewQueueReader(session).has_successful_ci(task_id, HEAD)
     queued = mcp_postgres("list_review_queue", {})["tasks"]
     assert [item["task_id"] for item in queued] == [task_id]
     assert queued[0]["head_sha"] == NEXT
-    assert claim_task(repo, task_id, NEXT, "lead")["reviewed_sha"] == NEXT
+    assert claim_task(factory, task_id, NEXT, "lead")["reviewed_sha"] == NEXT
 
 
 def test_expired_claim_recovery(setup):
-    repo, task_id, _ = setup
+    factory, task_id = setup
     now = [1000.0]
-    ready(repo, task_id)
-    first = claim_task(repo, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
+    ready(factory, task_id)
+    first = claim_task(factory, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
     now[0] += 11
-    second = claim_task(repo, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
+    second = claim_task(factory, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
     with pytest.raises(WorkflowError, match="expired"):
-        submit_task(repo, payload(first), "lead", clock=lambda: now[0])
+        submit_task(factory, payload(first), "lead", clock=lambda: now[0])
     assert second["claim_token"] != first["claim_token"]
     assert second["review_round"] == 1
 
 
 def test_reclaim_rolls_back_expiry_on_rejection_and_write_failure(setup, monkeypatch):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
-    first = claim_task(repo, task_id, HEAD, "lead", lease=10)
+    factory, task_id = setup
+    ready(factory, task_id)
+    first = claim_task(factory, task_id, HEAD, "lead", lease=10)
     old_token = first["claim_token"]
-    with repo.read() as unit:
-        original_events = unit.list_events((task_id,))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        original_events = event_rows(session, task_id)
 
     def expired_clock():
         return 1011.0
 
     def assert_old_lease_preserved():
-        with repo.read() as unit:
-            assert unit.find_active_claim((task_id,))["token"] == old_token
-            assert unit.find_task((task_id,))["status"] == "IN_REVIEW"
-            assert unit.list_events((task_id,)) == original_events
+        with (
+            factory.get_scoped_session() as session,
+            SqlAlchemyUnitOfWork(session, read_only=True),
+        ):
+            assert active_claim_row(session, task_id).token == old_token
+            assert task_row(session, task_id).status == "IN_REVIEW"
+            assert event_rows(session, task_id) == original_events
 
     with pytest.raises(WorkflowError, match="stale claim SHA"):
-        claim_task(repo, task_id, NEXT, "lead", clock=expired_clock)
+        claim_task(factory, task_id, NEXT, "lead", clock=expired_clock)
     assert_old_lease_preserved()
 
     original = PostgresReviewWrites.claim
@@ -1071,18 +1115,21 @@ def test_reclaim_rolls_back_expiry_on_rejection_and_write_failure(setup, monkeyp
     with monkeypatch.context() as patch:
         patch.setattr(PostgresReviewWrites, "claim", fail_after_replacement)
         with pytest.raises(RuntimeError, match="injected claim failure"):
-            claim_task(repo, task_id, HEAD, "lead", clock=expired_clock)
+            claim_task(factory, task_id, HEAD, "lead", clock=expired_clock)
     assert_old_lease_preserved()
 
-    new_claim = claim_task(repo, task_id, HEAD, "lead", clock=expired_clock)
+    new_claim = claim_task(factory, task_id, HEAD, "lead", clock=expired_clock)
     assert new_claim["claim_token"] != old_token
     assert new_claim["review_round"] == 1
-    with repo.read() as unit:
-        assert unit.find_claim((old_token, task_id))["status"] == "EXPIRED"
-        assert unit.find_active_claim((task_id,))["token"] == new_claim["claim_token"]
-        transitions = unit.list_events((task_id,))[len(original_events) :]
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, old_token, task_id).status == "EXPIRED"
+        assert active_claim_row(session, task_id).token == new_claim["claim_token"]
+        transitions = event_rows(session, task_id)[len(original_events) :]
         assert [
-            (entry["action"], entry["previous_status"], entry["next_status"])
+            (entry.action, entry.previous_status, entry.next_status)
             for entry in transitions
         ] == [
             ("LEASE_EXPIRED", "IN_REVIEW", "READY_IN_REVIEW"),
@@ -1091,67 +1138,90 @@ def test_reclaim_rolls_back_expiry_on_rejection_and_write_failure(setup, monkeyp
 
 
 def test_concurrent_identical_authorization_is_idempotent(setup):
-    repo, task_id, _ = setup
+    factory, task_id = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda _: authorize_task(repo.factory, spec(task_id)), range(2)))
-    assert len(read_context(repo, task_id)["events"]) == 1
+        list(pool.map(lambda _: authorize_task(factory, spec(task_id)), range(2)))
+    assert len(read_context(factory, task_id)["events"]) == 1
 
 
 def test_adversarial_text_is_stored_as_data(setup):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     attack = "lead' OR 1=1 --"
-    claim = claim_task(repo, task_id, HEAD, attack)
-    submit_task(repo, payload(claim, summary=attack), attack)
-    context = read_context(repo, task_id)
+    claim = claim_task(factory, task_id, HEAD, attack)
+    submit_task(factory, payload(claim, summary=attack), attack)
+    context = read_context(factory, task_id)
     assert context["previous_reviews"][0]["summary"] == attack
-    with repo.read() as db:
-        assert db.find_claim(("' OR 1=1 --", task_id)) is None
-        assert len(db.list_reviews((task_id,))) == 1
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert PostgresReviewWrites(session).find_claim(task_id, "' OR 1=1 --") is None
+        assert len(review_ids(session, task_id)) == 1
 
 
-def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    rolled_back_id = task_id + "-rollback"
+def test_row_lock_timeout_rolls_back_and_retry_succeeds(setup, queue_tasks):
+    factory, task_id = setup
+    ready(factory, task_id)
+    rolled_back_id = queue_tasks[0]
     with factory.transaction() as holder:
         holder.execute(
             text("SELECT task_id FROM tasks WHERE task_id=:id FOR UPDATE"),
             {"id": task_id},
         )
         start = time.monotonic()
-        with pytest.raises(DBAPIError) as exc:
+        with pytest.raises(PersistenceUnavailableError) as error:
             with dispatch_budget(time.time() + 0.6):
-                with repo.transaction() as db:
-                    db.insert_task(
-                        (
-                            rolled_back_id,
-                            "{}",
-                            REPO,
-                            "branch",
-                            BASE,
-                            "medium",
-                            0,
-                            "AWAITING_HANDOFF",
-                            1.0,
-                            1.0,
+                with (
+                    factory.get_scoped_session() as session,
+                    SqlAlchemyUnitOfWork(session) as uow,
+                ):
+                    session.add(
+                        Task(
+                            task_id=rolled_back_id,
+                            metadata_text="{}",
+                            repository=REPO,
+                            branch="branch",
+                            base_sha=BASE,
+                            requested_effort="medium",
+                            require_verified_effort=0,
+                            status="AWAITING_HANDOFF",
+                            created_at=1.0,
+                            updated_at=1.0,
                         )
                     )
-                    db.find_task((task_id,))
-        assert getattr(exc.value.orig, "sqlstate", None) in {"55P03", "57014"}
+                    session.flush()
+                    session.scalar(
+                        select(Task.task_id)
+                        .where(Task.task_id == task_id)
+                        .with_for_update()
+                    )
+                    uow.commit()
+        cause = error.value.__context__
+        assert isinstance(cause, DBAPIError)
+        assert getattr(cause.orig, "sqlstate", None) in {"55P03", "57014"}
         assert time.monotonic() - start < 3.0
-    with repo.read() as db:
-        assert db.find_task((rolled_back_id,)) is None
-    with repo.transaction() as db:
-        assert db.find_task((task_id,))["current_head_sha"] == HEAD
-        db.set_head((NEXT, task_id))
-    with repo.read() as db:
-        assert db.find_task((task_id,))["current_head_sha"] == NEXT
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert task_row(session, rolled_back_id) is None
+    with factory.get_scoped_session() as session, SqlAlchemyUnitOfWork(session) as uow:
+        assert PostgresReviewWrites(session).lock_task(task_id).head == HEAD
+        session.execute(
+            update(Task).where(Task.task_id == task_id).values(current_head_sha=NEXT)
+        )
+        uow.commit()
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert task_row(session, task_id).current_head_sha == NEXT
 
 
 def test_claim_lock_timeout_is_sanitized_and_retry_succeeds(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     before = time.monotonic()
     with factory.transaction() as holder:
         holder.execute(
@@ -1162,20 +1232,23 @@ def test_claim_lock_timeout_is_sanitized_and_retry_succeeds(setup):
             with pytest.raises(
                 PersistenceUnavailableError, match="^PostgreSQL unit of work failed$"
             ) as error:
-                claim_task(repo, task_id, HEAD, "lead")
+                claim_task(factory, task_id, HEAD, "lead")
     assert error.value.__suppress_context__
     assert time.monotonic() - before < 6
-    with repo.read() as unit:
-        assert unit.find_active_claim((task_id,)) is None
-        assert unit.find_task((task_id,))["status"] == "READY_IN_REVIEW"
-        assert [entry["action"] for entry in unit.list_events((task_id,))][-1:] == [
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert active_claim_row(session, task_id) is None
+        assert task_row(session, task_id).status == "READY_IN_REVIEW"
+        assert [entry.action for entry in event_rows(session, task_id)][-1:] == [
             "HANDOFF"
         ]
-    assert claim_task(repo, task_id, HEAD, "lead")["review_round"] == 1
+    assert claim_task(factory, task_id, HEAD, "lead")["review_round"] == 1
 
 
 def test_handoff_lock_timeout_is_sanitized_and_retry_succeeds(setup):
-    repo, task_id, factory = setup
+    factory, task_id = setup
     authorize_task(factory, spec(task_id))
     before = time.monotonic()
     with factory.transaction() as conn:
@@ -1199,55 +1272,39 @@ def test_handoff_lock_timeout_is_sanitized_and_retry_succeeds(setup):
                 )
     assert error.value.__cause__ is None
     assert time.monotonic() - before < 6
-    with repo.read() as unit:
-        task = unit.find_task((task_id,))
-        assert task["status"] == "AWAITING_HANDOFF"
-        assert task["current_head_sha"] is None
-        assert len(unit.list_events((task_id,))) == 1
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        task = task_row(session, task_id)
+        assert task.status == "AWAITING_HANDOFF"
+        assert task.current_head_sha is None
+        assert len(event_rows(session, task_id)) == 1
     result = record_handoff(
         factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "passed"
     )
     assert result.head_sha == HEAD
 
 
-def test_null_handoff_sha_does_not_match(setup):
-    repo, task_id, _ = setup
-    authorize_task(repo.factory, spec(task_id))
-    with repo.transaction() as db:
-        db.insert_event(
-            (
-                task_id,
-                "AWAITING_HANDOFF",
-                "AWAITING_HANDOFF",
-                "HANDOFF",
-                None,
-                1.0,
-                "{}",
-            )
-        )
-        assert db.find_head_handoff(task_id, None) is None
-        assert isinstance(db.find_authorization((task_id,))["metadata"], str)
-
-
 def test_handoff_repository_chooses_latest_matching_event_and_ignores_null(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    with repo.transaction() as unit:
+    factory, task_id = setup
+    ready(factory, task_id)
+    with factory.transaction() as connection:
         for action, sha, path in (
             ("CI_REPAIR_HANDOFF", HEAD, "latest"),
             ("HANDOFF", NEXT, "different head"),
             ("HANDOFF", None, "null head"),
             ("LOCAL_AUTHORIZATION", HEAD, "different action"),
         ):
-            unit.insert_event(
-                (
-                    task_id,
-                    None,
-                    "READY_IN_REVIEW",
-                    action,
-                    sha,
-                    0,
-                    json.dumps({"handoff_file_path": path}),
+            connection.execute(
+                insert(TaskEvent.__table__).values(
+                    task_id=task_id,
+                    previous_status=None,
+                    next_status="READY_IN_REVIEW",
+                    action=action,
+                    sha=sha,
+                    timestamp=0,
+                    metadata=json.dumps({"handoff_file_path": path}),
                 )
             )
     with factory.get_scoped_session() as session:
@@ -1259,8 +1316,8 @@ def test_handoff_repository_chooses_latest_matching_event_and_ignores_null(setup
 
 
 def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeypatch):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     claim = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
@@ -1277,7 +1334,7 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     with pytest.raises(ToolError, match="conflicting duplicate"):
         mcp_postgres("submit_review", {"submission": {**first, "summary": "changed"}})
     record_handoff(
-        repo.factory, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
+        factory, task_id, REPO, "task/test", BASE, NEXT, "docs/handoff.md", "test"
     )
     claim2 = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": NEXT}
@@ -1295,17 +1352,20 @@ def test_mcp_review_writes_two_rounds_and_duplicate(setup, mcp_postgres, monkeyp
     assert result["approval_current"] is None
     assert result["actual_effort"] is None
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
-    with repo.read() as unit:
-        assert len(unit.list_reviews((task_id,))) == 2
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert len(review_ids(session, task_id)) == 2
 
 
 def test_submit_requires_claim_owner_exact_head_ci_and_verified_effort(setup):
-    repo, task_id, factory = setup
+    factory, task_id = setup
     authorize_task(factory, spec(task_id, verified=True))
     record_handoff(
         factory, task_id, REPO, "task/test", BASE, HEAD, "docs/handoff.md", "test"
     )
-    claim = claim_task(repo, task_id, HEAD, "lead")
+    claim = claim_task(factory, task_id, HEAD, "lead")
     submission = payload(claim, "APPROVED")
     with factory.transaction() as connection:
         connection.execute(
@@ -1317,52 +1377,64 @@ def test_submit_requires_claim_owner_exact_head_ci_and_verified_effort(setup):
         )
 
     with pytest.raises(WorkflowError, match="claim owner mismatch"):
-        submit_task(repo, submission, "other", require_ci=True)
+        submit_task(factory, submission, "other", require_ci=True)
     with pytest.raises(WorkflowError, match="verified exact-HEAD CI"):
-        submit_task(repo, submission, "lead", require_ci=True)
+        submit_task(factory, submission, "lead", require_ci=True)
     with factory.transaction() as connection:
         connection.execute(
             text("UPDATE controller_ci_tasks SET head_sha=:head WHERE task_id=:id"),
             {"id": task_id, "head": HEAD},
         )
     with pytest.raises(WorkflowError, match="required effort cannot be verified"):
-        submit_task(repo, submission, "lead", require_ci=True)
-    with repo.read() as unit:
-        assert unit.list_reviews((task_id,)) == []
-        assert unit.find_active_claim((task_id,))["token"] == claim["claim_token"]
-        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
+        submit_task(factory, submission, "lead", require_ci=True)
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert review_ids(session, task_id) == []
+        assert active_claim_row(session, task_id).token == claim["claim_token"]
+        assert task_row(session, task_id).completed_review_rounds == 0
 
     failure = payload(claim)
-    assert submit_task(repo, failure, "lead", require_ci=True)["review_round"] == 1
-    with repo.read() as unit:
-        committed = unit.find_claim((claim["claim_token"], task_id))
-        events = unit.list_events((task_id,))
-    assert committed["status"] == "SUBMITTED"
+    assert submit_task(factory, failure, "lead", require_ci=True)["review_round"] == 1
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        committed = claim_row(session, claim["claim_token"], task_id)
+        events = event_rows(session, task_id)
+    assert committed.status == "SUBMITTED"
     with factory.transaction() as connection:
         connection.execute(
             text("UPDATE controller_ci_tasks SET head_sha=:head WHERE task_id=:id"),
             {"id": task_id, "head": NEXT},
         )
-    assert submit_task(repo, failure, "lead", require_ci=True)["duplicate"]
-    with repo.read() as unit:
-        assert unit.find_claim((claim["claim_token"], task_id)) == committed
-        assert unit.list_events((task_id,)) == events
+    assert submit_task(factory, failure, "lead", require_ci=True)["duplicate"]
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert claim_row(session, claim["claim_token"], task_id) == committed
+        assert event_rows(session, task_id) == events
 
 
 def test_submit_finding_database_error_rolls_back_review_and_allows_retry(setup):
-    repo, task_id, factory = setup
-    ready(repo, task_id)
-    claim = claim_task(repo, task_id, HEAD, "lead")
+    factory, task_id = setup
+    ready(factory, task_id)
+    claim = claim_task(factory, task_id, HEAD, "lead")
     valid = payload(claim)
     oversized_line = {**valid, "findings": [{**valid["findings"][0], "line": 2**31}]}
     with pytest.raises(
         PersistenceUnavailableError, match="^PostgreSQL unit of work failed$"
     ):
-        submit_task(repo, oversized_line, "lead")
-    with repo.read() as unit:
-        assert unit.list_reviews((task_id,)) == []
-        assert unit.find_active_claim((task_id,))["token"] == claim["claim_token"]
-        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
+        submit_task(factory, oversized_line, "lead")
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert review_ids(session, task_id) == []
+        assert active_claim_row(session, task_id).token == claim["claim_token"]
+        assert task_row(session, task_id).completed_review_rounds == 0
     with factory.transaction() as connection:
         assert (
             connection.scalar(
@@ -1370,12 +1442,12 @@ def test_submit_finding_database_error_rolls_back_review_and_allows_retry(setup)
             )
             is None
         )
-    assert submit_task(repo, valid, "lead")["review_round"] == 1
+    assert submit_task(factory, valid, "lead")["review_round"] == 1
 
 
 def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     claim = mcp_postgres(
         "claim_review", {"task_id": task_id, "expected_head_sha": HEAD}
@@ -1390,11 +1462,14 @@ def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
     monkeypatch.setattr(PostgresReviewWrites, "transition", fail)
     with pytest.raises(ToolError, match="injected persistence failure"):
         mcp_postgres("submit_review", {"submission": payload(claim)})
-    with repo.read() as unit:
-        assert unit.list_reviews((task_id,)) == []
-        assert unit.find_claim((claim["claim_token"], task_id))["status"] == "ACTIVE"
-        assert unit.find_task((task_id,))["completed_review_rounds"] == 0
-        assert unit.find_task((task_id,))["status"] == "IN_REVIEW"
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert review_ids(session, task_id) == []
+        assert claim_row(session, claim["claim_token"], task_id).status == "ACTIVE"
+        assert task_row(session, task_id).completed_review_rounds == 0
+        assert task_row(session, task_id).status == "IN_REVIEW"
 
 
 @pytest.mark.parametrize("operation", ["claim", "submit"])
@@ -1404,8 +1479,8 @@ def test_mcp_review_write_failure_rolls_back(setup, mcp_postgres, monkeypatch):
 def test_mcp_review_deadline_failure_rolls_back(
     setup, mcp_postgres, monkeypatch, operation, checkpoint
 ):
-    repo, task_id, _ = setup
-    ready(repo, task_id)
+    factory, task_id = setup
+    ready(factory, task_id)
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     claim_arguments = {"task_id": task_id, "expected_head_sha": HEAD}
     if operation == "submit":
@@ -1414,10 +1489,13 @@ def test_mcp_review_deadline_failure_rolls_back(
     else:
         arguments = claim_arguments
 
-    with repo.read() as unit:
-        original_task = unit.find_task((task_id,))
-        original_events = unit.list_events((task_id,))
-        original_claim = unit.find_active_claim((task_id,))
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        original_task = task_row(session, task_id)
+        original_events = event_rows(session, task_id)
+        original_claim = active_claim_row(session, task_id)
     clock = SimpleNamespace(now=1000.0)
     fake_time = SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now)
     original_write = getattr(PostgresReviewWrites, operation)
@@ -1442,10 +1520,13 @@ def test_mcp_review_deadline_failure_rolls_back(
                 mcp_postgres(f"{operation}_review", arguments)
 
     assert session_commits == ([True] if checkpoint == "after-session-commit" else [])
-    with repo.read() as unit:
-        assert unit.list_reviews((task_id,)) == []
-        assert unit.find_task((task_id,)) == original_task
-        assert unit.list_events((task_id,)) == original_events
-        assert unit.find_active_claim((task_id,)) == original_claim
+    with (
+        factory.get_scoped_session() as session,
+        SqlAlchemyUnitOfWork(session, read_only=True),
+    ):
+        assert review_ids(session, task_id) == []
+        assert task_row(session, task_id) == original_task
+        assert event_rows(session, task_id) == original_events
+        assert active_claim_row(session, task_id) == original_claim
     result = mcp_postgres(f"{operation}_review", arguments)
     assert result["review_round"] == 1

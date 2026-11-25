@@ -32,7 +32,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     PostgresLeadershipLock,
 )
 from agent_workflow.storage.postgres_dispatch import PostgresDispatchLedger
-from agent_workflow.storage.postgres_workflow import PostgresWorkflowRepository
 
 
 @pytest.fixture
@@ -45,7 +44,6 @@ def setup(request):
     task_id = "PG02C-" + uuid.uuid4().hex
     task_keys = {"task": task_id, "other": task_id + "-NEXT"}
     with PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn)) as factory:
-        repository = PostgresWorkflowRepository(factory)
         authorize_task(factory, spec(task_id))
         ledger = PostgresDispatchLedger(
             factory, role="dev", phase="code", clock=lambda: 1000.0
@@ -53,7 +51,7 @@ def setup(request):
         try:
             if getattr(request, "param", False):
                 authorize_task(factory, spec(task_keys["other"]))
-            yield ledger, repository, factory, task_id
+            yield ledger, factory, task_id
         finally:
             with factory.transaction() as conn:
                 conn.execute(
@@ -79,7 +77,7 @@ def setup(request):
 
 
 def test_concurrent_claim_block_restart_and_replay(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
             pool.map(
@@ -106,7 +104,7 @@ def test_concurrent_claim_block_restart_and_replay(setup):
 
 
 def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60, track_pre_launch=True)
     assert claim is not None
     simulated_publish = Mock()
@@ -135,7 +133,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
 @pytest.mark.parametrize("setup", [True], indirect=True)
 @pytest.mark.parametrize("fault", ["uncertain-publish", "late-result"])
 def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, fault):
-    _, _, factory, task_id = setup
+    _, factory, task_id = setup
     ledger = PostgresDispatchLedger(factory, role="dev", phase="code")
     leadership = PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER)
     finish_cleanup = Mock()
@@ -216,7 +214,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
 
 
 def test_evidence_identity_and_finish(setup):
-    ledger, _, _, task_id = setup
+    ledger, _, task_id = setup
     claim = ledger.claim({task_id}, 60)
     evidence = (
         claim["dispatch_id"],
@@ -246,7 +244,7 @@ def test_evidence_identity_and_finish(setup):
 
 
 def test_unsupported_role_and_invalid_timeout(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     for role, phase in [("reviewer", "code"), ("dev", "test"), ("", "")]:
         with pytest.raises(BusinessRuleError):
             PostgresDispatchLedger(factory, role=role, phase=phase)
@@ -257,7 +255,7 @@ def test_unsupported_role_and_invalid_timeout(setup):
 
 
 def test_claim_rejects_ineligible_status_round_and_task(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     assert ledger.claim({"UNKNOWN"}, 60) is None
     for status, rounds in (
         ("APPROVED", 1),
@@ -277,7 +275,7 @@ def test_claim_rejects_ineligible_status_round_and_task(setup):
 
 
 def test_lock_wait_is_bounded_and_retries(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     with factory.transaction() as holder:
         holder.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
         started = time.monotonic()
@@ -289,7 +287,7 @@ def test_lock_wait_is_bounded_and_retries(setup):
 
 
 def test_new_round_and_sha_are_new_identity(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     first = ledger.claim({task_id}, 60)
     ledger.record_runtime_evidence(
         first["dispatch_id"],
@@ -316,7 +314,7 @@ def test_new_round_and_sha_are_new_identity(setup):
 
 
 def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     evidence = (
         task_id,
@@ -352,7 +350,7 @@ def test_wrong_dispatch_and_role_cannot_record_evidence(setup):
 def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
     from agent_workflow.storage.postgres_dispatch import DevClaim
 
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
 
     def fail_validation(*args, **kwargs):
         raise RuntimeError("injected failure after flush")
@@ -376,7 +374,7 @@ def test_claim_failure_rolls_back_and_allows_retry(setup, monkeypatch):
 def test_claim_deadline_before_outer_commit_releases_slot(
     setup, monkeypatch, failed_check
 ):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     checks = 0
 
     def fail_at_deadline():
@@ -405,7 +403,7 @@ def test_claim_deadline_before_outer_commit_releases_slot(
 
 
 def test_finish_without_evidence_fails_and_retains_slot(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     with pytest.raises(BusinessRuleError, match="runtime evidence required"):
         ledger.finish(claim["dispatch_id"], HEAD)
@@ -441,7 +439,7 @@ def test_finish_without_evidence_fails_and_retains_slot(setup):
 
 
 def test_tampered_evidence_identity_keeps_slot(setup):
-    ledger, _, factory, task_id = setup
+    ledger, factory, task_id = setup
     claim = ledger.claim({task_id}, 60)
     ledger.record_runtime_evidence(
         claim["dispatch_id"],
@@ -480,7 +478,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
     from agent_workflow.runners import coder_runtime
 
-    _, _, observer, task_id = setup
+    _, observer, task_id = setup
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
     app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
     # Admission settings are covered offline with inert credential fixtures.
