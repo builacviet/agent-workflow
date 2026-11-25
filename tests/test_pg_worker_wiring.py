@@ -5,19 +5,21 @@ from contextlib import nullcontext
 from dataclasses import asdict, replace
 from functools import partial
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from sqlalchemy import create_engine
 
+from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.composition import worker_deps
-from agent_workflow.composition.postgres_controller import (
-    ControllerCiSessionProvider,
-    compose_postgres_controller,
-)
+from agent_workflow.composition import ci_deps, worker_deps
+from agent_workflow.composition.ci_deps import PostgresCiWriteScope
+from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.worker_deps import compose_postgres_worker
+from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
+    SqlAlchemyCiStateRepository,
+)
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
@@ -77,14 +79,15 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
     assert runtime.agent_runtime.require_ci_tracking is True
-    assert dependencies.ci_repository._session_scope.factory is factory
+    assert dependencies.ci_write_scope.factory is factory
     connect.assert_not_called()
     dispose.assert_not_called()
 
 
 def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
     factory, _, _ = wiring
-    session_scope = nullcontext()
+    session = Mock()
+    session_scope = nullcontext(session)
     open_scope = Mock(return_value=session_scope)
     deferred = partial(open_scope, factory)
     monkeypatch.setattr(factory, "get_scoped_session", deferred)
@@ -97,7 +100,8 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
 
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
     open_scope.assert_not_called()
-    assert dependencies.ci_repository._session_scope() is session_scope
+    with dependencies.ci_write_scope() as (uow, repository):
+        assert uow._session is repository._session is session
     open_scope.assert_called_once_with(factory)
 
 
@@ -107,7 +111,7 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
         "handoff_provider",
         "dispatch",
         "ci_tracking",
-        "ci_repository",
+        "ci_write_scope",
         "ci_factory",
         "leadership",
     ],
@@ -129,7 +133,7 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
 
 @pytest.mark.parametrize(
     "foreign",
-    [("dispatch",), ("ci_factory",), ("leadership",), ("ci_tracking", "ci_repository")],
+    [("dispatch",), ("ci_factory",), ("leadership",), ("ci_tracking", "ci_write_scope")],
 )
 def test_mixed_factories_are_rejected(
     wiring, forbid_worker_effects, monkeypatch, foreign
@@ -159,26 +163,29 @@ def test_actual_ci_provider_and_session_binding_are_checked(
 ):
     factory, dependencies, service = wiring
     monkeypatch.setattr(factory, "get_scoped_session", forbidden)
-    repository = dependencies.ci_repository
     if binding == "foreign_factory":
         other_factory = PostgresFactory(
             create_engine("postgresql+psycopg://", creator=forbidden)
         )
         monkeypatch.setattr(other_factory, "get_scoped_session", forbidden)
-        monkeypatch.setattr(
-            repository, "_session_scope", ControllerCiSessionProvider(other_factory)
-        )
+        scope = PostgresCiWriteScope(other_factory)
+        expected = "share the open Controller factory"
     elif binding == "unbound_callable":
-        monkeypatch.setattr(repository, "_session_scope", forbidden)
+        scope = forbidden
+        expected = "Worker requires"
     else:
-        monkeypatch.setattr(repository, "_session", object())
+        scope = SqlAlchemyCiStateRepository(session=Mock())
+        expected = "Worker requires"
+    substituted = replace(
+        dependencies, ci_write_scope=scope, ci_tracking=TrackCiTaskUseCase(scope)
+    )
     monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
 
-    with pytest.raises(TypeError, match="share the open Controller factory"):
-        compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
+    with pytest.raises(TypeError, match=expected):
+        compose_postgres_worker({}, service, substituted, leadership_guard=forbidden)
 
 
-@pytest.mark.parametrize("foreign", ["ci_tracking", "ci_repository"])
+@pytest.mark.parametrize("foreign", ["ci_tracking", "ci_write_scope"])
 def test_mixed_ci_operations_are_rejected(wiring, foreign):
     _, dependencies, service = wiring
     other = compose_postgres_controller(
@@ -371,7 +378,9 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
         {}, service, dependencies, leadership_guard=lambda: None
     )
     session = Mock()
-    session.begin.return_value = nullcontext()
+    uow = MagicMock()
+    make_uow = Mock(return_value=uow)
+    monkeypatch.setattr(ci_deps, "SqlAlchemyUnitOfWork", make_uow)
     session.get.side_effect = [
         SimpleNamespace(
             repository=REPOSITORY, current_head_sha=HEAD, status="READY_IN_REVIEW"
@@ -384,6 +393,7 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
         with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
             runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         session.add.assert_not_called()
+        uow.commit.assert_not_called()
     else:
         runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         binding = session.add.call_args.args[0]
@@ -393,3 +403,5 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
             binding.head_sha,
             binding.verdict,
         ) == ("T", 7, HEAD, "BLOCKED")
+        uow.commit.assert_called_once_with()
+    make_uow.assert_called_once_with(session, profile="ci_write")
