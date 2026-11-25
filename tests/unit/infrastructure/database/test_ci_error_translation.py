@@ -34,7 +34,8 @@ def _repository(monkeypatch):
         "_set_repository_transaction_options",
         configure,
     )
-    return SqlAlchemyCiAcknowledgmentRepository(lambda: scope), session, scope, configure
+    repository = SqlAlchemyCiAcknowledgmentRepository(lambda: scope)
+    return repository, session, scope, configure
 
 
 @pytest.mark.parametrize(
@@ -67,9 +68,7 @@ def test_ack_does_not_mislabel_validation_error(monkeypatch):
 
 def test_ack_sanitizes_backend_failures(monkeypatch):
     repository, session, scope, _ = _repository(monkeypatch)
-    session.begin.return_value.__exit__.side_effect = SQLAlchemyError(
-        "private DSN detail"
-    )
+    session.begin.return_value.__exit__.side_effect = SQLAlchemyError("private DSN detail")
 
     with pytest.raises(
         PersistenceUnavailableError, match="^PostgreSQL Controller CI operation failed$"
