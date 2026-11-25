@@ -169,9 +169,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
         monkeypatch.setattr(
             budget,
             "time",
-            SimpleNamespace(
-                time=lambda: claim.deadline + 1, monotonic=time.monotonic
-            ),
+            SimpleNamespace(time=lambda: claim.deadline + 1, monotonic=time.monotonic),
         )
         return HEAD
 
@@ -237,9 +235,7 @@ def test_evidence_identity_and_finish(setup):
         HEAD,
     )
     with pytest.raises(BusinessRuleError):
-        ledger.record_runtime_evidence(
-            claim.dispatch_id, task_id, NEXT, *evidence[3:]
-        )
+        ledger.record_runtime_evidence(claim.dispatch_id, task_id, NEXT, *evidence[3:])
     with pytest.raises(BusinessRuleError):
         ledger.record_runtime_evidence(claim.dispatch_id, "wrong", *evidence[2:])
     ledger.record_runtime_evidence(*evidence)
@@ -549,13 +545,17 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         def execute(claim, context):
             leadership_guard()
             with observer.transaction() as conn:
-                persisted = conn.execute(
-                    text(
-                        "SELECT dispatch_id,task_id,input_sha,deadline,round_number "
-                        "FROM agent_dispatches WHERE dispatch_id=:id"
-                    ),
-                    {"id": claim["dispatch_id"]},
-                ).mappings().one()
+                persisted = (
+                    conn.execute(
+                        text(
+                            "SELECT dispatch_id,task_id,input_sha,deadline,round_number "
+                            "FROM agent_dispatches WHERE dispatch_id=:id"
+                        ),
+                        {"id": claim["dispatch_id"]},
+                    )
+                    .mappings()
+                    .one()
+                )
             assert claim == dict(persisted)
             dispatch_ids.append(claim["dispatch_id"])
             assert claim["task_id"] == task_id
