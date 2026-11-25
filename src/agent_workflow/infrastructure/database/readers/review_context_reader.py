@@ -7,7 +7,6 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 
 from agent_workflow.application.review.dtos import ReviewContextSnapshot
-from agent_workflow.budget import check_deadline
 from agent_workflow.infrastructure.database.repositories.review_repository import (
     SqlAlchemyReviewRepository,
 )
@@ -28,7 +27,7 @@ class SqlAlchemyReviewContextReader:
     def read(self, task_id: str) -> ReviewContextSnapshot | None:
         with self._open_repositories() as (tasks, reviews):
             task = tasks.get_task(task_id)
-            snapshot = (
+            return (
                 ReviewContextSnapshot(
                     task=task,
                     previous_reviews=reviews.list_reviews(task_id),
@@ -37,5 +36,3 @@ class SqlAlchemyReviewContextReader:
                 if task is not None
                 else None
             )
-            check_deadline()
-            return snapshot
