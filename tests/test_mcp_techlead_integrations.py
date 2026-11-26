@@ -692,7 +692,7 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
     from mcp.shared.auth import ProtectedResourceMetadata
     from starlette.testclient import TestClient
 
-    from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier
+    from agent_workflow.interfaces.mcp.auth0_oauth import Auth0TokenVerifier
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     scope = "wfc:workflow"
