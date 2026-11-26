@@ -29,15 +29,13 @@ def test_retired_packages_and_mcp_aliases_are_absent():
     source = Path(__file__).resolve().parents[1] / "src"
     assert not (source / "my_wfc").exists()
     assert not (source / "order_service").exists()
+    assert not (source / "agent_workflow" / "mcp").exists()
+    assert importlib.util.find_spec("agent_workflow.mcp") is None
     for module in (
         "agent_workflow.auth0_oauth",
         "agent_workflow.security",
-        "agent_workflow.mcp.auth0_oauth",
-        "agent_workflow.mcp.security",
         "agent_workflow.tools",
-        "agent_workflow.mcp.tools",
         "agent_workflow.server",
-        "agent_workflow.mcp.server",
         "agent_workflow.bootstrap.mcp_runtime",
     ):
         assert importlib.util.find_spec(module) is None
