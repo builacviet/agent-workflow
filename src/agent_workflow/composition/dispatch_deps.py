@@ -1,6 +1,6 @@
 """Layer: Composition
 Responsibility: Preflight trusted adapters and scope dependencies for a dispatch pass.
-Dependencies: Application Dispatch, PostgreSQL and trusted Worker adapters.
+Dependencies: Application Dispatch, Domain errors, PostgreSQL, GitHub and Worker adapters.
 """
 
 from collections.abc import Callable, Iterator
@@ -20,9 +20,10 @@ from agent_workflow.composition.postgres_controller import compose_postgres_cont
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.composition.worker_deps import compose_postgres_worker
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.integrations.github_app_checks import ControllerAppToken
+from agent_workflow.infrastructure.github.app_token import ControllerAppToken
+from agent_workflow.infrastructure.github.client import GitHubClient
 from agent_workflow.runners.coder_runtime import validate_config
 from agent_workflow.runners.runtime_plugins import CodexCLIPlugin
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
@@ -105,6 +106,7 @@ def _validate_worker_config(config: dict) -> None:
             app_id=gate["app_id"],
             installation_id=gate["installation_id"],
             pem_path=gate["pem"],
+            request_json=GitHubClient().request_json,
         )
         controller_pem = Path(gate["pem"]).resolve(strict=True)
         if (

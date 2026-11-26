@@ -1,8 +1,10 @@
-"""GitHub Actions/Checks wire values shared by trusted CI adapters.
+"""Layer: Infrastructure
+Responsibility: Define GitHub Actions and Checks API wire values.
+Dependencies: Python standard library.
 
-These are GitHub's lowercase wire values, not the Controller's uppercase
-SUCCESS/FAILURE/BLOCKED decision. Keep unknown future conclusions fail-closed.
+Only decisive GitHub conclusions can become CI verdict evidence.
 """
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -23,7 +25,9 @@ class GitHubCheckConclusion(StrEnum):
     STALE = "stale"
 
 
-DECISIVE_CONCLUSIONS: frozenset[str] = frozenset({
-    GitHubCheckConclusion.SUCCESS,
-    GitHubCheckConclusion.FAILURE,
-})
+DECISIVE_CONCLUSIONS: frozenset[str] = frozenset(
+    {
+        GitHubCheckConclusion.SUCCESS,
+        GitHubCheckConclusion.FAILURE,
+    }
+)
