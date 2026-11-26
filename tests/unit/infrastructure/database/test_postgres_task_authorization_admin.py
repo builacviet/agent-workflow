@@ -368,7 +368,7 @@ def test_composition_injects_same_scoped_session(monkeypatch):
         unit_type.assert_called_once_with(session)
         repo_type.assert_called_once_with(session)
         use_case_type.assert_called_once_with(
-            unit_type.return_value, repo_type.return_value
+            uow=unit_type.return_value, repository=repo_type.return_value
         )
         assert use_case is use_case_type.return_value
     session_scope.__exit__.assert_called_once()
