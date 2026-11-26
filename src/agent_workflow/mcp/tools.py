@@ -21,6 +21,8 @@ from agent_workflow.application.review.use_cases.write_contracts import ClaimRev
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.infrastructure.techlead.github import TechLeadGitHub
+from agent_workflow.infrastructure.techlead.notion import TechLeadNotion
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.mcp.security import (
     TECHLEAD_SCOPE,
@@ -32,8 +34,6 @@ from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
     review_context_response,
 )
-from agent_workflow.mcp.techlead_github import TechLeadGitHub
-from agent_workflow.mcp.techlead_notion import TechLeadNotion
 
 
 def _review_request(task_id: str) -> GetReviewContextInput:

@@ -25,9 +25,9 @@ from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_writes_provider,
     postgres_task_operations_provider,
 )
+from agent_workflow.infrastructure.techlead.github import TechLeadError, TechLeadGitHub
+from agent_workflow.infrastructure.techlead.notion import TechLeadNotion
 from agent_workflow.mcp.server import create_mcp_server, get_server_info, ping
-from agent_workflow.mcp.techlead_github import TechLeadError, TechLeadGitHub
-from agent_workflow.mcp.techlead_notion import TechLeadNotion
 from agent_workflow.mcp.tools import register_tools
 
 REPO = "builacviet/agent-workflow"

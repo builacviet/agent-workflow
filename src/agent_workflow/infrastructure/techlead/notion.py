@@ -1,11 +1,14 @@
-"""Notion task reads and test-page comments using the dedicated TL integration."""
+"""Layer: Infrastructure
+Responsibility: Notion task reads and comments using the dedicated TL integration.
+Dependencies: AppConfig, HTTPX and shared TL HTTP helpers.
+"""
 
 from __future__ import annotations
 
 import httpx
 
 from agent_workflow.app_config import TechLeadNotionConfig, notion_uuid
-from agent_workflow.mcp.techlead_github import (
+from agent_workflow.infrastructure.techlead.github import (
     MUTATION_UNVERIFIED,
     TechLeadError,
     bearer_token,

@@ -1,4 +1,7 @@
-"""Review-only GitHub App client and bounded HTTP helpers for the TL tools."""
+"""Layer: Infrastructure
+Responsibility: Review-only GitHub App client and bounded HTTP helpers for TL tools.
+Dependencies: AppConfig, HTTPX and JWT.
+"""
 
 from __future__ import annotations
 
