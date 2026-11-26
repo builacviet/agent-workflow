@@ -6,10 +6,18 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.budget import operation_timeout
 
+WORKFLOW_QUERY_TIMEOUT_SECONDS = 30
+REPOSITORY_LOCK_TIMEOUT_SECONDS = 5
+REPOSITORY_STATEMENT_TIMEOUT_SECONDS = 5
+MIN_QUERY_TIMEOUT_MS = 1
+
 
 def set_workflow_query_timeout(session: Session) -> None:
     # PostgreSQL interprets zero as unlimited; never round a budget down to zero.
-    milliseconds = max(1, int(operation_timeout(30) * 1000))
+    milliseconds = max(
+        MIN_QUERY_TIMEOUT_MS,
+        int(operation_timeout(WORKFLOW_QUERY_TIMEOUT_SECONDS) * 1000),
+    )
     session.connection().execute(
         text(
             "SELECT set_config('lock_timeout', :timeout, true), "
@@ -32,8 +40,8 @@ def set_repository_transaction_options(
             "set_config('synchronous_commit', :synchronous_commit, true)"
         ),
         {
-            "lock_timeout": "5s",
-            "statement_timeout": "5s",
+            "lock_timeout": f"{REPOSITORY_LOCK_TIMEOUT_SECONDS}s",
+            "statement_timeout": f"{REPOSITORY_STATEMENT_TIMEOUT_SECONDS}s",
             "synchronous_commit": "on",
         },
     )
