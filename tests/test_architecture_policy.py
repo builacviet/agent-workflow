@@ -874,7 +874,12 @@ def test_task_authorization_wiring_is_explicit():
             assert any(
                 isinstance(node.value, ast.Call)
                 and _qualified(node.value.func) == "AuthorizeTaskUseCase"
-                and [_qualified(arg) for arg in node.value.args] == [unit, repo]
+                and not node.value.args
+                and {
+                    keyword.arg: _qualified(keyword.value)
+                    for keyword in node.value.keywords
+                }
+                == {"uow": unit, "repository": repo}
                 for node in yields
             ), (
                 f"{TASK_COMPOSITION}:{block.lineno}: inject the scoped UoW and repository"
