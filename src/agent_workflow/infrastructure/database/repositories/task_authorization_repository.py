@@ -12,6 +12,9 @@ from agent_workflow.domain.task.authorization import (
     TaskAuthorizationSpec,
 )
 from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.infrastructure.database.lock_keys import (
+    TASK_AUTHORIZATION_HASH_SEED,
+)
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 
 _SPEC_KEYS = frozenset(field.name for field in fields(TaskAuthorizationSpec))
@@ -51,8 +54,8 @@ class SqlAlchemyTaskAuthorizationRepository:
         session = self._session
         # Use the existing Workflow authorization lock key to serialize both callers.
         session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:task_id, 5727811))"),
-            {"task_id": task_id},
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:task_id, :seed))"),
+            {"task_id": task_id, "seed": TASK_AUTHORIZATION_HASH_SEED},
         )
         metadata = session.scalar(
             select(Task.metadata_text).where(Task.task_id == task_id)
