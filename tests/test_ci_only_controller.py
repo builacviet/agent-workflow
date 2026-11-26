@@ -1,6 +1,7 @@
 """V1-03C: CI-only entry point cannot dispatch agents or require worker PEM."""
 
 import json
+import runpy
 import subprocess
 import sys
 import textwrap
@@ -12,10 +13,11 @@ import pytest
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import ApplicationError
-from agent_workflow.bootstrap import controller_entrypoint as controller
-from agent_workflow.composition import postgres_ci_entrypoint
+from agent_workflow.composition import ci_deps
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
 from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
+
+CONTROLLER_MODULE = "agent_workflow.interfaces.cli.controller"
 
 
 def _evidence(observed_count, blocked_count):
@@ -33,7 +35,7 @@ def test_ci_mode_requires_postgres_before_any_fallback(monkeypatch, tmp_path, mo
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
 
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
 
 
@@ -69,9 +71,7 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         if failure is not None:
             raise failure
 
-    monkeypatch.setattr(
-        postgres_ci_entrypoint, "compose_ci_execution", compose_ci_execution
-    )
+    monkeypatch.setattr(ci_deps, "compose_ci_execution", compose_ci_execution)
     monkeypatch.setattr(
         ci_cli,
         "run_ci_pass",
@@ -85,10 +85,10 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     )
 
     if failure is None:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     else:
         with pytest.raises(SystemExit) as error:
-            controller.main()
+            runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
@@ -147,8 +147,8 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
         from types import SimpleNamespace
 
         blocked = {
-            "agent_workflow.composition.postgres_dispatch_entrypoint",
-            "agent_workflow.composition.postgres_dispatch_deps",
+            "agent_workflow.composition.dispatch_deps",
+            "agent_workflow.composition.worker_deps",
             "agent_workflow.runners.coder_runtime",
             "agent_workflow.runners.sandbox",
             "agent_workflow.storage.dispatch_repository",
@@ -167,7 +167,7 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
 
         sqlite3.connect = no_sqlite
 
-        from agent_workflow.composition import postgres_ci_entrypoint
+        from agent_workflow.composition import ci_deps
         from agent_workflow.interfaces.cli import ci_controller
 
         requests = []
@@ -181,12 +181,12 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
             assert config == {}
             yield SimpleNamespace(execute=execute)
 
-        postgres_ci_entrypoint.compose_ci_execution = compose
+        ci_deps.compose_ci_execution = compose
         ci_controller.run_ci_watch = partial(
             ci_controller.run_ci_watch, stop=lambda: bool(requests)
         )
         runpy.run_module(
-            "agent_workflow.controller", run_name="__main__"
+            "agent_workflow.interfaces.cli.controller", run_name="__main__"
         )
         assert requests == [True]
         assert not blocked.intersection(sys.modules)
@@ -226,7 +226,7 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags, c
     )
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), *flags])
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
     assert "exactly one supported mode" in capsys.readouterr().err
 
@@ -238,7 +238,7 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     monkeypatch.setenv("PG_RUNTIME_DSN", "")
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
 
 
@@ -267,10 +267,10 @@ def test_invalid_controller_app_config_exits_two_without_database_or_sqlite(
     )
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), "--ci-once"])
     open_database = Mock(side_effect=AssertionError("database must not open"))
-    monkeypatch.setattr(postgres_ci_entrypoint.PostgresFactory, "open", open_database)
+    monkeypatch.setattr(ci_deps.PostgresFactory, "open", open_database)
 
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
 
     stderr = capsys.readouterr().err
     assert error.value.code == 2
@@ -283,12 +283,10 @@ def _watch_setup(monkeypatch):
     factory = Mock()
     factory.__enter__ = Mock(return_value=factory)
     factory.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr(
-        postgres_ci_entrypoint.PostgresFactory, "open", lambda _: factory
-    )
+    monkeypatch.setattr(ci_deps.PostgresFactory, "open", lambda _: factory)
     use_case = Mock()
     compose = Mock(return_value=use_case)
-    monkeypatch.setattr(postgres_ci_entrypoint, "create_ci_reconcile_use_case", compose)
+    monkeypatch.setattr(ci_deps, "create_ci_reconcile_use_case", compose)
     config = {
         "controller_github_app": {
             "app_id": 1,
@@ -311,7 +309,7 @@ def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
 
     with (
         pytest.raises(ApplicationError, match="leadership unavailable"),
-        postgres_ci_entrypoint.compose_ci_execution(
+        ci_deps.compose_ci_execution(
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
@@ -329,7 +327,7 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
 
     with (
         pytest.raises(RuntimeError, match="failed"),
-        postgres_ci_entrypoint.compose_ci_execution(
+        ci_deps.compose_ci_execution(
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
@@ -346,7 +344,7 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
     use_case.execute.side_effect = results
     sleeps = []
 
-    with postgres_ci_entrypoint.compose_ci_execution(
+    with ci_deps.compose_ci_execution(
         config, app_config, checks=checks
     ) as scoped_use_case:
         ci_cli.run_ci_watch(
@@ -378,7 +376,7 @@ def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure
 
     with (
         pytest.raises(type(failure)),
-        postgres_ci_entrypoint.compose_ci_execution(
+        ci_deps.compose_ci_execution(
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
@@ -396,7 +394,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
     use_case.execute.side_effect = OSError("database unavailable")
     with (
         pytest.raises(OSError, match="database unavailable"),
-        postgres_ci_entrypoint.compose_ci_execution(
+        ci_deps.compose_ci_execution(
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
@@ -410,7 +408,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
     use_case.execute.return_value = _evidence(0, 0)
     with (
         pytest.raises(KeyboardInterrupt),
-        postgres_ci_entrypoint.compose_ci_execution(
+        ci_deps.compose_ci_execution(
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
@@ -429,7 +427,7 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
         _evidence(0, 0),
     ]
 
-    with postgres_ci_entrypoint.compose_ci_execution(
+    with ci_deps.compose_ci_execution(
         config, app_config, checks=checks
     ) as scoped_use_case:
         assert scoped_use_case is use_case

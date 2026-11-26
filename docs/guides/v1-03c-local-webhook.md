@@ -49,8 +49,8 @@ approved, disposable PostgreSQL environment.
 
 Start CI-only consumption in a trusted host terminal (no Codex worker is dispatched):
 
-    python -m agent_workflow.controller .runtime/controller-ci.json --ci-once
-    python -m agent_workflow.controller .runtime/controller-ci.json --ci-watch
+    python -m agent_workflow.interfaces.cli.controller .runtime/controller-ci.json --ci-once
+    python -m agent_workflow.interfaces.cli.controller .runtime/controller-ci.json --ci-watch
 
 Run exactly one of the commands above. Both modes read the durable webhook inbox
 from PostgreSQL through `PG_RUNTIME_DSN`. Use a config containing

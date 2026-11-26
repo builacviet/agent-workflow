@@ -41,10 +41,10 @@ from agent_workflow.application.exceptions import (
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
 from agent_workflow.composition.ci_deps import (
     PostgresCiWriteScope,
+    compose_ci_execution,
     create_ci_state_adapters,
 )
 from agent_workflow.composition.mcp_deps import review_writes_provider
-from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot

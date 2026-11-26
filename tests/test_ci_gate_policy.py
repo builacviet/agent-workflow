@@ -4,6 +4,7 @@ Tests never access live GitHub, Docker, credentials or production state.
 """
 
 import json
+import runpy
 import sys
 from contextlib import nullcontext
 from unittest.mock import Mock
@@ -12,11 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
-from agent_workflow.bootstrap import controller_entrypoint as controller
-from agent_workflow.composition import (
-    postgres_dispatch_deps,
-    postgres_dispatch_entrypoint,
-)
+from agent_workflow.composition import dispatch_deps
 from agent_workflow.composition.mcp_deps import review_queue_provider
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 
@@ -79,17 +76,23 @@ def test_controller_injects_same_policy_without_docker_launch(
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
     factory = Mock()
     dependencies = Mock()
-    dependencies.handoff_provider = postgres_dispatch_deps.PostgresHandoffProvider(
-        factory
-    )
+    dependencies.handoff_provider = dispatch_deps.PostgresHandoffProvider(factory)
     compose = Mock(return_value=dependencies)
     assignment = Mock()
     launch = Mock(side_effect=AssertionError("composition must not launch Worker"))
-    monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_controller", compose)
-    monkeypatch.setattr(postgres_dispatch_deps, "GetCoderAssignmentUseCase", assignment)
-    monkeypatch.setattr(postgres_dispatch_deps, "compose_postgres_worker", launch)
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_controller", compose)
+    monkeypatch.setattr(dispatch_deps, "GetCoderAssignmentUseCase", assignment)
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", launch)
 
-    postgres_dispatch_deps.create_dispatch_use_case({}, AppConfig.from_env(), factory)
+    open_database = Mock(return_value=nullcontext(factory))
+    monkeypatch.setattr(PostgresFactory, "open", open_database)
+    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", Mock())
+
+    with dispatch_deps.compose_dispatch_execution({}, AppConfig.from_env()):
+        pass
+
+    open_database.assert_called_once()
+    assert open_database.call_args.args[0].ci_gate_required is expected
     compose.assert_called_once_with(factory)
     assignment.assert_called_once()
     factory.get_scoped_session.assert_not_called()
@@ -107,9 +110,7 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     open_database = Mock(side_effect=AssertionError("database must not open"))
     monkeypatch.setattr(PostgresFactory, "open", open_database)
     compose = Mock(side_effect=AssertionError("invalid config must not compose"))
-    monkeypatch.setattr(
-        postgres_dispatch_entrypoint, "compose_dispatch_execution", compose
-    )
+    monkeypatch.setattr(dispatch_deps, "compose_dispatch_execution", compose)
     config = tmp_path / "controller.json"
     config.write_text(json.dumps({}))
     monkeypatch.setattr(sys, "argv", ["controller", str(config), "--once"])
@@ -117,7 +118,9 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
         review_queue_provider()
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(
+            "agent_workflow.interfaces.cli.controller", run_name="__main__"
+        )
 
     assert error.value.code == 1
     assert "configuration" in capsys.readouterr().err

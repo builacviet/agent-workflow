@@ -8,7 +8,7 @@ revision and operator authority before taking any action.
 ## PostgreSQL Controller
 
 The PostgreSQL-only development command is
-`python -m agent_workflow.controller CONFIG --once`.
+`python -m agent_workflow.interfaces.cli.controller CONFIG --once`.
 It requires an explicit `PG_RUNTIME_DSN` and a config without a SQLite `database`
 field. The tracked Phase 3.1 example configs contain that historical field.
 CI-only runs (`--ci-once` and `--ci-watch`) use the read-only Controller App

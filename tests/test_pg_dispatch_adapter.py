@@ -640,8 +640,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
     from test_agent_runtime import FakeHost
 
-    from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
-    from agent_workflow.composition import postgres_dispatch_entrypoint as entry
+    from agent_workflow.composition import dispatch_deps
     from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
     from agent_workflow.runners import coder_runtime
 
@@ -650,11 +649,11 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
     # Admission settings are covered offline with inert credential fixtures.
     # This PG test targets the real factory/guard/adapters and fake Worker seam.
-    monkeypatch.setattr(entry, "_validate_worker_config", lambda _: None)
+    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", lambda _: None)
     opened = []
     original_open = PostgresFactory.open
-    original_compose = deps_wiring.compose_postgres_worker
-    original_controller = deps_wiring.compose_postgres_controller
+    original_compose = dispatch_deps.compose_postgres_worker
+    original_controller = dispatch_deps.compose_postgres_controller
     calls = []
     pins = set()
     dispatch_ids = []
@@ -749,9 +748,11 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         monkeypatch.setattr(runtime, "release_engine", clear)
         return runtime
 
-    monkeypatch.setattr(entry.PostgresFactory, "open", open_factory)
-    monkeypatch.setattr(deps_wiring, "compose_postgres_controller", compose_controller)
-    monkeypatch.setattr(deps_wiring, "compose_postgres_worker", compose_worker)
+    monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", open_factory)
+    monkeypatch.setattr(
+        dispatch_deps, "compose_postgres_controller", compose_controller
+    )
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", compose_worker)
     monkeypatch.setattr(
         coder_runtime, "docker_command", lambda *_: pytest.fail("real Docker forbidden")
     )
@@ -762,7 +763,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
     def run_dispatch():
         return dispatch_cli.run_dispatch_pass(
-            config, app, compose=entry.compose_dispatch_execution
+            config, app, compose=dispatch_deps.compose_dispatch_execution
         ).worker_completed
 
     try:

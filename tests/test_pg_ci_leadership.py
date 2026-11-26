@@ -12,7 +12,7 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import ci_deps
-from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
+from agent_workflow.composition.ci_deps import compose_ci_execution
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot
 from agent_workflow.infrastructure.ci import leadership_scope
