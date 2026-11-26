@@ -21,16 +21,14 @@ from agent_workflow.domain.workflow_identity import (
     canonical_repository,
     validate_sha,
 )
+from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.models import (
     AgentDispatch,
     AgentExecutionEvidence,
     Task,
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.infrastructure.database.unit_of_work import (
-    SqlAlchemyUnitOfWork,
-    set_workflow_query_timeout,
-)
+from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 
 _PRE_LAUNCH = "PRE_LAUNCH"
 _BLOCKED = "Operator reconciliation required; do not retry automatically"
@@ -162,7 +160,7 @@ class PostgresDispatchLedger:
                 session.connection().execute(
                     text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
                 )
-                set_workflow_query_timeout(session)
+                transaction_options.set_workflow_query_timeout(session)
                 result = (
                     session.execute(
                         select(AgentDispatch.dispatch_id).where(

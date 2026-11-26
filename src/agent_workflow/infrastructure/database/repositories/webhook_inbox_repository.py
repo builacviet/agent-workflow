@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
+from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.models import WebhookInboxRow
-from agent_workflow.infrastructure.database.unit_of_work import (
-    _set_repository_transaction_options,
-)
 
 _OPERATION_ERROR = "PostgreSQL webhook inbox operation failed"
 SessionScope = Callable[[], AbstractContextManager[Session]]
@@ -33,7 +31,7 @@ class SqlAlchemyWebhookInboxRepository:
         try:
             with self._session_scope() as session:
                 with session.begin() as transaction:
-                    _set_repository_transaction_options(
+                    transaction_options.set_repository_transaction_options(
                         session.connection(), read_only=False
                     )
                     result = self._record(session, notification, body_digest)

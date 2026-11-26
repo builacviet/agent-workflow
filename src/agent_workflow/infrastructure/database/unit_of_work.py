@@ -13,43 +13,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from agent_workflow.application.exceptions import PersistenceUnavailableError
-from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.budget import check_deadline
+from agent_workflow.infrastructure.database import transaction_options
 
 
 class PostgresUnavailableError(PersistenceUnavailableError):
     """Runtime connection or transaction failed without exposing database values."""
-
-
-def set_workflow_query_timeout(session: Session) -> None:
-    # PostgreSQL interprets zero as unlimited; never round a budget down to zero.
-    milliseconds = max(1, int(operation_timeout(30) * 1000))
-    session.connection().execute(
-        text(
-            "SELECT set_config('lock_timeout', :timeout, true), "
-            "set_config('statement_timeout', :timeout, true)"
-        ),
-        {"timeout": f"{milliseconds}ms"},
-    )
-
-
-def _set_repository_transaction_options(
-    connection: Connection, *, read_only: bool
-) -> None:
-    # Webhook collision lookup must see the winner committed by a concurrent insert.
-    mode = ", READ ONLY" if read_only else ""
-    connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
-    connection.execute(
-        text(
-            "SELECT set_config('lock_timeout', :lock_timeout, true), "
-            "set_config('statement_timeout', :statement_timeout, true), "
-            "set_config('synchronous_commit', :synchronous_commit, true)"
-        ),
-        {
-            "lock_timeout": "5s",
-            "statement_timeout": "5s",
-            "synchronous_commit": "on",
-        },
-    )
 
 
 class SqlAlchemyUnitOfWork:
@@ -134,7 +103,7 @@ class SqlAlchemyUnitOfWork:
             )
 
         def refresh_timeout(*_args: object) -> None:
-            set_workflow_query_timeout(session)
+            transaction_options.set_workflow_query_timeout(session)
 
         try:
             with connection.begin() as transaction:
@@ -149,7 +118,9 @@ class SqlAlchemyUnitOfWork:
                     event.listen(session, "before_flush", refresh_timeout)
                 try:
                     if self._profile == "ci_write":
-                        _set_repository_transaction_options(connection, read_only=False)
+                        transaction_options.set_repository_transaction_options(
+                            connection, read_only=False
+                        )
                     else:
                         refresh_timeout()
                     yield

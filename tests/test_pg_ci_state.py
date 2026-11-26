@@ -189,8 +189,8 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
     scope.__enter__.return_value = session
     configure = Mock()
     monkeypatch.setattr(
-        "agent_workflow.infrastructure.database.repositories.ci_state_reader."
-        "_set_repository_transaction_options",
+        "agent_workflow.infrastructure.database.transaction_options."
+        "set_repository_transaction_options",
         configure,
     )
     reader = SqlAlchemyCiStateReader(lambda: scope)
