@@ -30,8 +30,8 @@ def _repository(monkeypatch):
     scope.__enter__.return_value = session
     configure = Mock()
     monkeypatch.setattr(
-        "agent_workflow.infrastructure.database.repositories.ci_state_repository."
-        "_set_repository_transaction_options",
+        "agent_workflow.infrastructure.database.transaction_options."
+        "set_repository_transaction_options",
         configure,
     )
     repository = SqlAlchemyCiAcknowledgmentRepository(lambda: scope)
