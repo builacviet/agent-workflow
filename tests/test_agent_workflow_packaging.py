@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_workflow.admin import historical_spec
+from agent_workflow.interfaces.cli.admin import historical_spec
 
 
 def test_packaged_reference_available():

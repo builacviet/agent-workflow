@@ -587,7 +587,7 @@ def r2_violations(path, source):
         key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0)),
     ):
         for target, _, _ in _imports_in(node, package):
-            if path == "src/agent_workflow/admin.py" and (
+            if path == "src/agent_workflow/interfaces/cli/admin.py" and (
                 target
                 in {
                     "sqlite3",
@@ -674,23 +674,16 @@ def r2_violations(path, source):
                 "importlib.util.module_from_spec",
             }:
                 record(node, "core-call", target)
-        if (
-            area == "interfaces" or path == "src/agent_workflow/admin.py"
-        ) and isinstance(node, ast.Call):
+        if area == "interfaces" and isinstance(node, ast.Call):
             target = _qualified_alias(node.func, aliases)
             if target in {
                 "__import__",
                 "builtins.__import__",
                 "importlib.import_module",
             }:
-                rule = (
-                    "interface-dynamic-import"
-                    if area == "interfaces"
-                    else "admin-dynamic-import"
-                )
-                record(node, rule, target)
+                record(node, "interface-dynamic-import", target)
         if (
-            path == "src/agent_workflow/admin.py"
+            path == "src/agent_workflow/interfaces/cli/admin.py"
             and isinstance(node, ast.Attribute)
             and node.attr == "postgres"
         ):
@@ -881,7 +874,12 @@ def test_task_authorization_wiring_is_explicit():
             assert any(
                 isinstance(node.value, ast.Call)
                 and _qualified(node.value.func) == "AuthorizeTaskUseCase"
-                and [_qualified(arg) for arg in node.value.args] == [unit, repo]
+                and not node.value.args
+                and {
+                    keyword.arg: _qualified(keyword.value)
+                    for keyword in node.value.keywords
+                }
+                == {"uow": unit, "repository": repo}
                 for node in yields
             ), (
                 f"{TASK_COMPOSITION}:{block.lineno}: inject the scoped UoW and repository"
@@ -1019,11 +1017,11 @@ def test_r2_ast_rejects_bad_source(area, module, source, rule):
 
 
 def test_r2_ast_legacy_ratchet_rejects_added_and_stale_imports():
-    path = "src/agent_workflow/admin.py"
+    path = "src/agent_workflow/interfaces/cli/admin.py"
     source = "def old():\n import json"
     expected = {(path, "inline-import", "old", "json", 1)}
     _ratchet(r2_violations(path, source), expected)
-    with pytest.raises(AssertionError, match="admin-dynamic-import in provision"):
+    with pytest.raises(AssertionError, match="interface-dynamic-import in provision"):
         dynamic = (
             "\ndef provision():\n __import__('agent_workflow.composition.task_deps')"
         )
@@ -1062,13 +1060,13 @@ class GetUseCase:
     ],
 )
 def test_admin_rejects_legacy_and_database_imports(source):
-    path = "src/agent_workflow/admin.py"
+    path = "src/agent_workflow/interfaces/cli/admin.py"
     with pytest.raises(AssertionError, match="admin-legacy-import"):
         _ratchet(r2_violations(path, source), set())
 
 
 def test_admin_rejects_backend_selection_from_deprecated_flag():
-    path = "src/agent_workflow/admin.py"
+    path = "src/agent_workflow/interfaces/cli/admin.py"
     with pytest.raises(AssertionError, match="admin-backend-selector"):
         _ratchet(r2_violations(path, "if args.postgres: select_backend()"), set())
 

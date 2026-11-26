@@ -2,11 +2,10 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Protocol
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.admin.use_cases import (
-    AdminSeedCommand,
+    AdminSeedUseCase,
     ImportHistoricalReviewsUseCase,
     ResetSyntheticReviewUseCase,
     SeedSyntheticReviewUseCase,
@@ -27,12 +26,6 @@ from agent_workflow.infrastructure.logging.json_formatter import (
 )
 
 
-class IAdminSeedUseCase(Protocol):
-    """Common executable contract for the three admin fixtures."""
-
-    def execute(self, command: AdminSeedCommand) -> None: ...
-
-
 @contextmanager
 def create_authorize_task_use_case(
     factory: PostgresFactory,
@@ -40,7 +33,7 @@ def create_authorize_task_use_case(
     with factory.get_scoped_session() as session:
         unit = SqlAlchemyUnitOfWork(session)
         repository = SqlAlchemyTaskAuthorizationRepository(session)
-        yield AuthorizeTaskUseCase(unit, repository)
+        yield AuthorizeTaskUseCase(uow=unit, repository=repository)
 
 
 @contextmanager
@@ -54,7 +47,7 @@ def task_authorization_scope() -> Iterator[AuthorizeTaskUseCase]:
 
 
 @contextmanager
-def admin_seed_scope(action: str) -> Iterator[IAdminSeedUseCase]:
+def admin_seed_scope(action: str) -> Iterator[AdminSeedUseCase]:
     """Assemble a fixture use case on one scoped PostgreSQL session."""
 
     cases = {
@@ -69,5 +62,6 @@ def admin_seed_scope(action: str) -> Iterator[IAdminSeedUseCase]:
         factory.get_scoped_session() as session,
     ):
         yield case(
-            SqlAlchemyUnitOfWork(session), SqlAlchemyAdminSeedRepository(session)
+            uow=SqlAlchemyUnitOfWork(session),
+            repository=SqlAlchemyAdminSeedRepository(session),
         )

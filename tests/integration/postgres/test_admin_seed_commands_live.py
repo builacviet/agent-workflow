@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import delete, func, insert, select, update
 
-from agent_workflow import admin
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.admin.use_cases import (
     AdminSeedCommand,
@@ -28,6 +27,7 @@ from agent_workflow.infrastructure.database.repositories.admin_seed_repository i
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from agent_workflow.interfaces.cli import admin
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 
 
