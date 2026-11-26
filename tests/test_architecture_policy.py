@@ -182,6 +182,11 @@ def test_import_policy_rejects_future_violations():
     assert forbidden("domain", "agent_workflow.workers.trusted_git.main")
     assert forbidden("application", "agent_workflow.workers.trusted_git.app_auth")
     assert forbidden("trusted_git", "agent_workflow.storage.repository")
+    assert not forbidden("interfaces", "agent_workflow.composition.task_deps")
+    assert forbidden("interfaces", "agent_workflow.infrastructure.database")
+    assert forbidden("interfaces", "agent_workflow.bootstrap.mcp_runtime")
+    assert forbidden("application", "agent_workflow.composition.task_deps")
+    assert forbidden("domain", "agent_workflow.composition.task_deps")
     assert not forbidden("application", "agent_workflow.domain.contracts")
     assert not forbidden("infrastructure", "agent_workflow.application.ports.execution")
 
