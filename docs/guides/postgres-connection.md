@@ -1,6 +1,6 @@
 # PostgreSQL runtime connections — current R2 boundary
 
-**Source baseline:** merged main after [#139](https://github.com/builacviet/agent-workflow/pull/139), `5a569da13ffe5bd2fc158d2e82c8f41a704d67ec`, plus DB-06D1 factory retirement. PostgreSQL-only runtime persistence; no verified production activation. Read [canonical DB rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for selection and transaction ownership.
+**Source baseline:** merged main after [#143](https://github.com/builacviet/agent-workflow/pull/143), `128b5c7e04d68bd5ecb08881b7128804579544c6`. PostgreSQL-only runtime persistence; no verified production activation. Read [canonical DB rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for selection and transaction ownership.
 
 ## Configuration and readiness
 
@@ -8,7 +8,14 @@
 
 `agent_workflow.infrastructure.database.session_factory.PostgresFactory.open(AppConfig.from_env())` explicitly creates a factory; importing the package never connects. The local `agent_workflow.admin` commands use `AppConfig.for_local_task_authorization()` and **require a loopback host** (`127.0.0.1` or `::1`). The factory checks the reviewed Alembic head **`pg02d_webhook_digest`** on opening (see `EXPECTED_REVISION` in source); schema missing, empty or mismatched fails closed with a sanitized persistence exception. No implicit DDL, auto migration or SQLite fallback.
 
-Use `get_scoped_session()` for Readers and independent Repository writes; use the existing `SqlAlchemyUnitOfWork` for coordinated business transactions and repository-owned workflow write scopes. `commit()` records intent; workflow context exit checks deadlines, commits the Session, then commits the outer connection. Review context retains its read-only snapshot and rolls back on exit. Independent CI/webhook transactions retain the fixed short profile. `get_sync_session(connection)` lends a Session on an existing connection; `connect_session()` and `transaction()` serve infrastructure-owned connection scopes (including leadership and database fixtures). The two legacy auto-commit Session wrappers are retired. Preserve lock/isolation/timeout/durability and pinned leadership. Connections close after use; bounded connect timeout and sanitized errors remain.
+## Session and transaction ownership
+
+- `session_factory.py`: `get_scoped_session()` lends an idle connection-bound Session; `get_sync_session(connection)` lends a Session on an existing connection. `connect_session()` checks out a connection, including for pinned leadership. The raw `transaction()` connection helper has disposable database test consumers; it is not a business transaction API. The two legacy auto-commit Session wrappers are retired.
+- `unit_of_work.py`: `SqlAlchemyUnitOfWork` coordinates one transaction. Application owns business commit intent; an independent repository may reuse the concrete implementation locally (dispatch writes). `commit()` records intent; workflow context exit refreshes timeout, commits the Session, checks the deadline, closes the Session and physically commits the outer transaction. Read-only or uncommitted scopes roll back. CI writes retain their fixed profile, not the dispatch budget.
+- `transaction_options.py`: shared PostgreSQL settings only; no transaction lifecycle. CI reads use READ COMMITTED READ ONLY; CI/webhook writes use READ COMMITTED with fixed 5s lock/statement timeouts and synchronous commit. Review context uses REPEATABLE READ READ ONLY; dispatch pre-launch reads use READ COMMITTED READ ONLY with the dynamic workflow timeout. Workflow timeout is capped at 30 seconds and bounded by remaining budget, with a minimum of 1ms to avoid PostgreSQL's unlimited zero setting.
+- `lock_keys.py`: stable transaction advisory namespace and domains for migration/dispatch, and separate task-authorization hash seed. Keep values stable. Session leadership retains its distinct session lock namespace and pinned connection; Alembic owns its standalone migration engine.
+
+Connection timeout (5s) belongs to the factory; migration connect/lock timeouts (5s each) belong to Alembic; leadership statement timeout (5s) belongs to its adapter. These named constants have independent meanings. Preserve transaction-local settings, deadlines, lock ordering, durability, connection cleanup and sanitized failures.
 
 ## Local CLI contract
 
