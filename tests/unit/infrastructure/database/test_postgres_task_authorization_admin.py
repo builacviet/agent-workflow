@@ -85,7 +85,9 @@ def test_bad_command_line_arguments_do_not_echo_submitted_values(
     entrypoint, monkeypatch, capsys, arguments
 ):
     _, open_factory = entrypoint
-    monkeypatch.setattr(sys, "argv", ["agent_workflow.interfaces.cli.admin", *arguments])
+    monkeypatch.setattr(
+        sys, "argv", ["agent_workflow.interfaces.cli.admin", *arguments]
+    )
     with pytest.raises(SystemExit) as error:
         admin.main()
     assert error.value.code == 2

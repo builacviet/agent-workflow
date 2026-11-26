@@ -39,12 +39,12 @@ from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
 )
+from agent_workflow.interfaces.cli import admin
 from agent_workflow.observability.correlation import (
     correlation_scope,
     get_correlation_id,
     set_correlation_id,
 )
-from agent_workflow.interfaces.cli import admin
 
 
 def encode(value):
