@@ -22,15 +22,15 @@ from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
-from agent_workflow.interfaces.review_assignment_response import (
-    coder_assignment_response,
-    review_context_response,
-)
-from agent_workflow.mcp.security import (
+from agent_workflow.interfaces.mcp.security import (
     TECHLEAD_SCOPE,
     TechLeadScopeRequired,
     authorize_context,
     authorize_techlead,
+)
+from agent_workflow.interfaces.review_assignment_response import (
+    coder_assignment_response,
+    review_context_response,
 )
 from agent_workflow.mcp.techlead_github import TechLeadGitHub
 from agent_workflow.mcp.techlead_notion import TechLeadNotion
