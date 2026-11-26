@@ -25,20 +25,26 @@ def test_flat_imports_resolve_to_the_same_module(module, package):
     assert original is implementation
 
 
-def test_retired_packages_and_mcp_aliases_are_absent():
+def test_retired_packages_and_entrypoints_are_absent():
     source = Path(__file__).resolve().parents[1] / "src"
     assert not (source / "my_wfc").exists()
     assert not (source / "order_service").exists()
     assert not (source / "agent_workflow" / "mcp").exists()
-    assert importlib.util.find_spec("agent_workflow.mcp") is None
+    assert not (source / "agent_workflow" / "bootstrap").exists()
     for module in (
+        "agent_workflow.mcp",
         "agent_workflow.auth0_oauth",
         "agent_workflow.security",
         "agent_workflow.tools",
         "agent_workflow.server",
-        "agent_workflow.bootstrap.mcp_runtime",
+        "agent_workflow.bootstrap",
+        "agent_workflow.controller",
+        "agent_workflow.composition.postgres_ci_entrypoint",
+        "agent_workflow.composition.postgres_dispatch_entrypoint",
+        "agent_workflow.composition.postgres_dispatch_deps",
     ):
         assert importlib.util.find_spec(module) is None
+    assert importlib.util.find_spec("agent_workflow.interfaces.cli.controller")
 
 
 def test_trusted_worker_imports_from_agent_workflow_package():

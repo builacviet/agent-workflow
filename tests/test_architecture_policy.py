@@ -399,13 +399,16 @@ def test_import_policy_rejects_nested_worker_parent_aliases(source):
 
 
 def test_import_policy_allows_composition_to_import_worker():
-    path = SOURCE / "agent_workflow" / "composition" / "postgres_dispatch_entrypoint.py"
+    path = SOURCE / "agent_workflow" / "composition" / "dispatch_deps.py"
     modules = imports(path)
     worker_imports = {
         module for module in modules if module.startswith("agent_workflow.workers")
     }
     assert "agent_workflow.workers.trusted_git.app_auth" in worker_imports
     assert area_for(path) is None
+    assert POLICY["ownership"]["src/agent_workflow/composition/**"] == "composition"
+    assert "src/agent_workflow/bootstrap/**" not in POLICY["ownership"]
+    assert "src/agent_workflow/mcp/**" not in POLICY["ownership"]
 
 
 def test_nested_trusted_git_package_is_classified():
@@ -1099,14 +1102,13 @@ def test_ci_composition_does_not_expose_postgres_state_bundle():
         }
         assert "PostgresCiStateDependencies" not in identifiers | classes
         assert "CiStateAdapter" not in identifiers | classes
-    ci_entrypoint = (
-        SOURCE / "agent_workflow" / "composition" / "postgres_ci_entrypoint.py"
-    )
-    assert not any(
-        module == "agent_workflow.interfaces"
-        or module.startswith("agent_workflow.interfaces.")
-        for module in imports(ci_entrypoint)
-    )
+    for name in ("ci_deps.py", "controller_deps.py", "dispatch_deps.py"):
+        path = paths[0].with_name(name)
+        assert not any(
+            module == "agent_workflow.interfaces"
+            or module.startswith("agent_workflow.interfaces.")
+            for module in imports(path)
+        )
     worker = ast.parse(paths[2].read_text(encoding="utf-8"))
     assert not any(
         isinstance(node, ast.Attribute) and node.attr == "ci_state"

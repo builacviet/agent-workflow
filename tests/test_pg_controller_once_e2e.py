@@ -29,9 +29,7 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.composition import postgres_ci_entrypoint
-from agent_workflow.composition import postgres_dispatch_deps as deps_wiring
-from agent_workflow.composition import postgres_dispatch_entrypoint as entry
+from agent_workflow.composition import ci_deps, dispatch_deps
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.infrastructure.database.models import CITask, Task
@@ -46,7 +44,7 @@ from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
-PG_CONTROLLER = "agent_workflow.controller"
+PG_CONTROLLER = "agent_workflow.interfaces.cli.controller"
 INPUT = "b" * 40
 HEAD = "c" * 40
 
@@ -97,7 +95,7 @@ def config(tmp_path, monkeypatch):
 
 def run_dispatch(config, app_config):
     return dispatch_cli.run_dispatch_pass(
-        config, app_config, compose=entry.compose_dispatch_execution
+        config, app_config, compose=dispatch_deps.compose_dispatch_execution
     ).worker_completed
 
 
@@ -115,7 +113,7 @@ def test_pg_once_cli_routes_without_sqlite(config, tmp_path, monkeypatch, capsys
         assert app_config.pg_runtime_dsn == DSN
         yield SimpleNamespace(execute=execute)
 
-    monkeypatch.setattr(entry, "compose_dispatch_execution", compose)
+    monkeypatch.setattr(dispatch_deps, "compose_dispatch_execution", compose)
     runpy.run_module(PG_CONTROLLER, run_name="__main__")
     execute.assert_called_once_with({"T"}, 1800)
     assert capsys.readouterr().out == "PostgreSQL dispatch: no work claimed.\n"
@@ -138,8 +136,8 @@ def test_pg_only_cli_rejects_unsupported_flags_before_config(
 ):
     monkeypatch.setattr(sys, "argv", ["controller", "config.json", *flags])
     monkeypatch.setattr(controller_cli, "read_controller_config", forbidden)
-    monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
-    monkeypatch.setattr(postgres_ci_entrypoint, "compose_ci_execution", forbidden)
+    monkeypatch.setattr(dispatch_deps, "compose_dispatch_execution", forbidden)
+    monkeypatch.setattr(ci_deps, "compose_ci_execution", forbidden)
 
     with pytest.raises(SystemExit) as error:
         runpy.run_module(PG_CONTROLLER, run_name="__main__")
@@ -166,8 +164,8 @@ def test_pg_only_cli_rejects_invalid_dsn_or_stale_config_before_resources(
     path = tmp_path / "controller.json"
     path.write_text(json.dumps(config))
     monkeypatch.setattr(sys, "argv", ["controller", str(path), mode])
-    monkeypatch.setattr(entry, "compose_dispatch_execution", forbidden)
-    monkeypatch.setattr(postgres_ci_entrypoint, "compose_ci_execution", forbidden)
+    monkeypatch.setattr(dispatch_deps, "compose_dispatch_execution", forbidden)
+    monkeypatch.setattr(ci_deps, "compose_ci_execution", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
 
     with pytest.raises(SystemExit) as error:
@@ -195,7 +193,7 @@ def test_pg_once_cli_without_dsn_never_calls_legacy(
     path.write_text(json.dumps(config))
     monkeypatch.setattr(sys, "argv", ["controller", str(path), "--once"])
     monkeypatch.setattr(sqlite3, "connect", forbidden)
-    monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
+    monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", forbidden)
     with pytest.raises(SystemExit) as error:
         runpy.run_module(PG_CONTROLLER, run_name="__main__")
     assert error.value.code == 1
@@ -206,8 +204,8 @@ def test_pg_once_cli_without_dsn_never_calls_legacy(
 @pytest.mark.parametrize("dsn", [None, "", "postgresql://bad"])
 def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, tmp_path, dsn):
     monkeypatch.delenv("PG_RUNTIME_DSN", raising=False)
-    monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
-    monkeypatch.setattr(deps_wiring, "compose_postgres_worker", forbidden)
+    monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", forbidden)
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
     sqlite_path = tmp_path / "misleading.sqlite"
@@ -238,8 +236,8 @@ def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, tmp_path, 
     ],
 )
 def test_unsafe_config_before_resources(config, monkeypatch, unsafe):
-    monkeypatch.setattr(entry.PostgresFactory, "open", forbidden)
-    monkeypatch.setattr(deps_wiring, "compose_postgres_worker", forbidden)
+    monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", forbidden)
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", forbidden)
     if unsafe == "tasks":
         config["tasks"] = ["T"]
     elif unsafe == "app_id":
@@ -272,7 +270,7 @@ def test_unsafe_config_before_resources(config, monkeypatch, unsafe):
 
 def test_pg_validation_never_inspects_sqlite_database(config):
     config["database"] = object()
-    entry._validate_worker_config(config)
+    dispatch_deps._validate_worker_config(config)
 
 
 def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
@@ -285,7 +283,7 @@ def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
     monkeypatch.setattr(dependencies.dispatch, "claim", claim)
     monkeypatch.setattr(PostgresFactory, "open", lambda _: offline_factory)
     monkeypatch.setattr(
-        deps_wiring,
+        dispatch_deps,
         "compose_postgres_controller",
         lambda factory: dependencies if factory is offline_factory else forbidden(),
     )
@@ -363,12 +361,12 @@ def test_single_factory_lazy_worker_and_terminal_order(
         return context
 
     monkeypatch.setattr(
-        deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
+        dispatch_deps.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )
     opened = Mock(return_value=factory)
     monkeypatch.setattr(PostgresFactory, "open", opened)
     monkeypatch.setattr(
-        deps_wiring,
+        dispatch_deps,
         "compose_postgres_controller",
         lambda borrowed: deps if borrowed is factory else forbidden(),
     )
@@ -398,7 +396,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
         return SimpleNamespace(execute_assignment=execute, release_engine=clear)
 
     worker = Mock(side_effect=compose)
-    monkeypatch.setattr(deps_wiring, "compose_postgres_worker", worker)
+    monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", worker)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
     if outcome == "leadership_lost_after_assignment":
         with pytest.raises(PermissionError, match="reconcile in-flight work"):
@@ -543,7 +541,7 @@ def test_pg_once_runs_native_dev_stages(
     deps = compose_postgres_controller(factory)
     monkeypatch.setattr(PostgresFactory, "open", Mock(return_value=factory))
     monkeypatch.setattr(
-        deps_wiring, "compose_postgres_controller", Mock(return_value=deps)
+        dispatch_deps, "compose_postgres_controller", Mock(return_value=deps)
     )
     claim_task = Mock(return_value=claim)
     events = Mock()
@@ -571,7 +569,7 @@ def test_pg_once_runs_native_dev_stages(
     monkeypatch.setattr(deps.dispatch, "block", events.block)
     get_assignment = Mock(return_value=projection)
     monkeypatch.setattr(
-        deps_wiring.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
+        dispatch_deps.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
     )
     monkeypatch.setattr(
         RegisterTaskHandoffUseCase,
