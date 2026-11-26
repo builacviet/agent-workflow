@@ -18,7 +18,7 @@ from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_writes_provider,
     postgres_task_operations_provider,
 )
-from agent_workflow.mcp.security import TECHLEAD_SCOPE
+from agent_workflow.interfaces.mcp.security import TECHLEAD_SCOPE
 from agent_workflow.mcp.tools import register_tools
 
 
@@ -85,7 +85,10 @@ def create_mcp_server():
         from mcp.server.auth.settings import AuthSettings
         from pydantic import AnyHttpUrl
 
-        from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier, load_auth0_config
+        from agent_workflow.interfaces.mcp.auth0_oauth import (
+            Auth0TokenVerifier,
+            load_auth0_config,
+        )
 
         config = load_auth0_config(
             os.environ.get("WFC_PUBLIC_HOST", "").strip().lower()
