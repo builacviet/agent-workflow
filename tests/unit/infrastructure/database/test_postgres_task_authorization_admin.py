@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from pydantic import ValidationError
 
-from agent_workflow import admin
+from agent_workflow.application.admin.use_cases import AdminSeedUseCase
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
     PersistenceUnavailableError,
@@ -17,6 +17,7 @@ from agent_workflow.application.exceptions import (
 from agent_workflow.composition import task_deps
 from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
+from agent_workflow.interfaces.cli import admin
 from agent_workflow.interfaces.cli.task_spec import (
     ProvisionTaskSpec,
     format_task_spec_error,
@@ -61,7 +62,7 @@ def entrypoint(monkeypatch, spec_file):
     monkeypatch.setattr(task_deps.PostgresFactory, "open", open_factory)
 
     def run(action="provision", *, postgres=False):
-        argv = ["agent_workflow.admin", action, "--file", str(spec_file)]
+        argv = ["agent_workflow.interfaces.cli.admin", action, "--file", str(spec_file)]
         if postgres:
             argv.append("--postgres")
         monkeypatch.setattr(sys, "argv", argv)
@@ -71,7 +72,7 @@ def entrypoint(monkeypatch, spec_file):
 
 
 def test_deprecated_postgres_help_is_clear(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", "--help"])
+    monkeypatch.setattr(sys, "argv", ["agent_workflow.interfaces.cli.admin", "--help"])
     with pytest.raises(SystemExit) as result:
         admin.main()
     assert result.value.code == 0
@@ -84,7 +85,7 @@ def test_bad_command_line_arguments_do_not_echo_submitted_values(
     entrypoint, monkeypatch, capsys, arguments
 ):
     _, open_factory = entrypoint
-    monkeypatch.setattr(sys, "argv", ["agent_workflow.admin", *arguments])
+    monkeypatch.setattr(sys, "argv", ["agent_workflow.interfaces.cli.admin", *arguments])
     with pytest.raises(SystemExit) as error:
         admin.main()
     assert error.value.code == 2
@@ -129,7 +130,7 @@ def test_deprecated_postgres_flag_is_ignored_for_seed_and_reset(
 
 def test_admin_seed_scope_has_typed_use_case_contract():
     annotation = get_type_hints(task_deps.admin_seed_scope.__wrapped__)["return"]
-    assert annotation == Iterator[task_deps.IAdminSeedUseCase]
+    assert annotation == Iterator[AdminSeedUseCase]
 
 
 @pytest.mark.parametrize(

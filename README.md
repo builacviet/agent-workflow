@@ -15,12 +15,12 @@ Requires Python 3.11+. From the checkout root:
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e '.[mcp,test,postgres]'
 .venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\python.exe -m agent_workflow.admin --help
+.venv\Scripts\python.exe -m agent_workflow.interfaces.cli.admin --help
 .venv\Scripts\python.exe -m agent_workflow.interfaces.mcp.server
 ```
 
 Current Python entrypoints use `agent_workflow`, for example
-`python -m agent_workflow.admin` and `python -m agent_workflow.interfaces.mcp.server`.
+`python -m agent_workflow.interfaces.cli.admin` and `python -m agent_workflow.interfaces.mcp.server`.
 Existing Controller config and task records may use the former repository slug
 as an alias. GitHub requests and review links use `builacviet/agent-workflow`.
 

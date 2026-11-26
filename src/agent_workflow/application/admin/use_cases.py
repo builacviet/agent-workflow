@@ -58,3 +58,10 @@ class ResetSyntheticReviewUseCase:
             self._repository.reset_synthetic(command.spec)
             self._repository.seed_synthetic(command.spec)
             self._uow.commit()
+
+
+AdminSeedUseCase = (
+    ImportHistoricalReviewsUseCase
+    | SeedSyntheticReviewUseCase
+    | ResetSyntheticReviewUseCase
+)

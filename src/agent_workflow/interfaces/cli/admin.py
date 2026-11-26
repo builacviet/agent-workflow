@@ -1,4 +1,7 @@
-"""Explicit local-only provision/import/reset commands; no automatic remote dispatch."""
+"""Layer: Interfaces/CLI
+Responsibility: Run explicit local-only provision, import and reset commands.
+Dependencies: Application commands, Composition scopes and CLI validation.
+"""
 
 import argparse
 import logging

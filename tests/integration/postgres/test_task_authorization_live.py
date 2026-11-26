@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import delete, event, select, text, update
 
-from agent_workflow import admin, budget
+from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.shared.errors import CorruptedPersistenceDataError
 from agent_workflow.application.task.use_cases import authorize_task
@@ -44,6 +44,7 @@ from agent_workflow.observability.correlation import (
     get_correlation_id,
     set_correlation_id,
 )
+from agent_workflow.interfaces.cli import admin
 
 
 def encode(value):
@@ -184,7 +185,7 @@ def test_operator_cli_readback_preserves_history(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["agent_workflow.admin", "provision", "--file", str(path)],
+        ["agent_workflow.interfaces.cli.admin", "provision", "--file", str(path)],
     )
     admin.main()
 
@@ -235,7 +236,9 @@ def test_live_cli_correlates_readiness_sql_and_logs_after_commit(
     monkeypatch.setenv("CORRELATION_ID", correlation_id)
     monkeypatch.setenv("PG_RUNTIME_DSN", os.environ["PG_TEST_DSN"])
     monkeypatch.setattr(
-        sys, "argv", ["agent_workflow.admin", "provision", "--file", str(path)]
+        sys,
+        "argv",
+        ["agent_workflow.interfaces.cli.admin", "provision", "--file", str(path)],
     )
 
     readiness = PostgresFactory.assert_schema_ready

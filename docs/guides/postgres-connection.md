@@ -6,7 +6,7 @@
 
 `PG_RUNTIME_DSN` must be a `postgresql+psycopg://user:password@host:port/database` TCP URL with a user, password and database. Percent-encode reserved characters in credentials. URL query/fragment, ambiguous hosts and libpq host overrides for local provisioning are rejected. Never log, commit or share the DSN. Use separate least-privilege runtime credentials and privileged `PG_MIGRATOR_DSN` migration credentials.
 
-`agent_workflow.infrastructure.database.session_factory.PostgresFactory.open(AppConfig.from_env())` explicitly creates a factory; importing the package never connects. The local `agent_workflow.admin` commands use `AppConfig.for_local_task_authorization()` and **require a loopback host** (`127.0.0.1` or `::1`). The factory checks the reviewed Alembic head **`pg02d_webhook_digest`** on opening (see `EXPECTED_REVISION` in source); schema missing, empty or mismatched fails closed with a sanitized persistence exception. No implicit DDL, auto migration or SQLite fallback.
+`agent_workflow.infrastructure.database.session_factory.PostgresFactory.open(AppConfig.from_env())` explicitly creates a factory; importing the package never connects. The local `agent_workflow.interfaces.cli.admin` commands use `AppConfig.for_local_task_authorization()` and **require a loopback host** (`127.0.0.1` or `::1`). The factory checks the reviewed Alembic head **`pg02d_webhook_digest`** on opening (see `EXPECTED_REVISION` in source); schema missing, empty or mismatched fails closed with a sanitized persistence exception. No implicit DDL, auto migration or SQLite fallback.
 
 ## Session and transaction ownership
 
@@ -22,10 +22,10 @@ Connection timeout (5s) belongs to the factory; migration connect/lock timeouts 
 From an installed checkout, with an **already migrated and explicitly authorized loopback database**:
 
 ```powershell
-python -m agent_workflow.admin --help
+python -m agent_workflow.interfaces.cli.admin --help
 # The following require a safe, configured PG_RUNTIME_DSN:
-python -m agent_workflow.admin provision --file .\authorized-task-spec.json
-python -m agent_workflow.admin seed-synthetic
+python -m agent_workflow.interfaces.cli.admin provision --file .\authorized-task-spec.json
+python -m agent_workflow.interfaces.cli.admin seed-synthetic
 ```
 
 `provision`, `seed-history`, `seed-synthetic` and `reset-synthetic` are PostgreSQL-only. The legacy `--postgres` argument is accepted but does **nothing**; the help describes it as a deprecated no-op. Only run fixture seeding/reset against an explicitly disposable/approved database. For expected operator validation/business/corrupt-data errors the CLI exits `2`; temporary PostgreSQL failures or timeouts exit `75`. CLI emits bounded JSON lines on stderr with validated `CORRELATION_ID` and adds a safe correlation comment to SQL statements when a current ID exists. Unrecognized or unsafe IDs are regenerated at the CLI boundary.
