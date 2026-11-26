@@ -15,15 +15,13 @@ from agent_workflow.application.exceptions import PersistenceUnavailableError
 from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot, CiTrackingSnapshot
 from agent_workflow.domain.states import CiVerdict
+from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
     CITask,
     Task,
     WebhookInboxRow,
-)
-from agent_workflow.infrastructure.database.unit_of_work import (
-    _set_repository_transaction_options,
 )
 
 _OPERATION_ERROR = "PostgreSQL Controller CI operation failed"
@@ -129,7 +127,7 @@ class SqlAlchemyCiAcknowledgmentRepository:
         try:
             with self._session_scope() as session:
                 with session.begin() as transaction:
-                    _set_repository_transaction_options(
+                    transaction_options.set_repository_transaction_options(
                         session.connection(), read_only=False
                     )
                     known = session.scalar(
