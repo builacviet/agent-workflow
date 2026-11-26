@@ -17,15 +17,13 @@ from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiApprovalSnapshot
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
     CITask,
     Task,
     WebhookInboxRow,
-)
-from agent_workflow.infrastructure.database.unit_of_work import (
-    _set_repository_transaction_options,
 )
 
 _OPERATION_ERROR = "PostgreSQL Controller CI operation failed"
@@ -66,7 +64,7 @@ class SqlAlchemyCiStateReader:
         with self._session_scope() as session:
             with session.begin() as transaction:
                 try:
-                    _set_repository_transaction_options(
+                    transaction_options.set_repository_transaction_options(
                         session.connection(), read_only=True
                     )
                     yield session
