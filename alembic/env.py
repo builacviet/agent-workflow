@@ -13,6 +13,9 @@ from agent_workflow.infrastructure.database.lock_keys import (
 )
 from alembic import context
 
+MIGRATION_CONNECT_TIMEOUT_SECONDS = 5
+MIGRATION_LOCK_TIMEOUT_SECONDS = 5
+
 config = context.config
 target_metadata = None
 
@@ -44,11 +47,15 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     engine = sa.create_engine(
-        _dsn(), poolclass=NullPool, connect_args={"connect_timeout": 5}
+        _dsn(),
+        poolclass=NullPool,
+        connect_args={"connect_timeout": MIGRATION_CONNECT_TIMEOUT_SECONDS},
     )
     try:
         with engine.begin() as connection:
-            connection.execute(sa.text("SET LOCAL lock_timeout = '5s'"))
+            connection.execute(
+                sa.text(f"SET LOCAL lock_timeout = '{MIGRATION_LOCK_TIMEOUT_SECONDS}s'")
+            )
             # Serializes concurrent schema migrators, NOT runtime Controllers.
             if not connection.execute(
                 sa.text("SELECT pg_try_advisory_xact_lock(:namespace, :domain)"),

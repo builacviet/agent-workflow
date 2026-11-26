@@ -21,6 +21,7 @@ from agent_workflow.observability.correlation import (
     is_valid_correlation_id,
 )
 
+CONNECT_TIMEOUT_SECONDS = 5
 EXPECTED_REVISION = "pg02d_webhook_digest"
 _CORRELATION_COMMENT = re.compile(
     r"\A(?:/\* correlation_id=[A-Za-z0-9_-]{1,128} \*/ )+"
@@ -72,7 +73,7 @@ class PostgresFactory:
             engine = create_engine(
                 dsn,
                 poolclass=NullPool,
-                connect_args={"connect_timeout": 5},
+                connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
                 hide_parameters=True,
             )
         except Exception:
