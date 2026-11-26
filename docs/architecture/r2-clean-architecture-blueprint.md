@@ -1,7 +1,7 @@
 # R2 — Clean Architecture blueprint (target; partially implemented)
 
 **Status:** Merged design reference; selected R2 slices implemented. See [current source status](../architecture.md). This document authorizes **no** code, policy, CI, DB, credential, deployment or runtime edits by itself.
-**Source baseline:** `main@33cebc9d7b53094477c48e24852cc06a936b9bbe`, after PR #88. **Reference:** [Owner's clean_arch_demo](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145).
+**Source baseline:** `main@33cebc9d7b53094477c48e24852cc06a936b9bbe`, after PR #88 (original design baseline). Target ownership updated by [#148](https://github.com/builacviet/agent-workflow/pull/148); MCP source migration completed through [#150](https://github.com/builacviet/agent-workflow/pull/150). **Reference:** [Owner's clean_arch_demo](https://github.com/builacviet/clean_arch_demo/tree/b274fe483c88f1524cce0ac275ade266f03ec145).
 **Related:** [ADR-AW-001](../adr/AW-001-clean-architecture-governance.md), [current architecture](../architecture.md), [R2 quality and test contract](r2-quality-gates-and-tests.md), [worker runtime contract](worker-runtime-plugins.md), [development task contract](../templates/agent-task-contract.md).
 
 ## 1. Outcome and rules of engagement
@@ -11,9 +11,10 @@ Make workflow business behavior discoverable by **feature and use case**, as in 
 - `domain` = entities, value objects, transitions, policies and domain errors; plain Python, no Pydantic/SQLAlchemy/GitHub/MCP/Docker/IO dependencies.
 - `application` = named use cases, typed input/output DTOs and task-oriented ports (`typing.Protocol`). It owns transaction **intent** and authorization decisions, not concrete DB sessions, HTTP, Git, Docker or framework exceptions. Model validation can happen in interface DTOs; domain invariant checks remain pure.
 - `infrastructure` = PostgreSQL repositories, ORM models, sync/async SessionFactory, UoW implementation, GitHub/network/engine adapters, configuration and observability. It implements application ports.
-- `interfaces` = inbound MCP, webhook and CLI handlers: authenticate, validate transport payload, invoke use cases, map errors/responses. No SQL or business decisions in handlers.
+- `interfaces` = Presentation: own executable entrypoints, transport startup/registration/shutdown, authenticate, validate transport payload, obtain injected use cases from explicit Composition factories, invoke them directly and map errors/responses. No concrete Infrastructure imports, SQL or business decisions in handlers.
 - `composition` = **dependency assembly only**, named `database.py`/`task_deps.py`/`review_deps.py`/`dispatch_deps.py`/`runtime_deps.py`/`health_deps.py`; builds factory/UoW/repository/use-case graph with a controlled lifetime. No feature behavior, policy duplication, transaction commits or invocation of inbound CLI handlers/use-case `execute()` here.
-- `bootstrap` = process startup, registration and shutdown; may connect DI providers to Interfaces, but **per-request dependencies may flow directly from Composition to Presentation** (for example, via FastAPI `Depends`). It is not a compulsory hop for each request.
+
+**Five-part target:** Domain, Application, Infrastructure, Composition and Interfaces (Presentation). Presentation may import explicit Composition factories (for example, FastAPI `Depends`); Composition constructs/injects and manages dependency scopes, not Presentation handlers or Use Case execution. Existing Bootstrap and launcher-style Composition modules are transitional debt, not an additional target layer.
 - `workers/trusted_git` = separate trusted Prepare/Publish executable and GitHub App authority. Split by responsibility, **not** a second nested Domain/Application stack. Its sole credential boundary remains independent of credential-free Code/Test containers and workflow DB.
 
 **PostgreSQL-only R2:** SQLite runtime persistence retired in #113–119. Do not resurrect it or add coverage/compatibility shims. Retain historical evidence; actual deployment/cutover requires independent evidence. Use the [canonical DB access policy](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for all remaining DB migrations.
@@ -67,19 +68,18 @@ agent-workflow/
 │   │   ├── execution/{docker_backend.py,container_policy.py}
 │   │   └── observability/{context.py,json_logger.py,health.py}
 │   ├── interfaces/
-│   │   ├── mcp/{server.py,tools.py,security.py}
+│   │   ├── mcp/{server.py,tools.py,security.py,auth0_oauth.py,review_request.py}
 │   │   ├── webhook/{http.py,handlers.py}
 │   │   └── cli/{admin.py,controller.py,ci_watcher.py}
 │   ├── composition/
 │   │   ├── database.py
 │   │   ├── task_deps.py
 │   │   ├── review_deps.py
+│   │   ├── mcp_deps.py
 │   │   ├── dispatch_deps.py
 │   │   ├── ci_deps.py
 │   │   ├── runtime_deps.py
 │   │   └── health_deps.py
-│   ├── bootstrap/
-│   │   └── controller_entrypoint.py        # Executable process startup; not in composition/
 │   └── workers/
 │       └── trusted_git/
 │           ├── main.py                   # Minimal CLI entrypoint
@@ -164,7 +164,9 @@ Reference: [`clean_arch_demo@b274fe4`](https://github.com/builacviet/clean_arch_
 
 Runtime adapter contracts stay plug-and-play for approved `Dev/Code` only. Introduce a separate `ExecutionBackend` port; never imply QC/Reviewer/Podman or other roles are implemented merely by adding a directory.
 
-## 5. Migration map and PR sequence
+## 5. Historical migration map and PR sequence
+
+The original migration map below records starting locations and planned slices, not current imports or launch commands. MCP migration is complete through #150; remaining entrypoint cleanup follows the five-part ownership above. See [current architecture](../architecture.md) for active debt.
 
 | Slice | Scope and acceptance | Existing implementation to migrate | Gate |
 | --- | --- | --- | --- |
