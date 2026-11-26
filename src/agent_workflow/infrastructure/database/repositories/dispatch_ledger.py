@@ -22,6 +22,10 @@ from agent_workflow.domain.workflow_identity import (
     validate_sha,
 )
 from agent_workflow.infrastructure.database import transaction_options
+from agent_workflow.infrastructure.database.lock_keys import (
+    WORKFLOW_LOCK_NAMESPACE,
+    TransactionLockDomain,
+)
 from agent_workflow.infrastructure.database.models import (
     AgentDispatch,
     AgentExecutionEvidence,
@@ -92,7 +96,13 @@ class PostgresDispatchLedger:
             SqlAlchemyUnitOfWork(session) as unit,
         ):
             # Serialize the empty-slot check across independent host connections.
-            session.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:namespace, :domain)"),
+                {
+                    "namespace": WORKFLOW_LOCK_NAMESPACE,
+                    "domain": TransactionLockDomain.DISPATCH_CLAIM.value,
+                },
+            )
             if session.execute(
                 select(AgentDispatch.dispatch_id).where(AgentDispatch.slot == 1)
             ).first():
