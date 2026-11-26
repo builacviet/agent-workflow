@@ -19,7 +19,9 @@ def set_workflow_query_timeout(session: Session) -> None:
     )
 
 
-def set_repository_transaction_options(connection: Connection, *, read_only: bool) -> None:
+def set_repository_transaction_options(
+    connection: Connection, *, read_only: bool
+) -> None:
     # Webhook collision lookup must see the winner committed by a concurrent insert.
     mode = ", READ ONLY" if read_only else ""
     connection.execute(text(f"SET TRANSACTION ISOLATION LEVEL READ COMMITTED{mode}"))
