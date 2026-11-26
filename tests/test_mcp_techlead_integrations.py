@@ -24,11 +24,13 @@ from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_reads_provider,
     postgres_review_writes_provider,
     postgres_task_operations_provider,
+    techlead_github_provider,
+    techlead_notion_provider,
 )
 from agent_workflow.infrastructure.techlead.github import TechLeadError, TechLeadGitHub
 from agent_workflow.infrastructure.techlead.notion import TechLeadNotion
+from agent_workflow.interfaces.mcp.tools import register_tools
 from agent_workflow.mcp.server import create_mcp_server, get_server_info, ping
-from agent_workflow.mcp.tools import register_tools
 
 REPO = "builacviet/agent-workflow"
 PULL = f"/repos/{REPO}/pulls/42"
@@ -84,7 +86,11 @@ def auth_env(monkeypatch):
         monkeypatch.setenv(setting, value)
 
 
-def _server(review_queue_provider=postgres_review_queue_provider):
+def _server(
+    review_queue_provider=postgres_review_queue_provider,
+    github_provider=techlead_github_provider,
+    notion_provider=techlead_notion_provider,
+):
     mcp = create_mcp_server()
     mcp.tool()(ping)
     mcp.tool()(get_server_info)
@@ -94,6 +100,8 @@ def _server(review_queue_provider=postgres_review_queue_provider):
         review_queue_provider,
         postgres_review_reads_provider,
         postgres_review_writes_provider,
+        github_provider,
+        notion_provider,
     )
     return mcp
 
@@ -135,7 +143,14 @@ def test_every_tool_checks_auth0_and_config_before_io(
 ):
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
-    server = _server()
+    def denied_provider():
+        pytest.fail("unauthorized invocation must not resolve a provider")
+
+    server = (
+        _server()
+        if case == "disabled"
+        else _server(github_provider=denied_provider, notion_provider=denied_provider)
+    )
     scopes = ["wfc:workflow", "wfc:techlead"]
     subject = "auth0|test"
     if case == "wrong_scope":
@@ -655,7 +670,7 @@ def test_verified_scope_can_call_notion_tool(auth_env, monkeypatch, notion):
     monkeypatch.setenv("TECHLEAD_NOTION_BOT_ID", BOT_ID)
     monkeypatch.setenv("TECHLEAD_NOTION_TOKEN_FILE", str(client.config.token_file))
     monkeypatch.setattr(
-        "agent_workflow.mcp.tools.TechLeadNotion",
+        "agent_workflow.composition.techlead_deps.TechLeadNotion",
         lambda config: TechLeadNotion(config, transport=client.transport),
     )
     server = _server()
@@ -714,7 +729,9 @@ def test_auth0_scope_discovery_and_authentication(auth_env, monkeypatch, tmp_pat
             return {"id": BOT_ID, "type": "bot"}
 
     monkeypatch.setattr(Auth0TokenVerifier, "_fetch_jwks", fake_jwks)
-    monkeypatch.setattr("agent_workflow.mcp.tools.TechLeadNotion", FakeNotion)
+    monkeypatch.setattr(
+        "agent_workflow.composition.techlead_deps.TechLeadNotion", FakeNotion
+    )
     monkeypatch.setenv("TECHLEAD_NOTION_BOT_ID", BOT_ID)
     monkeypatch.setenv("TECHLEAD_NOTION_TOKEN_FILE", str(tmp_path / "unused"))
 

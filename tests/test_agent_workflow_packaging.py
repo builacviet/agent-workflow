@@ -18,7 +18,6 @@ def test_packaged_reference_available():
         ("coder_runtime", "runners"),
         ("github", "integrations"),
         ("server", "mcp"),
-        ("tools", "mcp"),
     ],
 )
 def test_flat_imports_resolve_to_the_same_module(module, package):
@@ -27,7 +26,7 @@ def test_flat_imports_resolve_to_the_same_module(module, package):
     assert original is implementation
 
 
-def test_retired_packages_and_auth_aliases_are_absent():
+def test_retired_packages_and_mcp_aliases_are_absent():
     source = Path(__file__).resolve().parents[1] / "src"
     assert not (source / "my_wfc").exists()
     assert not (source / "order_service").exists()
@@ -36,6 +35,8 @@ def test_retired_packages_and_auth_aliases_are_absent():
         "agent_workflow.security",
         "agent_workflow.mcp.auth0_oauth",
         "agent_workflow.mcp.security",
+        "agent_workflow.tools",
+        "agent_workflow.mcp.tools",
     ):
         assert importlib.util.find_spec(module) is None
 

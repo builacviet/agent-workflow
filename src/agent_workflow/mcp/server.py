@@ -17,9 +17,11 @@ from agent_workflow.bootstrap.mcp_runtime import (
     postgres_review_reads_provider,
     postgres_review_writes_provider,
     postgres_task_operations_provider,
+    techlead_github_provider,
+    techlead_notion_provider,
 )
 from agent_workflow.interfaces.mcp.security import TECHLEAD_SCOPE
-from agent_workflow.mcp.tools import register_tools
+from agent_workflow.interfaces.mcp.tools import register_tools
 
 
 def server_bind_host() -> str:
@@ -142,6 +144,8 @@ register_tools(
     postgres_review_queue_provider,
     postgres_review_reads_provider,
     postgres_review_writes_provider,
+    techlead_github_provider,
+    techlead_notion_provider,
 )
 
 
