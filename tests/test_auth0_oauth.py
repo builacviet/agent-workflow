@@ -7,7 +7,10 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from agent_workflow.mcp.auth0_oauth import Auth0TokenVerifier, load_auth0_config
+from agent_workflow.interfaces.mcp.auth0_oauth import (
+    Auth0TokenVerifier,
+    load_auth0_config,
+)
 
 
 @pytest.fixture
@@ -128,7 +131,7 @@ def test_jwks_unavailable_fails_closed(jwt_case):
 
 
 def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config):
-    from agent_workflow.mcp.security import authorize_context
+    from agent_workflow.interfaces.mcp.security import authorize_context
 
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     with pytest.raises(PermissionError, match="OAuth"):
