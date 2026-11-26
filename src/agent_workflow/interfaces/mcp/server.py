@@ -1,6 +1,6 @@
 """Layer: Interfaces/MCP
 Responsibility: Configure the MCP transport and register tools with their providers.
-Dependencies: MCP SDK, Bootstrap dependency providers and MCP tool adapters.
+Dependencies: MCP SDK, Composition dependency providers and MCP tool adapters.
 """
 
 import os
@@ -12,11 +12,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 
-from agent_workflow.bootstrap.mcp_runtime import (
-    postgres_review_queue_provider,
-    postgres_review_reads_provider,
-    postgres_review_writes_provider,
-    postgres_task_operations_provider,
+from agent_workflow.composition.mcp_deps import (
+    review_queue_provider,
+    review_reads_provider,
+    review_writes_provider,
+    task_operations_provider,
     techlead_github_provider,
     techlead_notion_provider,
 )
@@ -135,22 +135,25 @@ def get_server_info() -> dict:
     }
 
 
-mcp = create_mcp_server()
-mcp.tool()(ping)
-mcp.tool()(get_server_info)
-register_tools(
-    mcp,
-    postgres_task_operations_provider,
-    postgres_review_queue_provider,
-    postgres_review_reads_provider,
-    postgres_review_writes_provider,
-    techlead_github_provider,
-    techlead_notion_provider,
-)
+def build_mcp_server() -> FastMCP:
+    """Create the transport and register tools with scoped providers."""
+    mcp = create_mcp_server()
+    mcp.tool()(ping)
+    mcp.tool()(get_server_info)
+    register_tools(
+        mcp,
+        task_operations_provider,
+        review_queue_provider,
+        review_reads_provider,
+        review_writes_provider,
+        techlead_github_provider,
+        techlead_notion_provider,
+    )
+    return mcp
 
 
 def main() -> None:
-    mcp.run(transport="streamable-http")
+    build_mcp_server().run(transport="streamable-http")
 
 
 if __name__ == "__main__":

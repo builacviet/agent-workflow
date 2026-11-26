@@ -31,7 +31,9 @@ from agent_workflow.application.review.use_cases.list_review_queue import (
 )
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.mcp.server import mcp
+from agent_workflow.interfaces.mcp.server import build_mcp_server
+
+mcp = build_mcp_server()
 
 
 def test_server_starts_without_postgres_extra():
@@ -40,10 +42,13 @@ import asyncio
 import os
 import sys
 
-os.environ['WFC_AUTH_MODE'] = 'bearer'
+os.environ['WFC_AUTH_MODE'] = 'invalid-until-explicit-build'
 sys.modules["sqlalchemy"] = None
-from agent_workflow.mcp.server import mcp
+from agent_workflow.interfaces.mcp import server
 
+assert not hasattr(server, "mcp")
+os.environ['WFC_AUTH_MODE'] = 'bearer'
+mcp = server.build_mcp_server()
 tools = asyncio.run(mcp.list_tools())
 assert {"ping", "get_server_info", "list_review_queue"} <= {tool.name for tool in tools}
 """

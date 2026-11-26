@@ -139,7 +139,7 @@ def test_missing_sdk_http_identity_cannot_call_workflow(monkeypatch, auth_config
 
 
 def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
-    from agent_workflow.mcp.server import create_mcp_server
+    from agent_workflow.interfaces.mcp.server import create_mcp_server
 
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.delenv("WFC_AUTH0_ISSUER", raising=False)
@@ -150,7 +150,7 @@ def test_auth0_mode_refuses_partial_server_configuration(monkeypatch):
 
 
 def test_auth0_transport_advertises_protected_resource(monkeypatch):
-    from agent_workflow.mcp.server import create_mcp_server
+    from agent_workflow.interfaces.mcp.server import create_mcp_server
 
     monkeypatch.setenv("WFC_AUTH_MODE", "auth0")
     monkeypatch.setenv("WFC_AUTH0_ISSUER", "https://example.us.auth0.com/")

@@ -66,8 +66,10 @@ from agent_workflow.infrastructure.database.session_factory import PostgresFacto
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
+from agent_workflow.interfaces.mcp.server import build_mcp_server
 from agent_workflow.interfaces.review_assignment_response import review_context_response
-from agent_workflow.mcp.server import mcp
+
+mcp = build_mcp_server()
 
 
 @pytest.mark.parametrize("require_ci", [True, False])

@@ -19,18 +19,22 @@ from agent_workflow.app_config import (
     TechLeadNotionConfig,
 )
 from agent_workflow.application.review.dtos import ReviewQueueItem
-from agent_workflow.bootstrap.mcp_runtime import (
-    postgres_review_queue_provider,
-    postgres_review_reads_provider,
-    postgres_review_writes_provider,
-    postgres_task_operations_provider,
+from agent_workflow.composition.mcp_deps import (
+    review_queue_provider,
+    review_reads_provider,
+    review_writes_provider,
+    task_operations_provider,
     techlead_github_provider,
     techlead_notion_provider,
 )
 from agent_workflow.infrastructure.techlead.github import TechLeadError, TechLeadGitHub
 from agent_workflow.infrastructure.techlead.notion import TechLeadNotion
+from agent_workflow.interfaces.mcp.server import (
+    create_mcp_server,
+    get_server_info,
+    ping,
+)
 from agent_workflow.interfaces.mcp.tools import register_tools
-from agent_workflow.mcp.server import create_mcp_server, get_server_info, ping
 
 REPO = "builacviet/agent-workflow"
 PULL = f"/repos/{REPO}/pulls/42"
@@ -87,7 +91,7 @@ def auth_env(monkeypatch):
 
 
 def _server(
-    review_queue_provider=postgres_review_queue_provider,
+    queue_provider=review_queue_provider,
     github_provider=techlead_github_provider,
     notion_provider=techlead_notion_provider,
 ):
@@ -96,10 +100,10 @@ def _server(
     mcp.tool()(get_server_info)
     register_tools(
         mcp,
-        postgres_task_operations_provider,
-        review_queue_provider,
-        postgres_review_reads_provider,
-        postgres_review_writes_provider,
+        task_operations_provider,
+        queue_provider,
+        review_reads_provider,
+        review_writes_provider,
         github_provider,
         notion_provider,
     )
