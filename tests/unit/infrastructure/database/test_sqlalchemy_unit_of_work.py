@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, Mock, call
 import pytest
 from sqlalchemy.engine import Connection
 
-from agent_workflow import budget
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
@@ -13,7 +12,7 @@ from agent_workflow.application.shared.errors import PersistenceUnavailableError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.composition import review_deps
 from agent_workflow.domain.workflow_identity import WorkflowError
-from agent_workflow.infrastructure.database import unit_of_work
+from agent_workflow.infrastructure.database import transaction_options, unit_of_work
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
     PostgresUnavailableError,
@@ -50,7 +49,7 @@ def test_commit_is_explicit_deferred_and_has_one_physical_owner(scopes, monkeypa
     refresh = Mock()
     timeline.attach_mock(deadline, "deadline")
     timeline.attach_mock(refresh, "refresh")
-    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
+    monkeypatch.setattr(transaction_options, "set_workflow_query_timeout", refresh)
     concrete = SqlAlchemyUnitOfWork(session, after_session_commit=deadline)
     unit: IUnitOfWork = concrete
     connection.begin.assert_not_called()
@@ -83,7 +82,7 @@ def test_pre_commit_deadline_failure_never_commits(scopes, monkeypatch):
     connection, session, transaction, _ = scopes
     refresh = Mock(side_effect=[None, TimeoutError("deadline expired")])
     deadline = Mock()
-    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
+    monkeypatch.setattr(transaction_options, "set_workflow_query_timeout", refresh)
     with pytest.raises(TimeoutError, match="deadline expired"):
         with SqlAlchemyUnitOfWork(session, after_session_commit=deadline) as unit:
             unit.commit()
@@ -102,7 +101,7 @@ def test_scope_without_commit_rolls_back(scopes, explicit, monkeypatch):
     refresh = Mock()
     deadline = Mock(side_effect=TimeoutError("deadline expired"))
     timeline.attach_mock(deadline, "deadline")
-    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
+    monkeypatch.setattr(transaction_options, "set_workflow_query_timeout", refresh)
     monkeypatch.setattr(unit_of_work, "check_deadline", deadline)
     expected = (
         nullcontext()
@@ -221,9 +220,11 @@ def test_ci_write_profile_uses_fixed_options_without_workflow_hooks(
     refresh = Mock()
     deadline = Mock()
     options = Mock()
-    monkeypatch.setattr(unit_of_work, "set_workflow_query_timeout", refresh)
-    monkeypatch.setattr(budget, "operation_timeout", deadline)
-    monkeypatch.setattr(unit_of_work, "_set_repository_transaction_options", options)
+    monkeypatch.setattr(transaction_options, "set_workflow_query_timeout", refresh)
+    monkeypatch.setattr(transaction_options, "operation_timeout", deadline)
+    monkeypatch.setattr(
+        transaction_options, "set_repository_transaction_options", options
+    )
 
     with SqlAlchemyUnitOfWork(session, profile="ci_write") as unit:
         options.assert_called_once_with(connection, read_only=False)
