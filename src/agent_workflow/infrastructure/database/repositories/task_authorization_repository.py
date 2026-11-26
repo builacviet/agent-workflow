@@ -12,7 +12,9 @@ from agent_workflow.domain.task.authorization import (
     TaskAuthorizationSpec,
 )
 from agent_workflow.domain.workflow_identity import WorkflowError
-from agent_workflow.infrastructure.database.lock_keys import TASK_AUTHORIZATION_HASH_SEED
+from agent_workflow.infrastructure.database.lock_keys import (
+    TASK_AUTHORIZATION_HASH_SEED,
+)
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 
 _SPEC_KEYS = frozenset(field.name for field in fields(TaskAuthorizationSpec))
