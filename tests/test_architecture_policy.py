@@ -182,6 +182,14 @@ def test_import_policy_rejects_future_violations():
     assert forbidden("domain", "agent_workflow.workers.trusted_git.main")
     assert forbidden("application", "agent_workflow.workers.trusted_git.app_auth")
     assert forbidden("trusted_git", "agent_workflow.storage.repository")
+    assert forbidden("composition", "agent_workflow.interfaces.webhook.server")
+    assert any(
+        forbidden("composition", module)
+        for module in imports_from_source(
+            "from agent_workflow import interfaces as presentation",
+            "agent_workflow.composition",
+        )
+    )
     assert not forbidden("interfaces", "agent_workflow.composition.task_deps")
     assert forbidden("interfaces", "agent_workflow.infrastructure.database")
     assert forbidden("interfaces", "agent_workflow.bootstrap.mcp_runtime")
@@ -336,14 +344,15 @@ def test_ci_reader_repository_keep_session_and_transaction_boundaries():
 
 def test_webhook_dependency_assembly_is_separate_from_http_bootstrap():
     composition = SOURCE / "agent_workflow" / "composition"
-    entrypoint = ast.parse(
-        (composition / "webhook_entrypoint.py").read_text(encoding="utf-8")
-    )
+    server_path = SOURCE / "agent_workflow" / "interfaces" / "webhook" / "server.py"
+    assert not (composition / "webhook_entrypoint.py").exists()
+    assert not any(forbidden("interfaces", module) for module in imports(server_path))
+    entrypoint = ast.parse(server_path.read_text(encoding="utf-8"))
     entrypoint_names = {
         node.name for node in entrypoint.body if isinstance(node, ast.ClassDef)
     }
     assert "_ScopedWebhookInbox" not in entrypoint_names
-    assert "create_webhook_use_case" in {
+    assert "compose_webhook" in {
         alias.name
         for node in entrypoint.body
         if isinstance(node, ast.ImportFrom)
@@ -361,6 +370,18 @@ def test_webhook_dependency_assembly_is_separate_from_http_bootstrap():
         (composition / "webhook_deps.py").read_text(encoding="utf-8")
     )
     assert "_ScopedWebhookInbox" not in ast.dump(dependencies)
+    provider = next(
+        node
+        for node in dependencies.body
+        if isinstance(node, ast.FunctionDef) and node.name == "compose_webhook"
+    )
+    scope = next(node for node in provider.body if isinstance(node, ast.With))
+    assert ast.unparse(scope.items[0].context_expr) == "PostgresFactory.open(config)"
+    assert any(
+        isinstance(node, ast.Yield)
+        and ast.unparse(node.value) == "create_webhook_use_case(factory)"
+        for node in ast.walk(scope)
+    )
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)

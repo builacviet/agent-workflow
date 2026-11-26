@@ -8,12 +8,13 @@ import uuid
 from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
-from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
+from agent_workflow.composition import webhook_deps
 from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
@@ -22,6 +23,7 @@ from agent_workflow.infrastructure.database.repositories.webhook_inbox_repositor
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresUnavailableError,
 )
+from agent_workflow.interfaces.webhook import server as webhook_server
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 from agent_workflow.interfaces.webhook.http_server import WebhookHTTPServer
 
@@ -33,7 +35,7 @@ def endpoint(*, max_body=1024, outcomes=(InboxResult.INSERTED,)):
     inbox = Mock()
     inbox.record.side_effect = outcomes
     receiver = GitHubWebhookReceiver(
-        inbox,
+        use_case=ReceiveWebhookUseCase(inbox=inbox),
         secret=b"z" * 32,
         installation_id=17,
     )
@@ -115,24 +117,31 @@ def test_main_selects_pg_only_and_closes_factory(monkeypatch, tmp_path):
     monkeypatch.setenv("PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@localhost/db")
     factory = MagicMock()
     factory.__enter__.return_value = factory
-    monkeypatch.setattr(webhook_entrypoint.PostgresFactory, "open", lambda _: factory)
+    monkeypatch.setattr(webhook_deps.PostgresFactory, "open", lambda _: factory)
     server = MagicMock()
+    cleanup = Mock()
+    cleanup.attach_mock(server.server_close, "server_close")
+    cleanup.attach_mock(factory.__exit__, "factory_exit")
     receivers = []
 
-    def capture_server(_, receiver):
+    def capture_server(address, receiver):
+        assert address == ("0.0.0.0", 0)
         receivers.append(receiver)
         return server
 
-    monkeypatch.setattr(webhook_entrypoint, "WebhookHTTPServer", capture_server)
+    monkeypatch.setattr(webhook_server, "WebhookHTTPServer", capture_server)
 
-    webhook_entrypoint.main()
+    webhook_server.main()
 
     assert len(receivers) == 1
     inbox = receivers[0]._use_case._inbox
     assert isinstance(inbox, SqlAlchemyWebhookInboxRepository)
     assert inbox._session_scope is factory.get_scoped_session
-    factory.__exit__.assert_called_once()
-    server.server_close.assert_called_once()
+    server.serve_forever.assert_called_once_with(poll_interval=0.5)
+    assert cleanup.mock_calls == [
+        call.server_close(),
+        call.factory_exit(None, None, None),
+    ]
 
 
 @pytest.mark.parametrize("failure", ["bind", "serve"])
@@ -141,7 +150,7 @@ def test_main_closes_factory_on_server_failure(monkeypatch, tmp_path, failure):
     monkeypatch.setenv("PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@localhost/db")
     factory = MagicMock()
     factory.__enter__.return_value = factory
-    monkeypatch.setattr(webhook_entrypoint.PostgresFactory, "open", lambda _: factory)
+    monkeypatch.setattr(webhook_deps.PostgresFactory, "open", lambda _: factory)
     server = MagicMock()
     if failure == "serve":
         server.serve_forever.side_effect = RuntimeError("serve failed")
@@ -151,24 +160,26 @@ def test_main_closes_factory_on_server_failure(monkeypatch, tmp_path, failure):
             raise OSError("bind failed")
         return server
 
-    monkeypatch.setattr(webhook_entrypoint, "WebhookHTTPServer", build_server)
+    monkeypatch.setattr(webhook_server, "WebhookHTTPServer", build_server)
     with pytest.raises((OSError, RuntimeError)):
-        webhook_entrypoint.main()
+        webhook_server.main()
     factory.__exit__.assert_called_once()
     if failure == "serve":
         server.server_close.assert_called_once()
+    else:
+        server.server_close.assert_not_called()
 
 
 def test_missing_dsn_fails_before_socket(monkeypatch, tmp_path):
     _main_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        webhook_entrypoint.PostgresFactory, "open", lambda _: pytest.fail("PG opened")
+        webhook_deps.PostgresFactory, "open", lambda _: pytest.fail("PG opened")
     )
     monkeypatch.setattr(
-        webhook_entrypoint, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
+        webhook_server, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
     )
     with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
-        webhook_entrypoint.main()
+        webhook_server.main()
 
 
 @pytest.mark.parametrize(
@@ -178,10 +189,10 @@ def test_invalid_explicit_dsn_fails_before_socket(monkeypatch, tmp_path, dsn):
     _main_environment(monkeypatch, tmp_path)
     monkeypatch.setenv("PG_RUNTIME_DSN", dsn)
     monkeypatch.setattr(
-        webhook_entrypoint, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
+        webhook_server, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
     )
     with pytest.raises(ValueError, match="PG_RUNTIME_DSN"):
-        webhook_entrypoint.main()
+        webhook_server.main()
 
 
 def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
@@ -193,12 +204,12 @@ def test_unavailable_pg_fails_before_socket(monkeypatch, tmp_path):
             "PostgreSQL connection or schema readiness check failed"
         )
 
-    monkeypatch.setattr(webhook_entrypoint.PostgresFactory, "open", fail_open)
+    monkeypatch.setattr(webhook_deps.PostgresFactory, "open", fail_open)
     monkeypatch.setattr(
-        webhook_entrypoint, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
+        webhook_server, "WebhookHTTPServer", lambda *a: pytest.fail("socket opened")
     )
     with pytest.raises(PostgresUnavailableError):
-        webhook_entrypoint.main()
+        webhook_server.main()
 
 
 @pytest.mark.parametrize(
@@ -224,7 +235,11 @@ def test_http_layer_maps_error_by_ownership_and_allows_retry(
             return InboxResult.INSERTED
 
     inbox = FailingInbox()
-    receiver = GitHubWebhookReceiver(inbox, secret=b"z" * 32, installation_id=17)
+    receiver = GitHubWebhookReceiver(
+        use_case=ReceiveWebhookUseCase(inbox=inbox),
+        secret=b"z" * 32,
+        installation_id=17,
+    )
     server = WebhookHTTPServer(("127.0.0.1", 0), receiver)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -262,5 +277,5 @@ def test_repository_compose_webhook_selects_postgres_only_image():
     ):
         assert forbidden not in service
     assert '".[postgres]"' in dockerfile
-    assert '"agent_workflow.composition.webhook_entrypoint"' in dockerfile
+    assert '"agent_workflow.interfaces.webhook.server"' in dockerfile
     assert "USER webhook" in dockerfile

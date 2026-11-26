@@ -24,7 +24,7 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
-from agent_workflow.composition import webhook_entrypoint
+from agent_workflow.composition import webhook_deps
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.infrastructure.database.repositories.webhook_inbox_repository import (
@@ -33,6 +33,7 @@ from agent_workflow.infrastructure.database.repositories.webhook_inbox_repositor
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
 )
+from agent_workflow.interfaces.webhook import server as webhook_server
 
 
 def persisted_notification(
@@ -372,21 +373,21 @@ def test_live_signed_http_pg_selection_and_replay(
         factories.append(factory)
         return factory
 
-    monkeypatch.setattr(webhook_entrypoint.PostgresFactory, "open", capture_factory)
+    monkeypatch.setattr(webhook_deps.PostgresFactory, "open", capture_factory)
     servers = []
     failures = []
-    original_server = webhook_entrypoint.WebhookHTTPServer
+    original_server = webhook_server.WebhookHTTPServer
 
     class ObservedServer(original_server):
         def serve_forever(self, poll_interval=0.5):
             ready.set()
             return super().serve_forever(poll_interval=poll_interval)
 
-    monkeypatch.setattr(webhook_entrypoint, "WebhookHTTPServer", ObservedServer)
+    monkeypatch.setattr(webhook_server, "WebhookHTTPServer", ObservedServer)
 
     def run():
         try:
-            webhook_entrypoint.main()
+            webhook_server.main()
         except Exception as error:
             failures.append(error)
 

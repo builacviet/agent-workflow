@@ -7,6 +7,7 @@ from http import HTTPStatus
 from unittest import TestCase
 from unittest.mock import Mock
 
+from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.webhook.inbox import InboxResult
 from agent_workflow.domain.workflow_identity import REPOSITORY
@@ -70,7 +71,10 @@ class GitHubWebhookTests(TestCase):
 
     def make_receiver(self, **kwargs: int) -> GitHubWebhookReceiver:
         return GitHubWebhookReceiver(
-            self.inbox, secret=SECRET, installation_id=INSTALLATION_ID, **kwargs
+            use_case=ReceiveWebhookUseCase(inbox=self.inbox),
+            secret=SECRET,
+            installation_id=INSTALLATION_ID,
+            **kwargs,
         )
 
     def test_accepts_both_events_as_notifications(self) -> None:

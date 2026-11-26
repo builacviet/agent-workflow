@@ -17,4 +17,4 @@ RUN python -m pip install --no-cache-dir ".[postgres]" \
 ENV HOME=/home/webhook
 USER webhook
 EXPOSE 8081
-CMD ["python", "-m", "agent_workflow.composition.webhook_entrypoint"]
+CMD ["python", "-m", "agent_workflow.interfaces.webhook.server"]

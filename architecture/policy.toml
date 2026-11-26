@@ -13,6 +13,7 @@ orchestration = ["agent_workflow.domain.service", "agent_workflow.storage", "age
 interfaces = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.infrastructure", "agent_workflow.runners", "agent_workflow.orchestration", "agent_workflow.bootstrap", "agent_workflow.workers.trusted_git"]
 infrastructure = ["agent_workflow.mcp", "agent_workflow.interfaces", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap", "agent_workflow.workers.trusted_git"]
 trusted_git = ["agent_workflow.domain.service", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.composition", "agent_workflow.bootstrap"]
+composition = ["agent_workflow.interfaces"]
 
 [ownership]
 "src/agent_workflow/domain/**" = "domain"

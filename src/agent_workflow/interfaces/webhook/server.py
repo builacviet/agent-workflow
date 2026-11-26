@@ -1,14 +1,15 @@
-"""PostgreSQL-only composition and lifetime for the webhook HTTP server."""
+"""Layer: Interfaces/Webhook
+Responsibility: Validate startup configuration and run the webhook HTTP server.
+Dependencies: AppConfig, the scoped webhook provider and HTTP adapters.
+"""
 
 from __future__ import annotations
 
 import os
-from contextlib import ExitStack
 from pathlib import Path
 
 from agent_workflow.app_config import AppConfig, validate_pg_runtime_dsn
-from agent_workflow.composition.webhook_deps import create_webhook_use_case
-from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.composition.webhook_deps import compose_webhook
 from agent_workflow.interfaces.webhook.github_receiver import GitHubWebhookReceiver
 from agent_workflow.interfaces.webhook.http_server import WebhookHTTPServer
 
@@ -25,18 +26,17 @@ def main() -> None:
     installation_id = int(os.environ["WFC_CONTROLLER_INSTALLATION_ID"])
     port = int(os.environ.get("WFC_WEBHOOK_PORT", "8081"))
 
-    with ExitStack() as resources:
-        factory = resources.enter_context(
-            PostgresFactory.open(AppConfig(pg_runtime_dsn=dsn))
-        )
+    with compose_webhook(AppConfig(pg_runtime_dsn=dsn)) as use_case:
         receiver = GitHubWebhookReceiver(
-            create_webhook_use_case(factory),
+            use_case=use_case,
             secret=secret,
             installation_id=installation_id,
         )
         server = WebhookHTTPServer(("0.0.0.0", port), receiver)
-        resources.callback(server.server_close)
-        server.serve_forever(poll_interval=0.5)
+        try:
+            server.serve_forever(poll_interval=0.5)
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":
