@@ -60,6 +60,9 @@ with (
     import_module("agent_workflow.infrastructure.database.readers.review_context_reader")
     import_module("agent_workflow.composition.review_deps")
     import_module("agent_workflow.composition.postgres_mcp")
+    import_module("agent_workflow.composition.mcp_deps")
+    server = import_module("agent_workflow.interfaces.mcp.server")
+    assert not hasattr(server, "mcp")
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

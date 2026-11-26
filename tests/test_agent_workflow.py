@@ -67,8 +67,13 @@ def payload(claim, verdict="CHANGES_REQUESTED", **overrides):
 
 
 def test_ping_and_info_preserved():
-    from agent_workflow.mcp.server import get_server_info, mcp, ping
+    from agent_workflow.interfaces.mcp.server import (
+        build_mcp_server,
+        get_server_info,
+        ping,
+    )
 
+    mcp = build_mcp_server()
     assert ping() == "pong"
     assert get_server_info()["name"] == "Workflow MCP Lab"
     assert mcp.settings.host == "127.0.0.1"
@@ -135,7 +140,7 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    from agent_workflow.mcp.server import mcp as server_mcp
+    from agent_workflow.interfaces.mcp.server import build_mcp_server
 
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
     monkeypatch.setenv("WFC_AUTH_TOKEN", "t" * 40)
@@ -190,6 +195,7 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
         "agent_workflow.composition.postgres_mcp.postgres_mcp_review_queue",
         lambda config: nullcontext(SimpleNamespace(execute=list_queue)),
     )
+    server_mcp = build_mcp_server()
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -322,7 +328,10 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
 
 
 def test_server_docker_bind_and_public_hostname_are_explicit(monkeypatch):
-    from agent_workflow.mcp.server import server_allowed_hosts, server_bind_host
+    from agent_workflow.interfaces.mcp.server import (
+        server_allowed_hosts,
+        server_bind_host,
+    )
 
     monkeypatch.delenv("WFC_MCP_HOST", raising=False)
     monkeypatch.delenv("WFC_PUBLIC_HOST", raising=False)

@@ -39,11 +39,11 @@ from agent_workflow.application.exceptions import (
     PersistenceUnavailableError,
 )
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
-from agent_workflow.bootstrap.mcp_runtime import postgres_review_writes_provider
 from agent_workflow.composition.ci_deps import (
     PostgresCiWriteScope,
     create_ci_state_adapters,
 )
+from agent_workflow.composition.mcp_deps import review_writes_provider
 from agent_workflow.composition.postgres_ci_entrypoint import compose_ci_execution
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.ci_evidence import WebhookNotification
@@ -467,7 +467,7 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     assert not approved(task_id, HEAD)
     assert reader.tracked() == ()
     with (
-        postgres_review_writes_provider() as (claim_use_case, _),
+        review_writes_provider() as (claim_use_case, _),
         pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
     ):
         claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
@@ -493,7 +493,7 @@ def test_mcp_provider_claims_require_exact_head_ci(
 
     if ci_required == "1":
         with (
-            postgres_review_writes_provider() as (claim_use_case, _),
+            review_writes_provider() as (claim_use_case, _),
             pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
         ):
             claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))
@@ -501,7 +501,7 @@ def test_mcp_provider_claims_require_exact_head_ci(
         record(evidence(task_id))
         assert approved(task_id, HEAD)
 
-    with postgres_review_writes_provider() as (claim_use_case, _):
+    with review_writes_provider() as (claim_use_case, _):
         with pytest.raises(WorkflowError, match="stale claim SHA"):
             claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
         claim = claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))

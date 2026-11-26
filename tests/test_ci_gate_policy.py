@@ -13,11 +13,11 @@ from pydantic import ValidationError
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.bootstrap import controller_entrypoint as controller
-from agent_workflow.bootstrap.mcp_runtime import postgres_review_queue_provider
 from agent_workflow.composition import (
     postgres_dispatch_deps,
     postgres_dispatch_entrypoint,
 )
+from agent_workflow.composition.mcp_deps import review_queue_provider
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 
 
@@ -61,7 +61,7 @@ def test_mcp_provider_injects_ci_policy(monkeypatch, env_value, expected):
     else:
         monkeypatch.setenv("WFC_CI_GATE_REQUIRED", env_value)
 
-    with postgres_review_queue_provider() as queue:
+    with review_queue_provider() as queue:
         assert queue._require_ci is expected
     factory.close.assert_called_once_with()
 
@@ -115,7 +115,7 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     monkeypatch.setattr(sys, "argv", ["controller", str(config), "--once"])
 
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
-        postgres_review_queue_provider()
+        review_queue_provider()
     with pytest.raises(SystemExit) as error:
         controller.main()
 

@@ -1,5 +1,5 @@
-"""Layer: Bootstrap
-Responsibility: Load MCP invocation settings and expose scoped dependency providers.
+"""Layer: Composition
+Responsibility: Resolve MCP invocation settings and assemble scoped dependencies.
 Dependencies: AppConfig, Application ports and feature composition.
 """
 
@@ -19,44 +19,37 @@ except ModuleNotFoundError as exc:
     postgres_mcp = None
 
 
-def postgres_review_queue_provider():
-    """Load settings for one authorized queue invocation."""
+def _workflow_config() -> AppConfig:
+    """Validate settings before resolving the optional PostgreSQL dependency."""
     config = AppConfig.from_env()
     if config.pg_runtime_dsn is None:
         raise ValueError("PG_RUNTIME_DSN is required")
     if postgres_mcp is None:
         raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    return config
+
+
+def review_queue_provider():
+    """Load settings for one authorized queue invocation."""
+    config = _workflow_config()
     return postgres_mcp.postgres_mcp_review_queue(config)
 
 
-def postgres_review_reads_provider():
+def review_reads_provider():
     """Load settings for a single authorized review query."""
-    config = AppConfig.from_env()
-    if config.pg_runtime_dsn is None:
-        raise ValueError("PG_RUNTIME_DSN is required")
-    if postgres_mcp is None:
-        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    config = _workflow_config()
     return postgres_mcp.postgres_mcp_review_reads(config)
 
 
-def postgres_task_operations_provider():
+def task_operations_provider():
     """Validate invocation settings before loading the PostgreSQL composition."""
-    config = AppConfig.from_env()
-    if config.pg_runtime_dsn is None:
-        raise ValueError("PG_RUNTIME_DSN is required")
-
-    if postgres_mcp is None:
-        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    config = _workflow_config()
     return postgres_mcp.postgres_mcp_task_operations(config)
 
 
-def postgres_review_writes_provider():
+def review_writes_provider():
     """Load settings for one authorized review command."""
-    config = AppConfig.from_env()
-    if config.pg_runtime_dsn is None:
-        raise ValueError("PG_RUNTIME_DSN is required")
-    if postgres_mcp is None:
-        raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
+    config = _workflow_config()
     return postgres_mcp.postgres_mcp_review_writes(config)
 
 

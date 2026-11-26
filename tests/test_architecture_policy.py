@@ -420,17 +420,15 @@ _LEGACY_R2_AST_INVENTORY = """\
 src/agent_workflow/integrations/github_app_checks.py|inline-import|ControllerAppToken.__call__|jwt|1
 src/agent_workflow/interfaces/mcp/security.py|inline-import|authorize_context|mcp.server.auth.middleware.auth_context.get_access_token|1
 src/agent_workflow/interfaces/mcp/security.py|inline-import|authorize_techlead|mcp.server.auth.middleware.auth_context.get_access_token|1
-src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.Auth0TokenVerifier|1
-src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.load_auth0_config|1
-src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
-src/agent_workflow/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
+src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.Auth0TokenVerifier|1
+src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.load_auth0_config|1
+src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
+src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
 src/agent_workflow/runners/coder_runtime.py|inline-import|CoderRuntime._validated_result|agent_workflow.integrations.github.validate_sha|1
 src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1
 src/agent_workflow/runners/sandbox.py|inline-import|_docker|agent_workflow.runners.coder_runtime.docker_command|1
 src/agent_workflow/runners/sandbox.py|inline-import|_workspace_bind|agent_workflow.runners.coder_runtime.is_linked|1
 src/agent_workflow/sandbox_state_paths.py|inline-import|_windows_fixed_drive|ctypes|1
-src/agent_workflow/server.py|inline-import|<module>|agent_workflow.mcp.server|1
-src/agent_workflow/server.py|inline-import|<module>|agent_workflow.mcp.server.main|1
 src/agent_workflow/workers/trusted_git/main.py|inline-import|git_auth|base64|1
 """
 LEGACY_R2_AST = tuple(
