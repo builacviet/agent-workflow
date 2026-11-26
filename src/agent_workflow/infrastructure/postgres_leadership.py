@@ -13,6 +13,8 @@ from agent_workflow.infrastructure.database.session_factory import (
     PostgresUnavailableError,
 )
 
+LEADERSHIP_STATEMENT_TIMEOUT_SECONDS = 5
+
 # Use PostgreSQL's two-integer advisory key space. Keep these values stable.
 _WORKFLOW_NAMESPACE = 0x41574631  # AWF1
 
@@ -130,7 +132,11 @@ class PostgresLeadershipLock:
                 "PostgreSQL leadership session is unavailable"
             )
         with connection.begin():
-            connection.execute(text("SET LOCAL statement_timeout = '5s'"))
+            connection.execute(
+                text(
+                    f"SET LOCAL statement_timeout = '{LEADERSHIP_STATEMENT_TIMEOUT_SECONDS}s'"
+                )
+            )
             return connection.execute(statement, self._key).scalar_one() is True
 
     @staticmethod
