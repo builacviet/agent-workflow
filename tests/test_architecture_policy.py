@@ -426,7 +426,8 @@ def test_import_policy_allows_composition_to_import_worker():
         module for module in modules if module.startswith("agent_workflow.workers")
     }
     assert "agent_workflow.workers.trusted_git.app_auth" in worker_imports
-    assert area_for(path) is None
+    assert area_for(path) == "composition"
+    assert all(not forbidden("composition", module) for module in worker_imports)
     assert POLICY["ownership"]["src/agent_workflow/composition/**"] == "composition"
     assert "src/agent_workflow/bootstrap/**" not in POLICY["ownership"]
     assert "src/agent_workflow/mcp/**" not in POLICY["ownership"]
