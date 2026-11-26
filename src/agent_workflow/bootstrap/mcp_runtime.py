@@ -1,9 +1,14 @@
 """Layer: Bootstrap
 Responsibility: Load MCP invocation settings and expose scoped dependency providers.
-Dependencies: AppConfig and PostgreSQL MCP composition.
+Dependencies: AppConfig, Application ports and feature composition.
 """
 
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.techlead.ports import ITechLeadGitHub, ITechLeadNotion
+from agent_workflow.composition.techlead_deps import (
+    create_techlead_github,
+    create_techlead_notion,
+)
 
 try:
     from agent_workflow.composition import postgres_mcp
@@ -53,3 +58,13 @@ def postgres_review_writes_provider():
     if postgres_mcp is None:
         raise ModuleNotFoundError("No module named 'sqlalchemy'", name="sqlalchemy")
     return postgres_mcp.postgres_mcp_review_writes(config)
+
+
+def techlead_github_provider() -> ITechLeadGitHub:
+    """Load settings and assemble a client only for an authorized invocation."""
+    return create_techlead_github(AppConfig.techlead_github())
+
+
+def techlead_notion_provider() -> ITechLeadNotion:
+    """Load settings and assemble a client only for an authorized invocation."""
+    return create_techlead_notion(AppConfig.techlead_notion())
