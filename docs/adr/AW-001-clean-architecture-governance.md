@@ -14,6 +14,8 @@ Do not introduce microservices, a universal repository, a framework-driven DI co
 
 ## Target ownership and import boundaries
 
+**Supersession (merged #148, 2026-11-26):** the original Interfaces/Bootstrap rows below are historical. The approved five-part target now places entrypoint startup, registration, shutdown, requests/responses and direct injected Use Case invocation in Interfaces (Presentation). Interfaces may import explicit Composition factories; Composition constructs/injects and manages dependency scopes only. Domain/Application cannot depend on Composition, and Presentation cannot import concrete Infrastructure or legacy Bootstrap. Existing Bootstrap and launcher-style Composition modules are transitional debt. See [AGENTS.md](../../AGENTS.md), [Engineering Standards](../conventions/engineering-standards.md#r2-layer-di-and-file-header-contract), and [#148](https://github.com/builacviet/agent-workflow/pull/148). Other original decisions and evidence are retained below as history.
+
 | Boundary | Owns | May depend on |
 | --- | --- | --- |
 | Domain | State transitions, immutable values, validation | Pure Python/value types only |

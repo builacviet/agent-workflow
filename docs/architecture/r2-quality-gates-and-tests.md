@@ -74,7 +74,7 @@ Apply to the **`agent_workflow` namespace**, not demo's installable `src` namesp
 1. `domain` may import Python standard library and approved pure value contracts only. Disallow `pydantic`, `sqlalchemy`, `fastapi`, `mcp`, `httpx`, `requests`, `subprocess`, `docker`, `psycopg`, `sqlite3`, `importlib` and lower-layer package imports.
 2. `application` may import `domain` and its own ports/DTOs, not concrete `infrastructure`, `interfaces`, `composition`, `workers`, or IO frameworks. No SQL/session constructors in use cases.
 3. `infrastructure` may implement `application` ports and depend on `domain`, not on inbound `interfaces` or `composition`.
-4. `interfaces` may depend on `application` and pure contracts, **not concrete infrastructure adapters**, DB sessions or composition. Entry point composition injects use cases.
+4. `interfaces` (Presentation) may depend on `application`, pure contracts and explicit `composition` dependency factories, **not concrete infrastructure adapters**, DB sessions or legacy Bootstrap. Presentation owns entrypoints and invokes injected Use Cases directly. This aligns with the merged policy change in [#148](https://github.com/builacviet/agent-workflow/pull/148); Composition only constructs/injects and manages dependency scopes.
 5. `composition` alone constructs concrete dependency graphs. `workers.trusted_git` has **no imports of workflow database drivers, workflow services, general coder plugins, or credential mounts into untrusted execution**. Allow only audited worker-local Git/GitHub adapters and minimal pure contracts.
 6. Independent features cannot import each other's internals to bypass a port. `task` and `review` may share a deliberately approved pure domain contract, not ad-hoc cross-feature concrete repositories. Dependency cycles must be zero when R2 completes.
 7. Handle static blind spots: alias/import-from parent packages, relative imports, `from ... import *`, dynamic imports, `TYPE_CHECKING` and optional dependencies. Reject or inspect explicitly; **do not weaken rules to achieve green**.
@@ -98,7 +98,7 @@ Apply to the **`agent_workflow` namespace**, not demo's installable `src` namesp
 | Target test | Failure it must catch |
 | --- | --- |
 | `test_core_pure_imports` | `domain` or `application` imports SQLAlchemy/Pydantic/HTTP/MCP, including aliases and late imports; no undeclared grandfathering |
-| `test_layer_dependency_direction` | Application imports concrete adapters; interfaces import DB; infrastructure imports interfaces; composition-only concrete assembly restriction |
+| `test_layer_dependency_direction` | Application imports concrete adapters or Composition; interfaces import DB or legacy Bootstrap; infrastructure imports interfaces; explicit Interfaces → Composition factory imports are allowed; composition-only concrete assembly restriction |
 | `test_feature_independence` | Direct unauthorized review→dispatch/task implementation imports instead of approved ports |
 | `test_ports_are_protocols_and_typed` | Non-`Protocol` ports, missing type annotations, `Any` dependencies in new UseCase constructors; keep sane style naming `IReviewRepository`/`IUnitOfWork` |
 | `test_each_use_case_has_behavior_tests` | New `*UseCase` with no unit test **or** only an empty/smoke assertion; check scenario metadata/behavior manifest, not only filename existence |

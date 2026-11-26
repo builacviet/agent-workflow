@@ -1,6 +1,6 @@
 # PostgreSQL runtime connections — current R2 boundary
 
-**Source baseline:** merged main after [#143](https://github.com/builacviet/agent-workflow/pull/143), `128b5c7e04d68bd5ecb08881b7128804579544c6`. PostgreSQL-only runtime persistence; no verified production activation. Read [canonical DB rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for selection and transaction ownership.
+**Source baseline:** merged main after [#150](https://github.com/builacviet/agent-workflow/pull/150), `fb552670bf2b9985e52c862482f3af613d3263a6`. PostgreSQL-only runtime persistence; no verified production activation. Read [canonical DB rules](../conventions/engineering-standards.md#postgresql-session-query-and-transaction-ownership) for selection and transaction ownership.
 
 ## Configuration and readiness
 
@@ -41,4 +41,4 @@ python -m pytest -q tests/integration/postgres/test_task_authorization_live.py
 
 Without `PG_TEST_DSN`, opt-in live tests may skip; a green regular pytest run does **not** prove they executed. The administrative seed/reset live integration additionally requires `R2_CLI_DISPOSABLE=1` and an explicitly empty disposable database.
 
-**Deployment boundary:** the tracked root `compose.yaml` still contains legacy SQLite state mounts, while source `mcp/server.py` composes a PostgreSQL provider. Neither this guide nor a passing migration test proves the root Compose stack is currently a valid end-to-end PostgreSQL deployment.
+**Deployment boundary:** the tracked root `compose.yaml` still contains legacy SQLite state mounts, while the canonical Presentation entrypoint `python -m agent_workflow.interfaces.mcp.server` registers scoped providers from `composition/mcp_deps.py`; `composition/postgres_mcp.py` owns the PostgreSQL dependency scopes. The legacy MCP namespace and Bootstrap MCP provider module are retired. Neither this guide nor a passing migration test proves the root Compose stack is currently a valid end-to-end PostgreSQL deployment.
