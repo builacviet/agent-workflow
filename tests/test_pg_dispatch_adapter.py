@@ -32,6 +32,11 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.database.lock_keys import (
+    TASK_AUTHORIZATION_HASH_SEED,
+    WORKFLOW_LOCK_NAMESPACE,
+    TransactionLockDomain,
+)
 from agent_workflow.infrastructure.database.repositories import dispatch_ledger
 from agent_workflow.infrastructure.database.repositories.dispatch_ledger import (
     PostgresDispatchLedger,
@@ -384,8 +389,19 @@ def test_claim_rejects_ineligible_status_round_and_task(setup):
 
 def test_lock_wait_is_bounded_and_retries(setup):
     ledger, factory, task_id = setup
+    assert WORKFLOW_LOCK_NAMESPACE == 5727811
+    assert TASK_AUTHORIZATION_HASH_SEED == 5727811
+    assert TransactionLockDomain.SCHEMA_MIGRATION.value == 1
+    assert TransactionLockDomain.DISPATCH_CLAIM.value == 2
+
     with factory.transaction() as holder:
-        holder.execute(text("SELECT pg_advisory_xact_lock(5727811, 2)"))
+        holder.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, :domain)"),
+            {
+                "namespace": WORKFLOW_LOCK_NAMESPACE,
+                "domain": TransactionLockDomain.DISPATCH_CLAIM.value,
+            },
+        )
         started = time.monotonic()
         with pytest.raises(
             PersistenceUnavailableError, match="^PostgreSQL unit of work failed$"
