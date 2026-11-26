@@ -24,7 +24,11 @@ from agent_workflow.infrastructure.database.session_factory import PostgresFacto
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
 )
-from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
+from agent_workflow.interfaces.cli.ci_controller import (
+    CiRunRequest,
+    CiRunResponse,
+    run_ci_pass,
+)
 
 REPO = "builacviet/agent-workflow"
 SHA = "b" * 40
@@ -211,8 +215,8 @@ def test_production_contention_fails_closed(production_watcher):
     watcher.acquired = False
 
     with pytest.raises(ApplicationError, match="leadership unavailable"):
-        with watcher.compose() as reconcile:
-            reconcile(CiRunRequest(startup=True))
+        with watcher.compose() as use_case:
+            run_ci_pass(use_case, CiRunRequest(startup=True))
 
     assert watcher.effects.mock_calls == []
     (lock,) = watcher.locks
@@ -226,8 +230,8 @@ def test_production_acquisition_error_propagates_and_releases(production_watcher
     watcher.acquisition_error = RuntimeError("lock acquisition failed")
 
     with pytest.raises(RuntimeError) as error:
-        with watcher.compose() as reconcile:
-            reconcile(CiRunRequest(startup=True))
+        with watcher.compose() as use_case:
+            run_ci_pass(use_case, CiRunRequest(startup=True))
 
     assert error.value is watcher.acquisition_error
     assert watcher.effects.mock_calls == []
@@ -241,8 +245,9 @@ def test_production_pass_records_and_acknowledges_with_fresh_ownership(
     production_watcher,
 ):
     watcher = production_watcher
-    with watcher.compose() as reconcile:
-        assert reconcile(CiRunRequest(startup=True)) == CiRunResponse(1, 0)
+    with watcher.compose() as use_case:
+        response = run_ci_pass(use_case, CiRunRequest(startup=True))
+        assert response == CiRunResponse(1, 0)
         (first,) = watcher.locks
         assert first.release_calls == 1
         assert not first.is_held()
@@ -256,7 +261,8 @@ def test_production_pass_records_and_acknowledges_with_fresh_ownership(
         assert evidence.verdict == verdict == "SUCCESS"
 
         # Give the second pass the same pending input to exercise every fence again.
-        assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 0)
+        response = run_ci_pass(use_case, CiRunRequest(startup=False))
+        assert response == CiRunResponse(1, 0)
         _, second = watcher.locks
         assert second is not first
         assert first.release_calls == second.release_calls == 1
@@ -273,8 +279,8 @@ def test_production_loss_stops_after_material_operation(production_watcher, lost
     watcher.lose_after = lost_at
 
     with pytest.raises(PermissionError, match="leadership lost"):
-        with watcher.compose() as reconcile:
-            reconcile(CiRunRequest(startup=True))
+        with watcher.compose() as use_case:
+            run_ci_pass(use_case, CiRunRequest(startup=True))
 
     # A write at the end of this prefix has already committed in the test double.
     assert [call[0] for call in watcher.effects.mock_calls] == (

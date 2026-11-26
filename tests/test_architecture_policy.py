@@ -1099,6 +1099,14 @@ def test_ci_composition_does_not_expose_postgres_state_bundle():
         }
         assert "PostgresCiStateDependencies" not in identifiers | classes
         assert "CiStateAdapter" not in identifiers | classes
+    ci_entrypoint = (
+        SOURCE / "agent_workflow" / "composition" / "postgres_ci_entrypoint.py"
+    )
+    assert not any(
+        module == "agent_workflow.interfaces"
+        or module.startswith("agent_workflow.interfaces.")
+        for module in imports(ci_entrypoint)
+    )
     worker = ast.parse(paths[2].read_text(encoding="utf-8"))
     assert not any(
         isinstance(node, ast.Attribute) and node.attr == "ci_state"

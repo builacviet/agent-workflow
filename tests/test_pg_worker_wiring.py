@@ -409,4 +409,4 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
             binding.verdict,
         ) == ("T", 7, HEAD, "BLOCKED")
         uow.commit.assert_called_once_with()
-    make_uow.assert_called_once_with(session, profile="ci_write")
+    make_uow.assert_called_once_with(session=session, profile="ci_write")

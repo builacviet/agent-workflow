@@ -15,16 +15,17 @@ from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
+    from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
     from agent_workflow.application.dispatch.run_dispatch_pass import (
         RunDispatchPassUseCase,
     )
-    from agent_workflow.interfaces.cli.ci_controller import CiRunOperation, ComposeCi
+    from agent_workflow.interfaces.cli.ci_controller import ComposeCi
     from agent_workflow.interfaces.cli.dispatch_controller import ComposeDispatch
 
 
 def _compose_ci(
     config: dict, app_config: AppConfig
-) -> AbstractContextManager[CiRunOperation]:
+) -> AbstractContextManager[ReconcileCiUseCase]:
     compose: ComposeCi = import_module(
         "agent_workflow.composition.postgres_ci_entrypoint"
     ).compose_ci_execution

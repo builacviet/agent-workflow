@@ -40,24 +40,18 @@ class CiRunResponse:
     blocked_count: int
 
 
-CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
-ComposeCi = Callable[[dict, AppConfig], AbstractContextManager[CiRunOperation]]
+ComposeCi = Callable[[dict, AppConfig], AbstractContextManager[ReconcileCiUseCase]]
 sleep = time.sleep
 _LOGGER = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
 
 
-class CiController:
-    """Inbound adapter: request DTO → injected Application UC → response DTO."""
-
-    def __init__(self, use_case: ReconcileCiUseCase) -> None:
-        self._use_case = use_case
-
-    def reconcile(self, request: CiRunRequest) -> CiRunResponse:
-        result = self._use_case.execute(startup=request.startup)
-        return CiRunResponse(
-            observed_count=len(result),
-            blocked_count=sum(evidence.verdict == "BLOCKED" for evidence in result),
-        )
+def run_ci_pass(use_case: ReconcileCiUseCase, request: CiRunRequest) -> CiRunResponse:
+    """Invoke the injected use case and map its evidence to the CLI response."""
+    evidence = use_case.execute(startup=request.startup)
+    return CiRunResponse(
+        observed_count=len(evidence),
+        blocked_count=sum(item.verdict == "BLOCKED" for item in evidence),
+    )
 
 
 def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
@@ -74,13 +68,9 @@ def add_ci_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def run_ci_once(reconcile: CiRunOperation) -> None:
+def run_ci_once(use_case: ReconcileCiUseCase) -> None:
     """Print only after a successful committed pass."""
-    _print_ci_once(_execute_ci_once(reconcile))
-
-
-def _execute_ci_once(reconcile: CiRunOperation) -> CiRunResponse:
-    return reconcile(CiRunRequest(startup=True))
+    _print_ci_once(run_ci_pass(use_case, CiRunRequest(startup=True)))
 
 
 def _print_ci_once(result: CiRunResponse) -> None:
@@ -91,7 +81,7 @@ def _print_ci_once(result: CiRunResponse) -> None:
 
 
 def run_ci_watch(
-    reconcile: CiRunOperation,
+    use_case: ReconcileCiUseCase,
     *,
     sleep: Callable[[float], None] = sleep,
     stop: Callable[[], bool] | None = None,
@@ -100,7 +90,7 @@ def run_ci_watch(
     delay = 2
     startup = True
     while stop is None or not stop():
-        result = reconcile(CiRunRequest(startup=startup))
+        result = run_ci_pass(use_case, CiRunRequest(startup=startup))
         startup = False
         delay = min(60, delay * 2) if result.blocked_count else 2
         if stop is not None and stop():
@@ -167,7 +157,7 @@ def run_ci_command(
             try:
                 with ExitStack() as resources:
                     try:
-                        reconcile = resources.enter_context(compose(config, app_config))
+                        use_case = resources.enter_context(compose(config, app_config))
                     except ValueError:
                         _finish_error(
                             mode,
@@ -176,9 +166,9 @@ def run_ci_command(
                             2,
                         )
                     if ci_once:
-                        result = _execute_ci_once(reconcile)
+                        result = run_ci_pass(use_case, CiRunRequest(startup=True))
                     else:
-                        run_ci_watch(reconcile)
+                        run_ci_watch(use_case)
                 if ci_once:
                     _print_ci_once(result)
             except KeyboardInterrupt:
