@@ -49,7 +49,7 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     monkeypatch.setenv("PG_RUNTIME_DSN", dsn)
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     calls = []
-    reconcile = Mock()
+    use_case = Mock()
 
     @contextmanager
     def compose_ci_execution(actual_config, app_config):
@@ -57,12 +57,12 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         assert app_config.pg_runtime_dsn == dsn
         calls.append("enter")
         try:
-            yield reconcile
+            yield use_case
         finally:
             calls.append("exit")
 
     def run_handler(handler_name, operation):
-        assert operation is reconcile
+        assert operation.__self__._use_case is use_case
         calls.append(handler_name)
         if failure is not None:
             raise failure
@@ -104,8 +104,9 @@ def test_pg_ci_cli_uses_injected_app_config(monkeypatch, tmp_path, capsys):
     )
     settings = AppConfig(pg_runtime_dsn="postgresql+psycopg://user:pass@127.0.0.1/ci")
     load_app_config = Mock(return_value=settings)
-    reconcile = Mock(return_value=ci_cli.CiRunResponse(0, 0))
-    compose_ci = Mock(return_value=nullcontext(reconcile))
+    use_case = Mock()
+    use_case.execute.return_value = ()
+    compose_ci = Mock(return_value=nullcontext(use_case))
     compose_dispatch = Mock(side_effect=AssertionError("dispatch selected in CI mode"))
 
     run_controller_cli(
@@ -119,7 +120,7 @@ def test_pg_ci_cli_uses_injected_app_config(monkeypatch, tmp_path, capsys):
     load_app_config.assert_called_once_with()
     compose_ci.assert_called_once_with({}, settings)
     compose_dispatch.assert_not_called()
-    reconcile.assert_called_once_with(ci_cli.CiRunRequest(startup=True))
+    use_case.execute.assert_called_once_with(startup=True)
     assert capsys.readouterr().out == "CI reconciliation: 0 tracked observations\n"
 
 
@@ -141,6 +142,7 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
         from contextlib import contextmanager
         from functools import partial
         from importlib.abc import MetaPathFinder
+        from types import SimpleNamespace
 
         blocked = {
             "agent_workflow.composition.postgres_dispatch_entrypoint",
@@ -168,14 +170,14 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
 
         requests = []
 
-        def reconcile(request):
-            requests.append(request)
-            return ci_controller.CiRunResponse(observed_count=0, blocked_count=0)
+        def execute(*, startup):
+            requests.append(startup)
+            return ()
 
         @contextmanager
         def compose(config, app_config):
             assert config == {}
-            yield reconcile
+            yield SimpleNamespace(execute=execute)
 
         postgres_ci_entrypoint.compose_ci_execution = compose
         ci_controller.run_ci_watch = partial(
@@ -184,7 +186,7 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
         runpy.run_module(
             "agent_workflow.controller", run_name="__main__"
         )
-        assert requests == [ci_controller.CiRunRequest(startup=True)]
+        assert requests == [True]
         assert not blocked.intersection(sys.modules)
     """)
 
@@ -309,8 +311,9 @@ def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
         pytest.raises(ApplicationError, match="leadership unavailable"),
         postgres_ci_entrypoint.compose_ci_execution(
             config, app_config, checks=checks
-        ) as reconcile,
+        ) as scoped_use_case,
     ):
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_once(reconcile)
 
     compose.assert_called_once_with(factory, checks, installation_id=17)
@@ -327,8 +330,9 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
         pytest.raises(RuntimeError, match="failed"),
         postgres_ci_entrypoint.compose_ci_execution(
             config, app_config, checks=checks
-        ) as reconcile,
+        ) as scoped_use_case,
     ):
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_once(reconcile)
 
     compose.assert_called_once()
@@ -344,7 +348,8 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
 
     with postgres_ci_entrypoint.compose_ci_execution(
         config, app_config, checks=checks
-    ) as reconcile:
+    ) as scoped_use_case:
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_watch(
             reconcile,
             sleep=sleeps.append,
@@ -376,8 +381,9 @@ def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure
         pytest.raises(type(failure)),
         postgres_ci_entrypoint.compose_ci_execution(
             config, app_config, checks=checks
-        ) as reconcile,
+        ) as scoped_use_case,
     ):
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_watch(reconcile, sleep=sleeps.append)
 
     assert use_case.execute.call_count == 2
@@ -394,8 +400,9 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
         pytest.raises(OSError, match="database unavailable"),
         postgres_ci_entrypoint.compose_ci_execution(
             config, app_config, checks=checks
-        ) as reconcile,
+        ) as scoped_use_case,
     ):
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_watch(reconcile, sleep=Mock())
     use_case.execute.assert_called_once()
     compose.assert_called_once()
@@ -408,8 +415,9 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
         pytest.raises(KeyboardInterrupt),
         postgres_ci_entrypoint.compose_ci_execution(
             config, app_config, checks=checks
-        ) as reconcile,
+        ) as scoped_use_case,
     ):
+        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_watch(reconcile, sleep=Mock(side_effect=KeyboardInterrupt))
     use_case.execute.assert_called_once()
     factory.__exit__.assert_called_once()
@@ -427,9 +435,11 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
 
     with postgres_ci_entrypoint.compose_ci_execution(
         config, app_config, checks=checks
-    ) as execute:
-        first = execute(CiRunRequest(startup=True))
-        second = execute(CiRunRequest(startup=False))
+    ) as scoped_use_case:
+        assert scoped_use_case is use_case
+        controller = ci_cli.CiController(use_case=scoped_use_case)
+        first = controller.reconcile(CiRunRequest(startup=True))
+        second = controller.reconcile(CiRunRequest(startup=False))
 
     assert first == CiRunResponse(observed_count=3, blocked_count=1)
     assert second == CiRunResponse(observed_count=0, blocked_count=0)

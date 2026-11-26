@@ -24,7 +24,11 @@ from agent_workflow.infrastructure.database.session_factory import PostgresFacto
 from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
 )
-from agent_workflow.interfaces.cli.ci_controller import CiRunRequest, CiRunResponse
+from agent_workflow.interfaces.cli.ci_controller import (
+    CiController,
+    CiRunRequest,
+    CiRunResponse,
+)
 
 REPO = "builacviet/agent-workflow"
 SHA = "b" * 40
@@ -211,7 +215,8 @@ def test_production_contention_fails_closed(production_watcher):
     watcher.acquired = False
 
     with pytest.raises(ApplicationError, match="leadership unavailable"):
-        with watcher.compose() as reconcile:
+        with watcher.compose() as scoped_use_case:
+            reconcile = CiController(use_case=scoped_use_case).reconcile
             reconcile(CiRunRequest(startup=True))
 
     assert watcher.effects.mock_calls == []
@@ -226,7 +231,8 @@ def test_production_acquisition_error_propagates_and_releases(production_watcher
     watcher.acquisition_error = RuntimeError("lock acquisition failed")
 
     with pytest.raises(RuntimeError) as error:
-        with watcher.compose() as reconcile:
+        with watcher.compose() as scoped_use_case:
+            reconcile = CiController(use_case=scoped_use_case).reconcile
             reconcile(CiRunRequest(startup=True))
 
     assert error.value is watcher.acquisition_error
@@ -241,7 +247,8 @@ def test_production_pass_records_and_acknowledges_with_fresh_ownership(
     production_watcher,
 ):
     watcher = production_watcher
-    with watcher.compose() as reconcile:
+    with watcher.compose() as scoped_use_case:
+        reconcile = CiController(use_case=scoped_use_case).reconcile
         assert reconcile(CiRunRequest(startup=True)) == CiRunResponse(1, 0)
         (first,) = watcher.locks
         assert first.release_calls == 1
@@ -273,7 +280,8 @@ def test_production_loss_stops_after_material_operation(production_watcher, lost
     watcher.lose_after = lost_at
 
     with pytest.raises(PermissionError, match="leadership lost"):
-        with watcher.compose() as reconcile:
+        with watcher.compose() as scoped_use_case:
+            reconcile = CiController(use_case=scoped_use_case).reconcile
             reconcile(CiRunRequest(startup=True))
 
     # A write at the end of this prefix has already committed in the test double.

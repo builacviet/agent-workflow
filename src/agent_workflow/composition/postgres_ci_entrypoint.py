@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.ports import ICiChecksReader
+from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.composition.ci_deps import create_ci_reconcile_use_case
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
@@ -13,7 +14,6 @@ from agent_workflow.integrations.github_app_checks import (
     ControllerAppToken,
     ControllerChecksClient,
 )
-from agent_workflow.interfaces.cli import ci_controller as ci_cli
 
 
 @contextmanager
@@ -22,19 +22,13 @@ def compose_ci_execution(
     app_config: AppConfig,
     *,
     checks: ICiChecksReader | None = None,
-) -> Iterator[ci_cli.CiRunOperation]:
-    """Build CI dependencies once, inject Use Cases and own resource lifetime.
-
-    The yielded Interface adapter invokes Application directly on every pass.
-    Composition never re-enters the request execution path.
-    """
+) -> Iterator[ReconcileCiUseCase]:
+    """Build the CI use case once and own its dependency lifetime."""
     installation_id, checks = _controller_checks(config, checks)
     with PostgresFactory.open(app_config) as factory:
-        use_case = create_ci_reconcile_use_case(
+        yield create_ci_reconcile_use_case(
             factory, checks, installation_id=installation_id
         )
-        controller = ci_cli.CiController(use_case)
-        yield controller.reconcile
 
 
 def _controller_checks(

@@ -48,7 +48,7 @@ class PostgresCiWriteScope:
     def __call__(self) -> Iterator[tuple[IUnitOfWork, ICiBusinessWriteRepository]]:
         with self.factory.get_scoped_session() as session:
             yield (
-                SqlAlchemyUnitOfWork(session, profile="ci_write"),
+                SqlAlchemyUnitOfWork(session=session, profile="ci_write"),
                 SqlAlchemyCiStateRepository(session=session),
             )
 
@@ -59,7 +59,7 @@ def create_ci_state_adapters(
     """Wire adapters without a technology-specific dependency bundle.
 
     Resolve sessions at invocation time for correct late binding, without
-    acquiring a database session during bootstrap.
+    acquiring a database session during dependency assembly.
     """
 
     def session_scope() -> AbstractContextManager[Session]:
@@ -67,8 +67,8 @@ def create_ci_state_adapters(
 
     provider: SessionScope = session_scope
     return (
-        SqlAlchemyCiStateReader(provider),
-        SqlAlchemyCiAcknowledgmentRepository(provider),
+        SqlAlchemyCiStateReader(session_scope=provider),
+        SqlAlchemyCiAcknowledgmentRepository(session_scope=provider),
     )
 
 
@@ -78,15 +78,14 @@ def create_ci_reconcile_use_case(
     *,
     installation_id: int,
 ) -> ReconcileCiUseCase:
-    """Assemble guarded CI Application graph once at bootstrap."""
+    """Assemble guarded CI Application graph once per command scope."""
     reader, repository = create_ci_state_adapters(factory)
-    leadership = PostgresCiLeadershipScope(factory)
-    reconciler = ReconcileCiUseCase(
-        GuardedCiReader(reader=reader, require_owner=leadership.require_owner),
-        GuardedCiChecks(checks, leadership.require_owner),
-        recorder=RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)),
-        acknowledger=AcknowledgeCiEventUseCase(repository),
+    leadership = PostgresCiLeadershipScope(factory=factory)
+    return ReconcileCiUseCase(
+        reader=GuardedCiReader(reader=reader, require_owner=leadership.require_owner),
+        checks=GuardedCiChecks(checks=checks, require_owner=leadership.require_owner),
+        recorder=RecordCiEvidenceUseCase(scope=PostgresCiWriteScope(factory=factory)),
+        acknowledger=AcknowledgeCiEventUseCase(repository=repository),
         leadership=leadership,
         installation_id=installation_id,
     )
-    return reconciler

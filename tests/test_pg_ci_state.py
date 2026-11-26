@@ -84,6 +84,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli.ci_controller import (
+    CiController,
     CiRunRequest,
     CiRunResponse,
     run_ci_once,
@@ -812,7 +813,8 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
             return result
 
     checks = Checks(head=HEAD)
-    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile:
+    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+        reconcile = CiController(use_case=use_case).reconcile
         for phase, reason in [
             ("missing", "REQUIRED_CHECK_MISSING"),
             ("pending", "CHECK_PENDING"),
@@ -831,7 +833,8 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
         checks = FakeChecks()
         with compose_ci_execution(
             CONTROLLER_CONFIG, config, checks=checks
-        ) as reconcile:
+        ) as use_case:
+            reconcile = CiController(use_case=use_case).reconcile
             assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 0)
             calls = checks.calls
             assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(0, 0)
@@ -884,7 +887,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
     checks = Checks(
         unavailable=scenario == "offline", head=NEXT if scenario == "stale" else HEAD
     )
-    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile:
+    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+        reconcile = CiController(use_case=use_case).reconcile
         assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(
             1, int(scenario != "failed")
         )
@@ -900,7 +904,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
 
     with compose_ci_execution(
         CONTROLLER_CONFIG, config, checks=FakeChecks()
-    ) as reconcile:
+    ) as use_case:
+        reconcile = CiController(use_case=use_case).reconcile
         assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 0)
     assert observations(factory, task_id)[-1]["reason"] == "REQUIRED_CHECK_PASSED"
     assert approved(task_id, HEAD)
@@ -921,7 +926,8 @@ def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
         assert controller.try_acquire()
         with compose_ci_execution(
             CONTROLLER_CONFIG, config, checks=checks
-        ) as reconcile:
+        ) as use_case:
+            reconcile = CiController(use_case=use_case).reconcile
             run_ci_once(reconcile)
         assert controller.is_held()
         with PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as successor:
@@ -944,7 +950,8 @@ def test_pg_ci_watch_two_passes_ack_once(setup):
     checks = FakeChecks(head=HEAD)
     sleeps = []
 
-    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile:
+    with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+        reconcile = CiController(use_case=use_case).reconcile
         run_ci_watch(reconcile, sleep=sleeps.append, stop=lambda: len(sleeps) == 2)
 
     assert sleeps == [2, 2]
@@ -968,8 +975,9 @@ def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
     try:
         with (
             pytest.raises(ApplicationError, match="leadership unavailable"),
-            compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as reconcile,
+            compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case,
         ):
+            reconcile = CiController(use_case=use_case).reconcile
             run_ci_watch(
                 reconcile, sleep=lambda _: pytest.fail("denied leader must not retry")
             )
@@ -1049,7 +1057,8 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
     def run_pass():
         with compose_ci_execution(
             CONTROLLER_CONFIG, config, checks=checks
-        ) as reconcile:
+        ) as use_case:
+            reconcile = CiController(use_case=use_case).reconcile
             run_ci_once(reconcile)
 
     with (

@@ -147,17 +147,19 @@ def test_terminal_boundary_maps_errors_safely_and_resets_scope(
     )
     monkeypatch.setenv("CORRELATION_ID", "ci-test-42")
 
-    def fail_with_correlation(_request):
+    def fail_with_correlation(*, startup):
+        assert startup is True
         assert get_correlation_id() == "ci-test-42"
         raise failure
 
-    reconcile = Mock(side_effect=fail_with_correlation)
+    use_case = Mock()
+    use_case.execute.side_effect = fail_with_correlation
 
     @contextmanager
     def compose(config, app_config):
         assert config == {}
         assert app_config.pg_runtime_dsn.startswith("postgresql+psycopg://")
-        yield reconcile
+        yield use_case
 
     logger = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
     original = list(logger.handlers), logger.level, logger.propagate
@@ -186,7 +188,7 @@ def test_terminal_boundary_maps_errors_safely_and_resets_scope(
     assert log["correlation_id"] == "ci-test-42"
     assert get_correlation_id() is None
     assert (logger.handlers, logger.level, logger.propagate) == original
-    reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
+    use_case.execute.assert_called_once_with(startup=True)
 
 
 def test_terminal_boundary_handles_watch_interrupt_without_retry(
@@ -197,11 +199,12 @@ def test_terminal_boundary_handles_watch_interrupt_without_retry(
     monkeypatch.setenv(
         "PG_RUNTIME_DSN", "postgresql+psycopg://user:pass@127.0.0.1/workflow_ci"
     )
-    reconcile = Mock(side_effect=KeyboardInterrupt())
+    use_case = Mock()
+    use_case.execute.side_effect = KeyboardInterrupt()
 
     @contextmanager
     def compose(config, app_config):
-        yield reconcile
+        yield use_case
 
     with pytest.raises(SystemExit) as error:
         ci_controller.run_ci_command(
@@ -219,7 +222,7 @@ def test_terminal_boundary_handles_watch_interrupt_without_retry(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "CI watch interrupted" in captured.err
-    reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
+    use_case.execute.assert_called_once_with(startup=True)
 
 
 def test_terminal_boundary_does_not_report_success_when_composition_close_fails(
@@ -231,7 +234,9 @@ def test_terminal_boundary_does_not_report_success_when_composition_close_fails(
 
     @contextmanager
     def compose(config, app_config):
-        yield Mock(return_value=ci_controller.CiRunResponse(1, 0))
+        yield SimpleNamespace(
+            execute=Mock(return_value=(SimpleNamespace(verdict="SUCCESS"),))
+        )
         raise OSError("dsn=close-secret")
 
     with pytest.raises(SystemExit) as error:
@@ -263,7 +268,9 @@ def test_terminal_boundary_reports_one_shot_success_after_composition_closes(
     @contextmanager
     def compose(config, app_config):
         events.append("opened")
-        yield Mock(return_value=ci_controller.CiRunResponse(1, 0))
+        yield SimpleNamespace(
+            execute=Mock(return_value=(SimpleNamespace(verdict="SUCCESS"),))
+        )
         events.append("closed")
 
     monkeypatch.setattr(

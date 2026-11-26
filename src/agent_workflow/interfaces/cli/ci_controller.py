@@ -41,7 +41,7 @@ class CiRunResponse:
 
 
 CiRunOperation = Callable[[CiRunRequest], CiRunResponse]
-ComposeCi = Callable[[dict, AppConfig], AbstractContextManager[CiRunOperation]]
+ComposeCi = Callable[[dict, AppConfig], AbstractContextManager[ReconcileCiUseCase]]
 sleep = time.sleep
 _LOGGER = logging.getLogger("agent_workflow.interfaces.cli.ci_controller")
 
@@ -167,7 +167,7 @@ def run_ci_command(
             try:
                 with ExitStack() as resources:
                     try:
-                        reconcile = resources.enter_context(compose(config, app_config))
+                        use_case = resources.enter_context(compose(config, app_config))
                     except ValueError:
                         _finish_error(
                             mode,
@@ -175,6 +175,7 @@ def run_ci_command(
                             "Controller CI configuration is invalid.",
                             2,
                         )
+                    reconcile = CiController(use_case=use_case).reconcile
                     if ci_once:
                         result = _execute_ci_once(reconcile)
                     else:
