@@ -749,7 +749,9 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
         return runtime
 
     monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", open_factory)
-    monkeypatch.setattr(dispatch_deps, "compose_postgres_controller", compose_controller)
+    monkeypatch.setattr(
+        dispatch_deps, "compose_postgres_controller", compose_controller
+    )
     monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", compose_worker)
     monkeypatch.setattr(
         coder_runtime, "docker_command", lambda *_: pytest.fail("real Docker forbidden")

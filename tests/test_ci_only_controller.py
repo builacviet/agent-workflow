@@ -342,7 +342,9 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
     use_case.execute.side_effect = results
     sleeps = []
 
-    with ci_deps.compose_ci_execution(config, app_config, checks=checks) as scoped_use_case:
+    with ci_deps.compose_ci_execution(
+        config, app_config, checks=checks
+    ) as scoped_use_case:
         ci_cli.run_ci_watch(
             scoped_use_case,
             sleep=sleeps.append,
@@ -423,7 +425,9 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
         _evidence(0, 0),
     ]
 
-    with ci_deps.compose_ci_execution(config, app_config, checks=checks) as scoped_use_case:
+    with ci_deps.compose_ci_execution(
+        config, app_config, checks=checks
+    ) as scoped_use_case:
         assert scoped_use_case is use_case
         first = ci_cli.run_ci_pass(scoped_use_case, CiRunRequest(startup=True))
         second = ci_cli.run_ci_pass(scoped_use_case, CiRunRequest(startup=False))
