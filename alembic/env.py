@@ -5,13 +5,13 @@ from __future__ import annotations
 import os
 
 import sqlalchemy as sa
-from alembic import context
 from sqlalchemy.pool import NullPool
 
 from agent_workflow.infrastructure.database.lock_keys import (
     WORKFLOW_LOCK_NAMESPACE,
     TransactionLockDomain,
 )
+from alembic import context
 
 config = context.config
 target_metadata = None
@@ -23,7 +23,11 @@ def _dsn() -> str:
         raise RuntimeError("PG_MIGRATOR_DSN is required")
     try:
         url = sa.engine.make_url(value)
-        if url.drivername != "postgresql+psycopg" or not url.username or not url.database:
+        if (
+            url.drivername != "postgresql+psycopg"
+            or not url.username
+            or not url.database
+        ):
             raise ValueError
     except (sa.exc.ArgumentError, ValueError):
         raise RuntimeError(
