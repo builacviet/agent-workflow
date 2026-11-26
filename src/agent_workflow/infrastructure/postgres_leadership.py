@@ -132,11 +132,8 @@ class PostgresLeadershipLock:
                 "PostgreSQL leadership session is unavailable"
             )
         with connection.begin():
-            connection.execute(
-                text(
-                    f"SET LOCAL statement_timeout = '{LEADERSHIP_STATEMENT_TIMEOUT_SECONDS}s'"
-                )
-            )
+            timeout = f"{LEADERSHIP_STATEMENT_TIMEOUT_SECONDS}s"
+            connection.execute(text(f"SET LOCAL statement_timeout = '{timeout}'"))
             return connection.execute(statement, self._key).scalar_one() is True
 
     @staticmethod
