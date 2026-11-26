@@ -407,7 +407,7 @@ def test_activated_mount_existing_files(compose_fixture, tmp_path):
 
 @pytest.mark.parametrize("kind", ["missing", "directory", "empty", "oversized"])
 def test_existing_secret_reader_rejects_invalid_fixture(tmp_path, kind):
-    from agent_workflow.mcp.techlead_github import TechLeadError, read_secret
+    from agent_workflow.infrastructure.techlead.github import TechLeadError, read_secret
 
     path = tmp_path / "fixture-secret"
     if kind == "directory":
@@ -421,7 +421,7 @@ def test_existing_secret_reader_rejects_invalid_fixture(tmp_path, kind):
 
 
 def test_existing_secret_reader_accepts_placeholder(tmp_path):
-    from agent_workflow.mcp.techlead_github import read_secret
+    from agent_workflow.infrastructure.techlead.github import read_secret
 
     path = tmp_path / "fixture-secret"
     path.write_bytes(b"placeholder\n")
