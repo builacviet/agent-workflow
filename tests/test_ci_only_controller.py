@@ -1,6 +1,7 @@
 """V1-03C: CI-only entry point cannot dispatch agents or require worker PEM."""
 
 import json
+import runpy
 import subprocess
 import sys
 import textwrap
@@ -14,8 +15,9 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.exceptions import ApplicationError
 from agent_workflow.composition import ci_deps
 from agent_workflow.interfaces.cli import ci_controller as ci_cli
-from agent_workflow.interfaces.cli import controller
 from agent_workflow.interfaces.cli.controller_cli import run_controller_cli
+
+CONTROLLER_MODULE = "agent_workflow.interfaces.cli.controller"
 
 
 def _evidence(observed_count, blocked_count):
@@ -33,7 +35,7 @@ def test_ci_mode_requires_postgres_before_any_fallback(monkeypatch, tmp_path, mo
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
 
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
 
 
@@ -83,10 +85,10 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     )
 
     if failure is None:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     else:
         with pytest.raises(SystemExit) as error:
-            controller.main()
+            runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
         assert error.value.code == 1
 
     assert calls == ["enter", "once" if mode == "--ci-once" else "watch", "exit"]
@@ -224,7 +226,7 @@ def test_pg_unsupported_modes_fail_before_sqlite(monkeypatch, tmp_path, flags, c
     )
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), *flags])
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
     assert "exactly one supported mode" in capsys.readouterr().err
 
@@ -236,7 +238,7 @@ def test_invalid_explicit_dsn_never_falls_back(monkeypatch, tmp_path, mode):
     monkeypatch.setenv("PG_RUNTIME_DSN", "")
     monkeypatch.setattr(sys, "argv", ["controller", str(config_file), mode])
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
     assert error.value.code == 2
 
 
@@ -268,7 +270,7 @@ def test_invalid_controller_app_config_exits_two_without_database_or_sqlite(
     monkeypatch.setattr(ci_deps.PostgresFactory, "open", open_database)
 
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(CONTROLLER_MODULE, run_name="__main__")
 
     stderr = capsys.readouterr().err
     assert error.value.code == 2

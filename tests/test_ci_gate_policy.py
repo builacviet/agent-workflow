@@ -4,6 +4,7 @@ Tests never access live GitHub, Docker, credentials or production state.
 """
 
 import json
+import runpy
 import sys
 from contextlib import nullcontext
 from unittest.mock import Mock
@@ -15,7 +16,6 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.composition import dispatch_deps
 from agent_workflow.composition.mcp_deps import review_queue_provider
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.interfaces.cli import controller
 
 
 @pytest.mark.parametrize(
@@ -118,7 +118,9 @@ def test_invalid_env_rejected_before_controller_or_mcp_database_creation(
     with pytest.raises(ValueError, match="WFC_CI_GATE_REQUIRED"):
         review_queue_provider()
     with pytest.raises(SystemExit) as error:
-        controller.main()
+        runpy.run_module(
+            "agent_workflow.interfaces.cli.controller", run_name="__main__"
+        )
 
     assert error.value.code == 1
     assert "configuration" in capsys.readouterr().err
