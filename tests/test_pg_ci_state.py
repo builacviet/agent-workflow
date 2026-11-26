@@ -84,10 +84,10 @@ from agent_workflow.infrastructure.postgres_leadership import (
 from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli.ci_controller import (
-    CiController,
     CiRunRequest,
     CiRunResponse,
     run_ci_once,
+    run_ci_pass,
     run_ci_watch,
 )
 
@@ -814,7 +814,6 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
 
     checks = Checks(head=HEAD)
     with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
-        reconcile = CiController(use_case=use_case).reconcile
         for phase, reason in [
             ("missing", "REQUIRED_CHECK_MISSING"),
             ("pending", "CHECK_PENDING"),
@@ -822,7 +821,8 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
             ("merge", "REQUIRED_CHECK_MISSING"),
         ]:
             checks.phase = phase
-            assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 1)
+            response = run_ci_pass(use_case, CiRunRequest(startup=False))
+            assert response == CiRunResponse(1, 1)
             assert observations(factory, task_id)[-1]["reason"] == reason
             assert reader.pending_events() == [delivery]
             assert not approved(task_id, HEAD)
@@ -831,13 +831,12 @@ def test_reconcile_blocks_incomplete_or_synthetic_evidence_and_recovers(setup):
         reader, _ = create_ci_state_adapters(restarted)
         approved = CheckCiApprovalUseCase(reader).execute
         checks = FakeChecks()
-        with compose_ci_execution(
-            CONTROLLER_CONFIG, config, checks=checks
-        ) as use_case:
-            reconcile = CiController(use_case=use_case).reconcile
-            assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 0)
+        with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+            response = run_ci_pass(use_case, CiRunRequest(startup=False))
+            assert response == CiRunResponse(1, 0)
             calls = checks.calls
-            assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(0, 0)
+            response = run_ci_pass(use_case, CiRunRequest(startup=False))
+            assert response == CiRunResponse(0, 0)
             assert checks.calls == calls
         assert approved(task_id, HEAD)
         assert reader.pending_events() == []
@@ -888,8 +887,7 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
         unavailable=scenario == "offline", head=NEXT if scenario == "stale" else HEAD
     )
     with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
-        reconcile = CiController(use_case=use_case).reconcile
-        assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(
+        assert run_ci_pass(use_case, CiRunRequest(startup=False)) == CiRunResponse(
             1, int(scenario != "failed")
         )
         assert observations(factory, task_id)[-1]["reason"] == reason
@@ -897,7 +895,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
         if scenario == "failed":
             assert reader.pending_events() == []
             calls = checks.calls
-            assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(0, 0)
+            response = run_ci_pass(use_case, CiRunRequest(startup=False))
+            assert response == CiRunResponse(0, 0)
             assert checks.calls == calls
             return
         assert reader.pending_events() == [delivery]
@@ -905,8 +904,8 @@ def test_reconcile_settles_failure_or_replays_retained_delivery(
     with compose_ci_execution(
         CONTROLLER_CONFIG, config, checks=FakeChecks()
     ) as use_case:
-        reconcile = CiController(use_case=use_case).reconcile
-        assert reconcile(CiRunRequest(startup=False)) == CiRunResponse(1, 0)
+        response = run_ci_pass(use_case, CiRunRequest(startup=False))
+        assert response == CiRunResponse(1, 0)
     assert observations(factory, task_id)[-1]["reason"] == "REQUIRED_CHECK_PASSED"
     assert approved(task_id, HEAD)
     assert reader.pending_events() == []
@@ -924,11 +923,8 @@ def test_pg_ci_entrypoint_reconciles_while_controller_holds_its_lock(setup):
 
     with PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller:
         assert controller.try_acquire()
-        with compose_ci_execution(
-            CONTROLLER_CONFIG, config, checks=checks
-        ) as use_case:
-            reconcile = CiController(use_case=use_case).reconcile
-            run_ci_once(reconcile)
+        with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+            run_ci_once(use_case)
         assert controller.is_held()
         with PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER) as successor:
             assert successor.try_acquire()
@@ -951,8 +947,7 @@ def test_pg_ci_watch_two_passes_ack_once(setup):
     sleeps = []
 
     with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
-        reconcile = CiController(use_case=use_case).reconcile
-        run_ci_watch(reconcile, sleep=sleeps.append, stop=lambda: len(sleeps) == 2)
+        run_ci_watch(use_case, sleep=sleeps.append, stop=lambda: len(sleeps) == 2)
 
     assert sleeps == [2, 2]
     assert checks.calls > 0
@@ -977,9 +972,8 @@ def test_pg_ci_watch_denied_leader_keeps_inbox_pending(setup):
             pytest.raises(ApplicationError, match="leadership unavailable"),
             compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case,
         ):
-            reconcile = CiController(use_case=use_case).reconcile
             run_ci_watch(
-                reconcile, sleep=lambda _: pytest.fail("denied leader must not retry")
+                use_case, sleep=lambda _: pytest.fail("denied leader must not retry")
             )
     finally:
         leader.release()
@@ -1055,11 +1049,8 @@ def test_lost_watcher_session_keeps_real_inbox_pending(setup):
     checks.list_check_runs = Mock(side_effect=blocked_request)
 
     def run_pass():
-        with compose_ci_execution(
-            CONTROLLER_CONFIG, config, checks=checks
-        ) as use_case:
-            reconcile = CiController(use_case=use_case).reconcile
-            run_ci_once(reconcile)
+        with compose_ci_execution(CONTROLLER_CONFIG, config, checks=checks) as use_case:
+            run_ci_once(use_case)
 
     with (
         PostgresLeadershipLock(factory, LeadershipDomain.CONTROLLER) as controller,

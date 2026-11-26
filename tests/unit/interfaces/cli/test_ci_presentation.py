@@ -23,36 +23,36 @@ from agent_workflow.observability.correlation import get_correlation_id
 
 
 def test_one_shot_passes_typed_request_and_renders_typed_response(capsys):
-    reconcile = Mock(return_value=ci_controller.CiRunResponse(1, 0))
-    ci_controller.run_ci_once(reconcile)
-    reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
+    use_case = Mock()
+    use_case.execute.return_value = (SimpleNamespace(verdict="SUCCESS"),)
+    ci_controller.run_ci_once(use_case)
+    use_case.execute.assert_called_once_with(startup=True)
     assert capsys.readouterr().out == "CI reconciliation: 1 tracked observations\n"
 
 
 def test_one_shot_error_is_not_disguised_as_success(capsys):
-    reconcile = Mock(side_effect=PermissionError("leadership lost"))
+    use_case = Mock()
+    use_case.execute.side_effect = PermissionError("leadership lost")
     with pytest.raises(PermissionError, match="leadership lost"):
-        ci_controller.run_ci_once(reconcile)
+        ci_controller.run_ci_once(use_case)
     assert capsys.readouterr().out == ""
 
 
 def test_watch_bounded_backoff_and_startup_semantics():
     blocked = [1] * 7 + [0, 0]
-    reconcile = Mock(
-        side_effect=[
-            ci_controller.CiRunResponse(observed_count=1, blocked_count=n)
-            for n in blocked
-        ]
-    )
+    use_case = Mock()
+    use_case.execute.side_effect = [
+        (SimpleNamespace(verdict="BLOCKED" if n else "SUCCESS"),) for n in blocked
+    ]
     delays = []
     ci_controller.run_ci_watch(
-        reconcile,
+        use_case,
         sleep=delays.append,
-        stop=lambda: reconcile.call_count == len(blocked),
+        stop=lambda: use_case.execute.call_count == len(blocked),
     )
-    assert [c.args for c in reconcile.call_args_list] == [
-        (ci_controller.CiRunRequest(startup=True),),
-        *[(ci_controller.CiRunRequest(startup=False),)] * 8,
+    assert [c.kwargs for c in use_case.execute.call_args_list] == [
+        {"startup": True},
+        *[{"startup": False}] * 8,
     ]
     assert delays == [4, 8, 16, 32, 60, 60, 60, 2]
 
@@ -66,10 +66,11 @@ def test_watch_bounded_backoff_and_startup_semantics():
     ],
 )
 def test_watch_does_not_consume_runtime_errors(failure):
-    reconcile = Mock(side_effect=failure)
+    use_case = Mock()
+    use_case.execute.side_effect = failure
     with pytest.raises(type(failure)):
-        ci_controller.run_ci_watch(reconcile, sleep=Mock())
-    reconcile.assert_called_once_with(ci_controller.CiRunRequest(startup=True))
+        ci_controller.run_ci_watch(use_case, sleep=Mock())
+    use_case.execute.assert_called_once_with(startup=True)
 
 
 @pytest.mark.parametrize(
@@ -86,9 +87,9 @@ def test_controller_maps_completed_evidence_to_typed_response(verdicts, expected
     use_case.execute.return_value = tuple(
         SimpleNamespace(verdict=verdict) for verdict in verdicts
     )
-    controller = ci_controller.CiController(use_case)
-
-    assert controller.reconcile(ci_controller.CiRunRequest(startup=True)) == expected
+    request = ci_controller.CiRunRequest(startup=True)
+    response = ci_controller.run_ci_pass(use_case, request)
+    assert response == expected
     use_case.execute.assert_called_once_with(startup=True)
 
 

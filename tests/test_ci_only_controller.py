@@ -61,8 +61,10 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
         finally:
             calls.append("exit")
 
-    def run_handler(handler_name, operation):
-        assert operation.__self__._use_case is use_case
+    def run_handler(handler_name, operation, request=None):
+        assert operation is use_case
+        if handler_name == "once":
+            assert request == ci_cli.CiRunRequest(startup=True)
         calls.append(handler_name)
         if failure is not None:
             raise failure
@@ -72,9 +74,9 @@ def test_explicit_pg_routes_before_sqlite_or_coder_runtime(
     )
     monkeypatch.setattr(
         ci_cli,
-        "_execute_ci_once",
-        lambda operation: (
-            run_handler("once", operation)
+        "run_ci_pass",
+        lambda operation, request: (
+            run_handler("once", operation, request)
             or ci_cli.CiRunResponse(observed_count=0, blocked_count=0)
         ),
     )
@@ -313,8 +315,7 @@ def test_pg_entrypoint_closes_factory_and_refuses_denied_leader(monkeypatch):
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
-        ci_cli.run_ci_once(reconcile)
+        ci_cli.run_ci_once(scoped_use_case)
 
     compose.assert_called_once_with(factory, checks, installation_id=17)
     use_case.execute.assert_called_once_with(startup=True)
@@ -332,8 +333,7 @@ def test_pg_entrypoint_propagates_failure_and_closes_factory(monkeypatch):
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
-        ci_cli.run_ci_once(reconcile)
+        ci_cli.run_ci_once(scoped_use_case)
 
     compose.assert_called_once()
     use_case.execute.assert_called_once_with(startup=True)
@@ -349,9 +349,8 @@ def test_pg_watch_startup_polling_backoff_and_shutdown(monkeypatch):
     with postgres_ci_entrypoint.compose_ci_execution(
         config, app_config, checks=checks
     ) as scoped_use_case:
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
         ci_cli.run_ci_watch(
-            reconcile,
+            scoped_use_case,
             sleep=sleeps.append,
             stop=lambda: use_case.execute.call_count == len(results),
         )
@@ -383,8 +382,7 @@ def test_pg_watch_denied_or_lost_leader_stops_without_retry(monkeypatch, failure
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
-        ci_cli.run_ci_watch(reconcile, sleep=sleeps.append)
+        ci_cli.run_ci_watch(scoped_use_case, sleep=sleeps.append)
 
     assert use_case.execute.call_count == 2
     compose.assert_called_once()
@@ -402,8 +400,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
-        ci_cli.run_ci_watch(reconcile, sleep=Mock())
+        ci_cli.run_ci_watch(scoped_use_case, sleep=Mock())
     use_case.execute.assert_called_once()
     compose.assert_called_once()
     factory.__exit__.assert_called_once()
@@ -417,8 +414,7 @@ def test_pg_watch_failure_and_interrupt_close_factory(monkeypatch):
             config, app_config, checks=checks
         ) as scoped_use_case,
     ):
-        reconcile = ci_cli.CiController(use_case=scoped_use_case).reconcile
-        ci_cli.run_ci_watch(reconcile, sleep=Mock(side_effect=KeyboardInterrupt))
+        ci_cli.run_ci_watch(scoped_use_case, sleep=Mock(side_effect=KeyboardInterrupt))
     use_case.execute.assert_called_once()
     factory.__exit__.assert_called_once()
 
@@ -437,9 +433,8 @@ def test_composition_injects_once_and_presentation_maps_response(monkeypatch):
         config, app_config, checks=checks
     ) as scoped_use_case:
         assert scoped_use_case is use_case
-        controller = ci_cli.CiController(use_case=scoped_use_case)
-        first = controller.reconcile(CiRunRequest(startup=True))
-        second = controller.reconcile(CiRunRequest(startup=False))
+        first = ci_cli.run_ci_pass(scoped_use_case, CiRunRequest(startup=True))
+        second = ci_cli.run_ci_pass(scoped_use_case, CiRunRequest(startup=False))
 
     assert first == CiRunResponse(observed_count=3, blocked_count=1)
     assert second == CiRunResponse(observed_count=0, blocked_count=0)
