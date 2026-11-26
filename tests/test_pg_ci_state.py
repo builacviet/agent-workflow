@@ -46,7 +46,7 @@ from agent_workflow.composition.ci_deps import (
 )
 from agent_workflow.composition.mcp_deps import review_writes_provider
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
-from agent_workflow.domain.ci_evidence import WebhookNotification
+from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.webhook.inbox import InboxResult
@@ -81,7 +81,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.integrations.ci_gate import CiEvidence
 from agent_workflow.integrations.github import WorkflowError
 from agent_workflow.interfaces.cli.ci_controller import (
     CiRunRequest,

@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from agent_workflow.application.ci.dtos import CiRequest
+from agent_workflow.application.ci.verification import verify_ci
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
-from agent_workflow.integrations.ci_gate import CiRequest, verify_ci
 
 REPO = "builacviet/agent-workflow"
 HEAD = "a" * 40

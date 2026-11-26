@@ -1,6 +1,6 @@
 """Layer: Composition
 Responsibility: Preflight Controller credentials and scope CI dependencies.
-Dependencies: Application CI, PostgreSQL adapters and the read-only GitHub App.
+Dependencies: Application CI, PostgreSQL adapters and Controller GitHub adapters.
 """
 
 from collections.abc import Iterator
@@ -24,6 +24,7 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 )
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.infrastructure.ci.github_checks import ControllerChecksClient
 from agent_workflow.infrastructure.ci.guarded_adapters import (
     GuardedCiChecks,
     GuardedCiReader,
@@ -39,10 +40,8 @@ from agent_workflow.infrastructure.database.repositories.ci_state_repository imp
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
-from agent_workflow.integrations.github_app_checks import (
-    ControllerAppToken,
-    ControllerChecksClient,
-)
+from agent_workflow.infrastructure.github.app_token import ControllerAppToken
+from agent_workflow.infrastructure.github.client import GitHubClient
 
 
 @dataclass(frozen=True)
@@ -135,10 +134,16 @@ def _controller_checks(
         )
 
     if checks is None:
+        request_json = GitHubClient().request_json
         token = ControllerAppToken(
-            app_id=app_id, installation_id=installation_id, pem_path=pem
+            app_id=app_id,
+            installation_id=installation_id,
+            pem_path=pem,
+            request_json=request_json,
         )
         checks = ControllerChecksClient(
-            installation_id=installation_id, token_provider=token
+            installation_id=installation_id,
+            token_provider=token,
+            request_json=request_json,
         )
     return installation_id, checks
