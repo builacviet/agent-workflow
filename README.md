@@ -1,6 +1,6 @@
 # Agent Workflow
 
-**Source baseline:** merged [main after #150](https://github.com/builacviet/agent-workflow/tree/fb552670bf2b9985e52c862482f3af613d3263a6); PostgreSQL-only persistence, legacy `storage/` package retired, R2 migration in progress. Review claim/submit and queue recovery use the canonical Unit of Work. The dispatch ledger lives in Infrastructure and uses immutable typed claims. MCP Presentation and dependency composition are migrated (#144–150); the legacy MCP namespace is retired. Controller/CI, Admin/Webhook and runtime adapter cleanup remain in progress. [Current architecture](docs/architecture.md) distinguishes source, target and unverified deployment.
+**Source baseline:** merged [main after #150](https://github.com/builacviet/agent-workflow/tree/fb552670bf2b9985e52c862482f3af613d3263a6); PostgreSQL-only persistence, legacy `storage/` package retired, R2 migration in progress. Review claim/submit and queue recovery use the canonical Unit of Work. The dispatch ledger lives in Infrastructure and uses immutable typed claims. MCP Presentation and dependency composition are migrated (#144–150); the legacy MCP namespace is retired. [Current architecture](docs/architecture.md) distinguishes source, target and unverified deployment.
 
 **Coder:** read [AGENTS.md](AGENTS.md) + approved task; consult only relevant [standards](docs/conventions/engineering-standards.md) sections/source/tests. [Index](docs/INDEX.md) is optional; old ADRs/runbooks are historical.
 
@@ -51,6 +51,7 @@ Root `compose.yaml` describes the local MCP, webhook receiver, router and option
 `.runtime/mcp.env.example` have been retired; do not use legacy POC setup commands.
 MCP defaults to Auth0 in the **Controller stack configuration template**
 (`.runtime/controller-mcp.env.example`) and requires verified local Auth0 values.
+The webhook Docker image runs `python -m agent_workflow.interfaces.webhook.server`.
 See the [runtime configuration inventory](.runtime/README.md) and the
 [V1-03C local integration runbook](docs/guides/v1-03c-local-webhook.md).
 Do not expose a public tunnel until OAuth access is verified.

@@ -1,4 +1,7 @@
-"""Signed GitHub webhook validation and inbound application adapter."""
+"""Layer: Interfaces/Webhook
+Responsibility: Validate signed GitHub requests and map inbox outcomes to HTTP.
+Dependencies: The Application webhook use case and Domain notification types.
+"""
 
 import hashlib
 import hmac
@@ -7,7 +10,6 @@ import re
 from collections.abc import Iterable, Mapping
 from http import HTTPStatus
 
-from agent_workflow.application.webhook.ports import IWebhookInboxRepository
 from agent_workflow.application.webhook.receive_webhook import ReceiveWebhookUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.exceptions import DomainError
@@ -82,7 +84,7 @@ class GitHubWebhookReceiver:
 
     def __init__(
         self,
-        inbox: IWebhookInboxRepository | ReceiveWebhookUseCase,
+        use_case: ReceiveWebhookUseCase,
         *,
         secret: bytes,
         installation_id: int,
@@ -99,11 +101,7 @@ class GitHubWebhookReceiver:
             raise ValueError("GitHub repository must be an owner/name slug")
         if type(max_body_bytes) is not int or max_body_bytes <= 0:
             raise ValueError("body limit must be a positive integer")
-        self._use_case = (
-            inbox
-            if isinstance(inbox, ReceiveWebhookUseCase)
-            else ReceiveWebhookUseCase(inbox)
-        )
+        self._use_case = use_case
         self._secret = secret
         self._installation_id = installation_id
         self._repository = repository
