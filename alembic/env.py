@@ -1,11 +1,17 @@
 """Standalone Alembic migration runner; no Flask or runtime credentials."""
+
 from __future__ import annotations
 
 import os
 
-from alembic import context
 import sqlalchemy as sa
+from alembic import context
 from sqlalchemy.pool import NullPool
+
+from agent_workflow.infrastructure.database.lock_keys import (
+    WORKFLOW_LOCK_NAMESPACE,
+    TransactionLockDomain,
+)
 
 config = context.config
 target_metadata = None
@@ -20,12 +26,16 @@ def _dsn() -> str:
         if url.drivername != "postgresql+psycopg" or not url.username or not url.database:
             raise ValueError
     except (sa.exc.ArgumentError, ValueError):
-        raise RuntimeError("PG_MIGRATOR_DSN must be an explicit PostgreSQL psycopg DSN") from None
+        raise RuntimeError(
+            "PG_MIGRATOR_DSN must be an explicit PostgreSQL psycopg DSN"
+        ) from None
     return value
 
 
 def run_migrations_offline() -> None:
-    raise RuntimeError("Offline migrations are disabled; use a reviewed live PostgreSQL database")
+    raise RuntimeError(
+        "Offline migrations are disabled; use a reviewed live PostgreSQL database"
+    )
 
 
 def run_migrations_online() -> None:
@@ -37,7 +47,11 @@ def run_migrations_online() -> None:
             connection.execute(sa.text("SET LOCAL lock_timeout = '5s'"))
             # Serializes concurrent schema migrators, NOT runtime Controllers.
             if not connection.execute(
-                sa.text("SELECT pg_try_advisory_xact_lock(5727811, 1)")
+                sa.text("SELECT pg_try_advisory_xact_lock(:namespace, :domain)"),
+                {
+                    "namespace": WORKFLOW_LOCK_NAMESPACE,
+                    "domain": TransactionLockDomain.SCHEMA_MIGRATION.value,
+                },
             ).scalar_one():
                 raise RuntimeError("another PostgreSQL schema migrator is active")
             context.configure(
