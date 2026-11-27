@@ -8,7 +8,7 @@ One distribution, `src/agent_workflow/`. SQLite runtime persistence and Workflow
 
 | Package | Responsibility / remaining debt |
 | --- | --- |
-| Domain | Pure business values, policies, states/identity and errors. Canonical WorkflowStatus, DispatchStatus and CiVerdict. |
+| Domain | Pure business values, policies, states/identity and errors. Workflow identity imports use `domain.workflow_identity`; canonical states include WorkflowStatus, DispatchStatus and CiVerdict. |
 | Application | Typed feature Use Cases and ports: task authorization/handoff/assignment, review context/result/queue/claim/submit, dispatch, CI, webhook, admin. Review claim/submit, queue recovery, task/admin/handoff and CI track/record coordinate business transaction intent through the canonical UoW. |
 | Infrastructure/database | Canonical SQLAlchemy models, PostgresFactory, SqlAlchemyUnitOfWork, repositories and readers. Task authorization/handoff/admin and review writes/queue recovery use canonical UoW. Independent review context/result/assignment use read-only snapshots. CI readers and independent ACK/webhook writes own fixed short scopes; dispatch ledger owns atomic writes using the concrete UoW and an independent pre-launch read. Shared settings live in `transaction_options.py`, stable transaction lock keys in `lock_keys.py`. |
 | Infrastructure/ci and Infrastructure/github | Controller CI checks and GitHub wire types live in `infrastructure/ci/`. The synchronous GitHub JSON transport and Controller App token provider live in `infrastructure/github/`. CI Composition injects one transport method into the token provider and checks reader. CI callers use the canonical Application and Domain contracts directly. |

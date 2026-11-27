@@ -25,7 +25,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.runners import coder_runtime
 
 DISPATCH = "a" * 32

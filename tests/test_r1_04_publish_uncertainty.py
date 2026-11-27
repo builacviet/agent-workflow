@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.workers.trusted_git.app_auth import BOT
 
 BASE = "a" * 40

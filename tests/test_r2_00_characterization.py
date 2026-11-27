@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.runners.runtime_plugins import (

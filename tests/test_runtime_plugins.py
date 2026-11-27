@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.runtime_plugins import (
     CodexCLIPlugin,
     RuntimeManifest,

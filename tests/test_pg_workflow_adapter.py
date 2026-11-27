@@ -64,7 +64,7 @@ from agent_workflow.infrastructure.database.repositories.task_handoff import (
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.mcp.server import build_mcp_server
 from agent_workflow.interfaces.review_assignment_response import review_context_response

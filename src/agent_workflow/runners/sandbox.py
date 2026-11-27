@@ -18,7 +18,7 @@ from typing import Iterator
 from uuid import uuid4
 
 from agent_workflow.budget import cleanup_budget, dispatch_budget, operation_timeout
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.runtime_plugins import credential_env_name, nonsecret_env_value
 
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"

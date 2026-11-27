@@ -34,7 +34,7 @@ from agent_workflow.composition.postgres_controller import compose_postgres_cont
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.infrastructure.database.models import CITask, Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.integrations.github import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.interfaces.review_assignment_response import (

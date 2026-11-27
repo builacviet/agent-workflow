@@ -81,7 +81,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.cli.ci_controller import (
     CiRunRequest,
     CiRunResponse,

@@ -13,7 +13,7 @@ import sys
 import time
 
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.sandbox import (
     SandboxManager, _assert_daemon, _bind_host, _dispatch_prefix, _sync_directory,
 )

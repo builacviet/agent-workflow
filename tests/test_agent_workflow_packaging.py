@@ -16,7 +16,6 @@ def test_packaged_reference_available():
     ("module", "package"),
     [
         ("coder_runtime", "runners"),
-        ("github", "integrations"),
     ],
 )
 def test_flat_imports_resolve_to_the_same_module(module, package):
@@ -39,6 +38,8 @@ def test_retired_packages_and_entrypoints_are_absent():
         "agent_workflow.server",
         "agent_workflow.bootstrap",
         "agent_workflow.controller",
+        "agent_workflow.github",
+        "agent_workflow.integrations.github",
         "agent_workflow.composition.postgres_ci_entrypoint",
         "agent_workflow.composition.postgres_dispatch_entrypoint",
         "agent_workflow.composition.postgres_dispatch_deps",

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agent_workflow.integrations.github import LEGACY_REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, WorkflowError
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,

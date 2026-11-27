@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 import re
 from typing import Literal, Protocol
 
-from agent_workflow.integrations.github import WorkflowError, validate_sha
+from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
 
 
 _CREDENTIAL_VALUE = re.compile(

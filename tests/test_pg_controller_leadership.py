@@ -9,7 +9,7 @@ from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPas
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 
 SHA = "a" * 40
 CLAIM = DispatchClaim(
