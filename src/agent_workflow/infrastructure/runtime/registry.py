@@ -9,11 +9,21 @@ from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
     RuntimeRequest,
+    RuntimeSpec,
     WorkerResult,
 )
 from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+
+
+def runtime_spec_from_config(config: dict) -> RuntimeSpec:
+    """Resolve the current operator selection without executing an adapter."""
+    runtime = config.get("runtime", "codex")
+    provider = config.get(
+        "provider", CodexCLIPlugin.default_provider if runtime == "codex" else ""
+    )
+    return RuntimeSpec(runtime, provider, config["model"], config.get("effort"))
 
 
 class RuntimeRegistry:
@@ -39,20 +49,49 @@ class RuntimeRegistry:
     ) -> tuple[RuntimeManifest, IAgentRuntimePlugin]:
         if not isinstance(request, RuntimeRequest):
             raise BusinessRuleError("invalid runtime request")
-        if (request.role, request.phase) != ("dev", "code"):
+        return self._resolve_selection(
+            request.spec,
+            role=request.role,
+            phase=request.phase,
+            required_capabilities=request.required_capabilities,
+        )
+
+    def validate_selection(
+        self,
+        spec: RuntimeSpec,
+        *,
+        role: str,
+        phase: str,
+        required_capabilities: frozenset[str],
+    ) -> None:
+        """Check admission without creating a dispatch or invoking an adapter."""
+        self._resolve_selection(
+            spec, role=role, phase=phase, required_capabilities=required_capabilities
+        )
+
+    def _resolve_selection(
+        self,
+        spec: RuntimeSpec,
+        *,
+        role: str,
+        phase: str,
+        required_capabilities: frozenset[str],
+    ) -> tuple[RuntimeManifest, IAgentRuntimePlugin]:
+        if not isinstance(spec, RuntimeSpec):
+            raise BusinessRuleError("invalid runtime selection")
+        if (role, phase) != ("dev", "code"):
             raise BusinessRuleError("runtime plugins require the Dev code phase")
-        registration = self._plugins.get(request.spec.runtime)
+        registration = self._plugins.get(spec.runtime)
         if registration is None:
             raise BusinessRuleError("unsupported runtime")
         manifest, _ = registration
-        spec = request.spec
         if (
             spec.provider,
             spec.model,
             spec.effort,
         ) not in manifest.supported_combinations:
             raise BusinessRuleError("unsupported runtime provider, model or effort")
-        if not request.required_capabilities <= manifest.capabilities:
+        if not required_capabilities <= manifest.capabilities:
             raise BusinessRuleError("unsupported runtime capability")
         return registration
 

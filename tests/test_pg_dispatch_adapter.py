@@ -649,7 +649,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
     # Admission settings are covered offline with inert credential fixtures.
     # This PG test targets the real factory/guard/adapters and fake Worker seam.
-    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", lambda _: None)
+    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", lambda *_: None)
     opened = []
     original_open = PostgresFactory.open
     original_compose = dispatch_deps.compose_postgres_worker
@@ -673,10 +673,11 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
             )
         return dependencies
 
-    def compose_worker(config, service, deps, *, leadership_guard):
+    def compose_worker(config, service, deps, *, leadership_guard, registry):
         runtime = original_compose(
-            config, service, deps, leadership_guard=leadership_guard
+            config, service, deps, leadership_guard=leadership_guard, registry=registry
         )
+        assert runtime.registry is registry
         assert service is deps.handoff_provider
         assert runtime.agent_runtime.dispatch is deps.dispatch
         assert runtime.agent_runtime.ci is deps.ci_tracking

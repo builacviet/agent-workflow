@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from sqlalchemy import create_engine
+from test_runtime_plugins import FakePlugin
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.dispatch.ports import DispatchClaim
@@ -27,6 +28,8 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners import coder_runtime
 
 DISPATCH = "a" * 32
@@ -58,6 +61,10 @@ def forbid_worker_effects(monkeypatch):
     monkeypatch.setattr(coder_runtime, "run_container", forbidden)
 
 
+def _codex_registry():
+    return RuntimeRegistry((CodexCLIPlugin(),))
+
+
 def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     wiring, monkeypatch
 ):
@@ -72,9 +79,15 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     monkeypatch.setattr(factory._engine, "dispose", dispose)
     monkeypatch.setattr(dependencies.leadership, "is_held", forbidden)
 
+    registry = RuntimeRegistry((FakePlugin(),))
     runtime = compose_postgres_worker(
-        {"database": "legacy.db"}, service, dependencies, leadership_guard=forbidden
+        {"database": "legacy.db"},
+        service,
+        dependencies,
+        leadership_guard=forbidden,
+        registry=registry,
     )
+    assert runtime.registry is registry
 
     assert runtime.handoff_provider is dependencies.handoff_provider
     assert runtime.agent_runtime.dispatch is dependencies.dispatch
@@ -96,7 +109,11 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
     service = dependencies.handoff_provider
 
     runtime = compose_postgres_worker(
-        {}, service, dependencies, leadership_guard=forbidden
+        {},
+        service,
+        dependencies,
+        leadership_guard=forbidden,
+        registry=_codex_registry(),
     )
 
     assert runtime.agent_runtime.ci is dependencies.ci_tracking
@@ -129,6 +146,7 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
                 service,
                 replace(dependencies, **{missing: invalid}),
                 leadership_guard=forbidden,
+                registry=_codex_registry(),
             )
 
 
@@ -158,6 +176,7 @@ def test_mixed_factories_are_rejected(
             service,
             replace(dependencies, **{name: getattr(other, name) for name in foreign}),
             leadership_guard=forbidden,
+            registry=_codex_registry(),
         )
 
 
@@ -188,7 +207,13 @@ def test_actual_ci_provider_and_session_binding_are_checked(
     monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
 
     with pytest.raises(TypeError, match=expected):
-        compose_postgres_worker({}, service, substituted, leadership_guard=forbidden)
+        compose_postgres_worker(
+            {},
+            service,
+            substituted,
+            leadership_guard=forbidden,
+            registry=_codex_registry(),
+        )
 
 
 @pytest.mark.parametrize("foreign", ["ci_tracking", "ci_write_scope"])
@@ -203,6 +228,7 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
             service,
             replace(dependencies, **{foreign: getattr(other, foreign)}),
             leadership_guard=forbidden,
+            registry=_codex_registry(),
         )
 
 
@@ -212,7 +238,11 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
     unrelated_service = other.handoff_provider
     with pytest.raises(TypeError, match="composed PostgreSQL handoff provider"):
         compose_postgres_worker(
-            {}, unrelated_service, dependencies, leadership_guard=forbidden
+            {},
+            unrelated_service,
+            dependencies,
+            leadership_guard=forbidden,
+            registry=_codex_registry(),
         )
     with pytest.raises(TypeError, match="Controller guard"):
         compose_postgres_worker(
@@ -223,10 +253,17 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
                 leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
             ),
             leadership_guard=forbidden,
+            registry=_codex_registry(),
         )
     factory.close()
     with pytest.raises(TypeError, match="open Controller factory"):
-        compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
+        compose_postgres_worker(
+            {},
+            service,
+            dependencies,
+            leadership_guard=forbidden,
+            registry=_codex_registry(),
+        )
 
 
 def test_released_lock_cannot_construct_worker(
@@ -236,7 +273,13 @@ def test_released_lock_cannot_construct_worker(
     dependencies.leadership.release()
     monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     with pytest.raises(PermissionError, match="active Controller leadership"):
-        compose_postgres_worker({}, service, dependencies, leadership_guard=forbidden)
+        compose_postgres_worker(
+            {},
+            service,
+            dependencies,
+            leadership_guard=forbidden,
+            registry=_codex_registry(),
+        )
 
 
 def test_missing_or_invalid_controller_guard_cannot_construct_worker(
@@ -245,10 +288,16 @@ def test_missing_or_invalid_controller_guard_cannot_construct_worker(
     _, dependencies, service = wiring
     monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
     with pytest.raises(TypeError, match="leadership_guard"):
-        compose_postgres_worker({}, service, dependencies)
+        compose_postgres_worker({}, service, dependencies, registry=_codex_registry())
     for invalid in (None, object()):
         with pytest.raises(TypeError, match="Controller guard"):
-            compose_postgres_worker({}, service, dependencies, leadership_guard=invalid)
+            compose_postgres_worker(
+                {},
+                service,
+                dependencies,
+                leadership_guard=invalid,
+                registry=_codex_registry(),
+            )
 
 
 def test_missing_or_invalid_injection_cannot_fall_back(
@@ -264,6 +313,7 @@ def test_missing_or_invalid_injection_cannot_fall_back(
         "dispatch": dependencies.dispatch,
         "ci": dependencies.ci_tracking,
         "leadership_guard": lambda: True,
+        "registry": _codex_registry(),
     }
     for port in injected:
         with pytest.raises(TypeError, match=port):
@@ -289,7 +339,11 @@ def test_callback_cannot_authorize_without_the_borrowed_lock(
     _, dependencies, service = wiring
     # The real lock is unacquired. No runner or transport hooks may be entered.
     runtime = compose_postgres_worker(
-        {}, service, dependencies, leadership_guard=lambda: guard_result
+        {},
+        service,
+        dependencies,
+        leadership_guard=lambda: guard_result,
+        registry=_codex_registry(),
     )
     monkeypatch.setattr(coder_runtime, "_selected_host", forbidden)
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
@@ -352,7 +406,11 @@ def test_loss_during_engine_admission_leaves_slot_active(
 
     def execute(claim, context, guard):
         runtime = compose_postgres_worker(
-            {"model": "gpt-6-luna"}, service, dependencies, leadership_guard=guard
+            {"model": "gpt-6-luna"},
+            service,
+            dependencies,
+            leadership_guard=guard,
+            registry=_codex_registry(),
         )
         monkeypatch.setattr(runtime.sandbox, "record_engine", forbidden)
         monkeypatch.setattr(runtime, "_execute_bound", forbidden)
@@ -381,7 +439,11 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
 ):
     factory, dependencies, service = wiring
     runtime = compose_postgres_worker(
-        {}, service, dependencies, leadership_guard=lambda: None
+        {},
+        service,
+        dependencies,
+        leadership_guard=lambda: None,
+        registry=_codex_registry(),
     )
     session = Mock()
     uow = MagicMock()

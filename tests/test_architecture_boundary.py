@@ -18,6 +18,8 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
@@ -127,7 +129,7 @@ def injected_runtime(config, state, ledger, *, plugins=()):
         dispatch=ledger,
         ci=Mock(),
         leadership_guard=lambda: True,
-        plugins=plugins,
+        registry=RuntimeRegistry((CodexCLIPlugin(), *plugins)),
     )
 
 

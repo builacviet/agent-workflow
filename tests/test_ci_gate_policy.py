@@ -86,11 +86,15 @@ def test_controller_injects_same_policy_without_docker_launch(
 
     open_database = Mock(return_value=nullcontext(factory))
     monkeypatch.setattr(PostgresFactory, "open", open_database)
-    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", Mock())
+    preflight = Mock()
+    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", preflight)
 
     with dispatch_deps.compose_dispatch_execution({}, AppConfig.from_env()):
         pass
 
+    preflight.assert_called_once()
+    assert preflight.call_args.args[0] == {}
+    assert type(preflight.call_args.args[1]) is dispatch_deps.RuntimeRegistry
     open_database.assert_called_once()
     assert open_database.call_args.args[0].ci_gate_required is expected
     compose.assert_called_once_with(factory)
