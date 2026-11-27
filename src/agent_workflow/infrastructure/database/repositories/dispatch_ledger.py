@@ -16,11 +16,7 @@ from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.budget import check_deadline
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import DispatchStatus, WorkflowStatus
-from agent_workflow.domain.workflow_identity import (
-    REPOSITORY,
-    canonical_repository,
-    validate_sha,
-)
+from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
 from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.lock_keys import (
     WORKFLOW_LOCK_NAMESPACE,
@@ -123,7 +119,7 @@ class PostgresDispatchLedger:
                 .with_for_update()
             ).scalars()
             for task in candidates:
-                if canonical_repository(task.repository) != REPOSITORY:
+                if task.repository != REPOSITORY:
                     continue
                 sha = task.current_head_sha or task.base_sha
                 validate_sha(sha)

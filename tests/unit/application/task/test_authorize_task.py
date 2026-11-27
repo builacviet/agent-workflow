@@ -16,11 +16,7 @@ from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import (
-    LEGACY_REPOSITORY,
-    REPOSITORY,
-    WorkflowError,
-)
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 
 
 @pytest.fixture
@@ -98,7 +94,12 @@ def test_rejects_malformed_direct_commands_before_scope(invalid):
 
 
 @pytest.mark.parametrize(
-    "invalid", [{"repository": "another/repo"}, {"requested_effort": "maximum"}]
+    "invalid",
+    [
+        {"repository": "another/repo"},
+        {"repository": "builacviet/techlead-review-poc"},
+        {"requested_effort": "maximum"},
+    ],
 )
 def test_rejects_unauthorized_direct_inputs_without_side_effects(command, invalid):
     uow = MagicMock()
@@ -110,7 +111,8 @@ def test_rejects_unauthorized_direct_inputs_without_side_effects(command, invali
             AuthorizeTaskCommand(replace(command.spec, **invalid))
         )
     uow.__enter__.assert_not_called()
-    repository.load_for_authorization.assert_not_called()
+    assert not repository.mock_calls
+    uow.commit.assert_not_called()
 
 
 def test_persists_then_requests_commit_once(command, monkeypatch):
@@ -144,7 +146,6 @@ def test_existing_spec_does_not_write_or_commit(command, conflict, caplog):
     scope = FakeScope()
     scope.existing = replace(
         command.spec,
-        repository=LEGACY_REPOSITORY,
         context_paths=command.spec.context_paths[::-1]
         if conflict
         else command.spec.context_paths,

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
@@ -150,15 +150,18 @@ def test_app_identity_and_stale_sha_fail_closed(app):
         client.token()
     transport.slug = "builacviet-wfc-coder"
     verifier = AppVerifier(client)
-    verifier(LEGACY_REPOSITORY, "codex/test", BASE, HEAD)
+    verifier(REPOSITORY, "codex/test", BASE, HEAD)
     assert (
         transport.calls[-2][1]
         == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
     )
     with pytest.raises(WorkflowError):
         verifier(REPOSITORY, "codex/test", BASE, BASE)
-    with pytest.raises(WorkflowError):
-        verifier("other/repository", "main", BASE, HEAD)
+    calls_before_rejection = list(transport.calls)
+    for repository in ("other/repository", "builacviet/techlead-review-poc"):
+        with pytest.raises(WorkflowError, match="repository is not authorized"):
+            verifier(repository, "codex/test", BASE, HEAD)
+        assert transport.calls == calls_before_rejection
 
 
 @pytest.mark.parametrize("ids", [(True, 2), (0, 2), (1, -2), ("1", 2)])
@@ -278,9 +281,7 @@ def config(tmp_path):
     }
 
 
-@pytest.mark.parametrize("repository", [REPOSITORY, LEGACY_REPOSITORY])
-def test_valid_config_and_profile_digest(config, repository):
-    config["repository"] = repository
+def test_valid_config_and_profile_digest(config):
     validate_config(config)
     config["seccomp_sha256"] = "0" * 64
     with pytest.raises(WorkflowError, match="digest"):
@@ -291,6 +292,7 @@ def test_valid_config_and_profile_digest(config, repository):
     "key,value",
     [
         ("repository", "other/agent-workflow"),
+        ("repository", "builacviet/techlead-review-poc"),
         ("codex_auth_volume", "workflow-console-v2-codex-auth-20261029"),
         ("scratch", "relative"),
         ("image", "bad image"),

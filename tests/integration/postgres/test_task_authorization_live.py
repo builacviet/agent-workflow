@@ -26,11 +26,7 @@ from agent_workflow.composition.task_deps import create_authorize_task_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 from agent_workflow.domain.task.handoff import HandoffRequest
-from agent_workflow.domain.workflow_identity import (
-    LEGACY_REPOSITORY,
-    REPOSITORY,
-    WorkflowError,
-)
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
@@ -63,7 +59,7 @@ def pg_authorization():
         description="  Keep space and original case  ",
         acceptance_criteria=("Persist one event", "Verify committed rows"),
         definition_of_done="Observed",
-        repository=LEGACY_REPOSITORY,
+        repository=REPOSITORY,
         branch="codex/test",
         base_sha="a" * 40,
         requested_effort="high",
@@ -173,36 +169,34 @@ def test_task_and_event_share_one_physical_commit(pg_authorization, monkeypatch)
 
 
 def test_operator_cli_readback_preserves_history(
-    pg_authorization, monkeypatch, tmp_path
+    pg_authorization, monkeypatch, tmp_path, capsys
 ):
     factory, spec = pg_authorization
     payload = json.loads(encode(asdict(spec)))
     path = tmp_path / "task.json"
-    path.write_text(
-        encode(payload | {"repository": LEGACY_REPOSITORY}), encoding="utf-8"
-    )
     monkeypatch.setenv("PG_RUNTIME_DSN", os.environ["PG_TEST_DSN"])
     monkeypatch.setattr(
         sys,
         "argv",
         ["agent_workflow.interfaces.cli.admin", "provision", "--file", str(path)],
     )
+    path.write_text(
+        encode(payload | {"repository": "builacviet/techlead-review-poc"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as error:
+        admin.main()
+    assert error.value.code == 2
+    assert "unauthorized repository" in capsys.readouterr().err
+    assert read_rows(factory, spec.task_id) == (None, [])
+
+    path.write_text(encode(payload), encoding="utf-8")
     admin.main()
 
     task, events = read_rows(factory, spec.task_id)
     assert task["metadata"] == encode(payload)
     assert len(events) == 1
     assert task["updated_at"] == events[0]["timestamp"]
-    with factory.transaction() as connection:
-        # Simulate a pre-R2 row that keeps the historical repository slug.
-        connection.execute(
-            update(Task)
-            .where(Task.task_id == spec.task_id)
-            .values(
-                metadata_text=encode(payload | {"repository": LEGACY_REPOSITORY}),
-                repository=LEGACY_REPOSITORY,
-            )
-        )
     assert task["repository"] == REPOSITORY
     assert task["status"] == "AWAITING_HANDOFF"
     with PostgresHandoffProvider(

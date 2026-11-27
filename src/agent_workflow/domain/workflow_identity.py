@@ -5,14 +5,6 @@ import re
 from agent_workflow.domain.exceptions import BusinessRuleError
 
 REPOSITORY = "builacviet/agent-workflow"
-LEGACY_REPOSITORY = "builacviet/techlead-review-poc"
-
-
-def canonical_repository(repository: str) -> str:
-    """Treat the former slug as an alias for this repository."""
-    if repository == LEGACY_REPOSITORY:
-        return REPOSITORY
-    return repository
 
 
 # Legacy public name; new R2 code uses DomainError from domain.exceptions.

@@ -7,7 +7,6 @@ from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
     WorkflowError,
-    canonical_repository,
     validate_sha,
 )
 
@@ -62,8 +61,7 @@ class TaskAuthorizationSpec:
             raise WorkflowError(
                 "require_verified_effort and synthetic must be booleans"
             )
-        repository = canonical_repository(self.repository)
-        if repository != REPOSITORY or self.requested_effort not in _LOCAL_EFFORTS:
+        if self.repository != REPOSITORY or self.requested_effort not in _LOCAL_EFFORTS:
             raise WorkflowError("unauthorized repository or unsupported effort")
         validate_sha(self.base_sha)
         if any(
@@ -74,7 +72,6 @@ class TaskAuthorizationSpec:
             for path in self.context_paths
         ):
             raise WorkflowError("context paths must be repository-relative")
-        object.__setattr__(self, "repository", repository)
 
     def match_existing(self, existing: "TaskAuthorizationSpec") -> None:
         if self != existing:
