@@ -18,11 +18,12 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
-from agent_workflow.runners import coder_runtime, sandbox
+from agent_workflow.infrastructure.runtime.sandbox import SandboxRunResult
+from agent_workflow.runners import coder_runtime
 from agent_workflow.runners.coder_runtime import CoderRuntime
-from agent_workflow.runners.sandbox import SandboxRunResult
 
 
 @pytest.fixture(autouse=True)
@@ -441,7 +442,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
-    monkeypatch.setattr(coder_runtime, "docker_command", lambda args: b"")
+    monkeypatch.setattr(sandbox, "docker_command", lambda args: b"")
 
     def execute(claim, _context):
         nonlocal dispatch_id
@@ -676,7 +677,7 @@ def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeyp
         assert all("synthetic-canary" not in arg for arg in invocation)
         return b"synthetic test output"
 
-    monkeypatch.setattr(coder_runtime, "run_container", run)
+    monkeypatch.setattr(sandbox, "run_container", run)
     assert (
         runtime.docker(
             {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},

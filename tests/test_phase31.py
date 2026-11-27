@@ -383,9 +383,9 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
         assert budget.operation_timeout(30) == 30
         return b""
 
-    monkeypatch.setattr(runtime, "docker_command", command)
-    from agent_workflow.runners import sandbox
+    from agent_workflow.infrastructure.runtime import sandbox
 
+    monkeypatch.setattr(sandbox, "docker_command", command)
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     from unittest.mock import Mock
 

@@ -641,8 +641,8 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     from test_agent_runtime import FakeHost
 
     from agent_workflow.composition import dispatch_deps
+    from agent_workflow.infrastructure.runtime import sandbox
     from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
-    from agent_workflow.runners import coder_runtime
 
     _, observer, task_id = setup
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
@@ -755,10 +755,10 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     )
     monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", compose_worker)
     monkeypatch.setattr(
-        coder_runtime, "docker_command", lambda *_: pytest.fail("real Docker forbidden")
+        sandbox, "docker_command", lambda *_: pytest.fail("real Docker forbidden")
     )
     monkeypatch.setattr(
-        coder_runtime, "run_container", lambda *_: pytest.fail("real Worker forbidden")
+        sandbox, "run_container", lambda *_: pytest.fail("real Worker forbidden")
     )
     config = {"tasks": {task_id: {"handoff_path": "docs/handoff.md"}}}
 

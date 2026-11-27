@@ -10,8 +10,6 @@ import json
 import os
 import re
 import stat
-import subprocess
-import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
@@ -29,10 +27,24 @@ from agent_workflow.budget import check_deadline, cleanup_budget, operation_time
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
+from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.infrastructure.runtime.registry import (
     RuntimeRegistry,
     runtime_spec_from_config,
 )
+from agent_workflow.infrastructure.runtime.sandbox import (
+    _DOCKER_HOST,
+    SandboxManager,
+    SandboxPolicy,
+    _assert_daemon,
+    _assert_selected_host,
+    _bind_host,
+    _environment,
+    _require_engine,
+    _selected_host,
+    docker_security_args,
+)
+from agent_workflow.infrastructure.runtime.workspace import is_linked
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
@@ -40,20 +52,6 @@ from agent_workflow.runners.agent_runtime import (
     AgentRuntime,
     CiTracking,
     DispatchEvidence,
-)
-from agent_workflow.runners.sandbox import (
-    _DOCKER_HOST,
-    DockerCreateRejected,
-    SandboxManager,
-    SandboxPolicy,
-    _assert_daemon,
-    _assert_selected_host,
-    _bind_host,
-    _docker_invocation,
-    _environment,
-    _require_engine,
-    _selected_host,
-    docker_security_args,
 )
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
@@ -65,14 +63,6 @@ MAX_SNAPSHOT_TOTAL_BYTES = 64 * 1024 * 1024
 WINDOWS_DEVICES = {"con", "prn", "aux", "nul"} | {
     f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10)
 }
-
-
-def is_linked(path: Path) -> bool:
-    info = path.lstat()
-    return path.is_symlink() or bool(
-        getattr(info, "st_file_attributes", 0)
-        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    )
 
 
 def safe_path(value: str) -> str:
@@ -210,101 +200,6 @@ def source_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def docker_command(args: list[str]) -> bytes:
-    if not args or args[0] != "docker":
-        raise BusinessRuleError("Controller may only launch Docker")
-    # Use fixed operation names only. Arguments and subprocess output can
-    # contain host paths, environment values or untrusted content.
-    operation = "command"
-    for prefix, name in (
-        (["info"], "info"),
-        (["image", "inspect"], "image inspect"),
-        (["create"], "create"),
-        (["container", "inspect"], "container inspect"),
-        (["container", "ls"], "container ls"),
-        (["rm"], "rm"),
-        (["volume", "inspect"], "volume inspect"),
-    ):
-        if args[1 : 1 + len(prefix)] == prefix:
-            operation = name
-            break
-
-    timeout = operation_timeout(30)
-    invocation, env = _docker_invocation(args)
-    try:
-        return subprocess.run(
-            invocation, env=env, capture_output=True, check=True, timeout=timeout
-        ).stdout
-    except subprocess.TimeoutExpired:
-        check_deadline()
-        raise BusinessRuleError(f"Docker {operation} timed out") from None
-    except subprocess.CalledProcessError as error:
-        if operation == "create" and error.returncode == 1:
-            # Only an exact daemon rejection of the requested immutable image
-            # is terminal. Timeouts, transport errors and conflicts are not.
-            rejection = (error.stderr or b"").strip()
-            image = next(
-                (arg for arg in args if re.fullmatch(r"sha256:[0-9a-f]{64}", arg)), None
-            )
-            if (
-                image
-                and rejection
-                == b"Error response from daemon: No such image: "
-                + image.encode("ascii")
-            ):
-                raise DockerCreateRejected(
-                    "Docker rejected the sandbox image"
-                ) from None
-        raise BusinessRuleError(
-            f"Docker {operation} failed (exit {error.returncode})"
-        ) from None
-    except (FileNotFoundError, PermissionError):
-        if operation == "create":
-            raise DockerCreateRejected("could not launch Docker create") from None
-        raise BusinessRuleError(f"could not launch Docker {operation}") from None
-    except OSError:
-        raise BusinessRuleError(f"Docker {operation} I/O failed") from None
-
-
-def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
-    # Output goes to private bounded temporary storage, never Docker logs/chat.
-    with tempfile.TemporaryFile() as output:
-        invocation, env = _docker_invocation(args)
-        process = subprocess.Popen(
-            invocation, env=env, stdin=subprocess.PIPE, stdout=output, stderr=output
-        )
-        try:
-            started = time.monotonic()
-            payload = prompt.encode()
-            while True:
-                try:
-                    process.communicate(
-                        payload, timeout=operation_timeout(min(1, remaining))
-                    )
-                    break
-                except subprocess.TimeoutExpired:
-                    payload = None
-                    if (
-                        time.monotonic() - started >= remaining
-                        or os.fstat(output.fileno()).st_size > 4_000_000
-                    ):
-                        raise BusinessRuleError(
-                            "runtime deadline or output budget exceeded"
-                        )
-            check_deadline()
-            size = output.tell()
-            if process.returncode or size > 4_000_000:
-                raise BusinessRuleError(
-                    "coder/test container failed or output exceeded limit"
-                )
-            output.seek(0)
-            return output.read()
-        except BaseException:
-            process.kill()
-            process.wait(timeout=10)
-            raise
-
-
 class CoderRuntime:
     """Trusted Worker host with explicitly injected execution state."""
 
@@ -438,7 +333,7 @@ class CoderRuntime:
             for suffix in ("code", "test", "probe", "prepare", "publish"):
                 name = f"my-wfc-{dispatch_id}-{suffix}"
                 # docker rm -f is scoped to our exact persisted names. No v2 operations.
-                found = docker_command(
+                found = sandbox.docker_command(
                     [
                         "docker",
                         "container",
@@ -449,8 +344,8 @@ class CoderRuntime:
                     ]
                 )
                 if found.strip():
-                    docker_command(["docker", "rm", "-f", name])
-                if docker_command(
+                    sandbox.docker_command(["docker", "rm", "-f", name])
+                if sandbox.docker_command(
                     [
                         "docker",
                         "container",
@@ -552,7 +447,7 @@ class CoderRuntime:
             volume = self.config.get("codex_auth_volume")
             if volume != "techlead-review-poc_codex_auth":
                 raise BusinessRuleError("dedicated POC Codex auth volume required")
-            docker_command(["docker", "volume", "inspect", volume])
+            sandbox.docker_command(["docker", "volume", "inspect", volume])
             args += [
                 "--mount",
                 f"type=volume,src={volume},dst=/home/coder/.codex",
@@ -568,7 +463,7 @@ class CoderRuntime:
             *command,
         ]
         self.agent_runtime.require_leadership()
-        return run_container(args, prompt, remaining)
+        return sandbox.run_container(args, prompt, remaining)
 
     def execute_assignment(
         self, claim: DispatchClaim, assignment: DispatchAssignment

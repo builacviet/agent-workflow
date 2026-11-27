@@ -26,8 +26,8 @@ def test_worker_entrypoint_uses_trusted_git_module():
 
 @pytest.mark.parametrize("mode", ["code", "test", "prepare", "publish", "probe"])
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
+    from agent_workflow.infrastructure.runtime import sandbox
     from agent_workflow.runners import coder_runtime as module
-    from agent_workflow.runners import sandbox
 
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
     profile = tmp_path / "profile.json"
@@ -48,9 +48,9 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
     monkeypatch.setenv("DOCKER_HOST", "unix:///fixture.sock")
     monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
-    monkeypatch.setattr(module, "docker_command", lambda args: commands.append(args))
+    monkeypatch.setattr(sandbox, "docker_command", lambda args: commands.append(args))
     monkeypatch.setattr(
-        module,
+        sandbox,
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
