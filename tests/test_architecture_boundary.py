@@ -14,7 +14,10 @@ from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 from agent_workflow.application.dispatch import run_dispatch_pass
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.application.exceptions import RuntimeAdmissionError
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
 from agent_workflow.application.runtime.ports import RuntimeAdapters
 from agent_workflow.application.runtime.services.agent_execution import (
     AgentExecutionService,
@@ -274,7 +277,12 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
         assert not (tmp_path / ".runtime").exists()
         return
     if failure:
-        with pytest.raises(BusinessRuleError):
+        expected_error = (
+            RuntimeContractError
+            if failure in {"result", "pr_url"}
+            else BusinessRuleError
+        )
+        with pytest.raises(expected_error):
             dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
     else:

@@ -19,7 +19,10 @@ from test_agent_runtime import assignment_for
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    RuntimeContractError,
+)
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextOutput,
@@ -796,7 +799,12 @@ def test_pg_once_runs_native_dev_stages(
     monkeypatch.setattr(sandbox, "run_container", run_stage)
     app_config = AppConfig(pg_runtime_dsn=DSN, sandbox_state_dir=tmp_path / "fences")
     if error:
-        with pytest.raises(BusinessRuleError, match=error):
+        expected_error = (
+            RuntimeContractError
+            if fault in {"mutated_test", "invalid_result_head"}
+            else BusinessRuleError
+        )
+        with pytest.raises(expected_error, match=error):
             run_dispatch(config, app_config)
         assert [call[0] for call in events.mock_calls] == [
             "retire",
