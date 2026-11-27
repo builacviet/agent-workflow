@@ -15,7 +15,15 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.runtime.dtos import RuntimePlan, RuntimeRequest
+from agent_workflow.application.runtime.dtos import (
+    RuntimePlan,
+    RuntimeRequest,
+    WorkerResult,
+)
+from agent_workflow.application.runtime.ports import ICiTracking, IDispatchEvidence
+from agent_workflow.application.runtime.services.agent_execution import (
+    AgentExecutionService,
+)
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
@@ -46,11 +54,6 @@ from agent_workflow.infrastructure.runtime.sandbox import (
 from agent_workflow.infrastructure.runtime.workspace import is_linked
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
-)
-from agent_workflow.runners.agent_runtime import (
-    AgentRuntime,
-    CiTracking,
-    DispatchEvidence,
 )
 from agent_workflow.sandbox_state_paths import validate_sandbox_state_dir
 
@@ -208,8 +211,8 @@ class CoderRuntime:
         config: dict,
         handoff_provider: HandoffUseCaseProvider,
         *,
-        dispatch: DispatchEvidence,
-        ci: CiTracking,
+        dispatch: IDispatchEvidence,
+        ci: ICiTracking,
         leadership_guard: Callable[[], bool],
         registry: RuntimeRegistry,
         sandbox: SandboxManager,
@@ -234,12 +237,12 @@ class CoderRuntime:
         self.config, self.handoff_provider = config, handoff_provider
         self.registry = registry
         self.sandbox = sandbox
-        self.agent_runtime = AgentRuntime(
+        self.agent_runtime = AgentExecutionService(
             self,
             dispatch,
             ci,
             leadership_guard,
-            require_ci_tracking=leadership_guard is not None,
+            require_ci_tracking=True,
         )
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
@@ -260,7 +263,7 @@ class CoderRuntime:
         plan: RuntimePlan,
         prompt: str,
         approved_image_id: str | None,
-    ) -> None:
+    ) -> WorkerResult:
         if approved_image_id is None:
             # Only the built-in Codex device-login profile is exempt from
             # strict sandbox image approval.
@@ -506,7 +509,7 @@ class CoderRuntime:
         plan: RuntimePlan,
         approved_image_id: str | None,
     ) -> str:
-        return self.agent_runtime.execute_bound(
+        return self.agent_runtime.execute(
             claim, context, request, plan, approved_image_id
         )
 
