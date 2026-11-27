@@ -18,6 +18,12 @@ from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.runtime.dtos import (
+    RuntimePlan,
+    RuntimeRequest,
+    RuntimeSpec,
+)
+from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
@@ -28,6 +34,8 @@ from agent_workflow.budget import check_deadline, cleanup_budget, operation_time
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
@@ -35,14 +43,6 @@ from agent_workflow.runners.agent_runtime import (
     AgentRuntime,
     CiTracking,
     DispatchEvidence,
-)
-from agent_workflow.runners.runtime_plugins import (
-    AgentRuntimePlugin,
-    CodexCLIPlugin,
-    RuntimePlan,
-    RuntimeRegistry,
-    RuntimeRequest,
-    RuntimeSpec,
 )
 from agent_workflow.runners.sandbox import (
     _DOCKER_HOST,
@@ -319,7 +319,7 @@ class CoderRuntime:
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool],
-        plugins: Iterable[AgentRuntimePlugin] = (),
+        plugins: Iterable[IAgentRuntimePlugin] = (),
     ) -> None:
         if (
             not callable(handoff_provider)
@@ -347,7 +347,7 @@ class CoderRuntime:
         self,
         config: dict,
         handoff_provider: HandoffUseCaseProvider,
-        plugins: Iterable[AgentRuntimePlugin],
+        plugins: Iterable[IAgentRuntimePlugin],
         app_config: AppConfig,
         dispatch: DispatchEvidence,
         ci: CiTracking,

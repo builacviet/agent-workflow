@@ -24,8 +24,8 @@ from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.github.app_token import ControllerAppToken
 from agent_workflow.infrastructure.github.client import GitHubClient
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.runners.coder_runtime import validate_config
-from agent_workflow.runners.runtime_plugins import CodexCLIPlugin
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
 

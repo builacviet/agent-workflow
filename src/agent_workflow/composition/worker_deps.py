@@ -6,6 +6,7 @@ Dependencies: Application operations and PostgreSQL adapters.
 from collections.abc import Callable, Iterable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import ControllerDependencies
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
@@ -18,7 +19,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     PostgresLeadershipLock,
 )
 from agent_workflow.runners.coder_runtime import CoderRuntime
-from agent_workflow.runners.runtime_plugins import AgentRuntimePlugin
 
 
 def compose_postgres_worker(
@@ -27,7 +27,7 @@ def compose_postgres_worker(
     dependencies: ControllerDependencies,
     *,
     leadership_guard: Callable[[], None],
-    plugins: Iterable[AgentRuntimePlugin] = (),
+    plugins: Iterable[IAgentRuntimePlugin] = (),
 ) -> CoderRuntime:
     """Borrow the Controller's adapters and its raising guard for this claim.
 
