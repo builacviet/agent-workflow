@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.infrastructure.runtime.worker_config import (
     safe_path,
     validate_config,
@@ -29,12 +29,12 @@ from agent_workflow.workers.trusted_git.app_auth import REPOSITORY
     ],
 )
 def test_reject_unsafe_paths(path):
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(InvalidApplicationRequestError):
         safe_path(path)
 
 
 def test_configuration_requires_explicit_scope():
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(InvalidApplicationRequestError):
         validate_config({"repository": "other/repo", "tasks": {}})
 
 
@@ -77,7 +77,7 @@ def config(tmp_path):
 def test_valid_config_and_profile_digest(config):
     validate_config(config)
     config["seccomp_sha256"] = "0" * 64
-    with pytest.raises(BusinessRuleError, match="digest"):
+    with pytest.raises(InvalidApplicationRequestError, match="digest"):
         validate_config(config)
 
 
@@ -100,7 +100,7 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
     if value == "v2-path":
         value = str(tmp_path / "agent_workflow_v2" / "data.sqlite3")
     config[key] = value
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(InvalidApplicationRequestError):
         validate_config(config)
 
 
@@ -115,7 +115,7 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
     ],
 )
 def test_cross_platform_path_aliases_are_rejected(path):
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(InvalidApplicationRequestError):
         safe_path(path)
 
 
@@ -137,7 +137,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     sample["tasks"] = config["tasks"]
     validate_config(sample)
     sample["database"] = str(tmp_path / "agent_workflow_v2/data/workflow.sqlite3")
-    with pytest.raises(BusinessRuleError, match="v2 paths"):
+    with pytest.raises(InvalidApplicationRequestError, match="v2 paths"):
         validate_config(sample)
 
 
@@ -148,5 +148,5 @@ def test_documented_shared_database_configuration(config, tmp_path):
 def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
     from agent_workflow.infrastructure.runtime.worker_config import independent_path
 
-    with pytest.raises(BusinessRuleError, match="v2 paths"):
+    with pytest.raises(InvalidApplicationRequestError, match="v2 paths"):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")

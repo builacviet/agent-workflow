@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Register runtime adapters and validate plans and launch evidence.
-Dependencies: Application runtime contracts, Domain errors and the built-in Codex adapter.
+Dependencies: Application runtime contracts and the built-in Codex adapter.
 """
 
 from dataclasses import replace
