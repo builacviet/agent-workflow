@@ -26,6 +26,11 @@ from agent_workflow.application.exceptions import (
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
+from agent_workflow.application.runtime.dtos import (
+    RuntimePlan,
+    RuntimeRequest,
+    RuntimeSpec,
+)
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
@@ -636,8 +641,6 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     setup, monkeypatch, tmp_path, fault
 ):
     """Hosted PG16 module: real composition/state; synthetic external effects only."""
-    from types import SimpleNamespace
-
     from test_agent_runtime import FakeHost
 
     from agent_workflow.composition import dispatch_deps
@@ -727,12 +730,15 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
             deps.dispatch.retire_pre_launch(claim["dispatch_id"])
             assert not deps.dispatch.is_pre_launch(claim["dispatch_id"])
             pins.add(claim["dispatch_id"])
-            result = runtime.agent_runtime.execute_bound(
-                claim,
-                context,
-                SimpleNamespace(spec=SimpleNamespace(runtime="fake")),
-                SimpleNamespace(),
-                None,
+            request = RuntimeRequest(
+                spec=RuntimeSpec("fake", "fixture", "model"),
+                role="dev",
+                phase="code",
+                dispatch_id=claim["dispatch_id"],
+                input_sha=claim["input_sha"],
+            )
+            result = runtime.agent_runtime.execute(
+                claim, context, request, RuntimePlan(("agent",)), None
             )
             if fault == "ownership":
                 # Simulate abrupt session loss after evidence/handoff/CI commit.
