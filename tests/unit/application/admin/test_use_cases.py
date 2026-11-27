@@ -10,8 +10,9 @@ from agent_workflow.application.admin.use_cases import (
     ResetSyntheticReviewUseCase,
     SeedSyntheticReviewUseCase,
 )
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
 def spec(task_id, synthetic):
@@ -49,7 +50,7 @@ def test_use_cases_commit_after_success_and_reject_wrong_identity(
     getattr(repo, method).assert_called_once_with(command.spec)
     uow.commit.assert_called_once()
     uow.reset_mock()
-    with pytest.raises(WorkflowError):
+    with pytest.raises(InvalidApplicationRequestError):
         case(uow, repo).execute(AdminSeedCommand(spec("other", synthetic)))
     uow.__enter__.assert_not_called()
 

@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 
 from agent_workflow.application.admin.ports import IAdminSeedRepository
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ def _validate(command: AdminSeedCommand, task_id: str, synthetic: bool) -> None:
         or command.spec.task_id != task_id
         or command.spec.synthetic is not synthetic
     ):
-        raise WorkflowError("invalid admin fixture authorization")
+        raise InvalidApplicationRequestError("invalid admin fixture authorization")
 
 
 class ImportHistoricalReviewsUseCase:

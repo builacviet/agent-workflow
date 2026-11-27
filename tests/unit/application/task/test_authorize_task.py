@@ -6,17 +6,18 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
     AuthorizeTaskCommand,
     AuthorizeTaskUseCase,
 )
-from agent_workflow.domain.exceptions import DomainError
+from agent_workflow.domain.exceptions import BusinessRuleError, DomainError
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
 @pytest.fixture
@@ -105,7 +106,7 @@ def test_rejects_unauthorized_direct_inputs_without_side_effects(command, invali
     uow = MagicMock()
     repository = Mock()
     with pytest.raises(
-        WorkflowError, match="unauthorized repository or unsupported effort"
+        BusinessRuleError, match="unauthorized repository or unsupported effort"
     ):
         AuthorizeTaskUseCase(uow, repository).execute(
             AuthorizeTaskCommand(replace(command.spec, **invalid))
@@ -195,10 +196,12 @@ def test_write_or_deadline_failure_rolls_back(command, deadline, caplog):
 )
 def test_application_delegates_storage_text_checks_to_repository(command, fields):
     scope = FakeScope()
-    scope.add_error = WorkflowError("unsupported persistence text")
+    scope.add_error = InvalidApplicationRequestError("unsupported persistence text")
     invalid = AuthorizeTaskCommand(replace(command.spec, **fields))
 
-    with pytest.raises(WorkflowError, match="unsupported persistence text"):
+    with pytest.raises(
+        InvalidApplicationRequestError, match="unsupported persistence text"
+    ):
         AuthorizeTaskUseCase(scope, scope).execute(invalid)
 
     assert scope.calls == [

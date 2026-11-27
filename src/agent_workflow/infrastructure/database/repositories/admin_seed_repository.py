@@ -6,11 +6,11 @@ import time
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.models import (
     AgentDispatch,
     AgentExecutionEvidence,
@@ -53,16 +53,16 @@ class SqlAlchemyAdminSeedRepository:
 
     def reset_synthetic(self, spec: TaskAuthorizationSpec) -> None:
         if spec.task_id != "POC-REVIEW-001" or spec.synthetic is not True:
-            raise WorkflowError("refusing to reset real history")
+            raise BusinessRuleError("refusing to reset real history")
         task = self._load(spec)
         if task is None:
-            raise WorkflowError("synthetic task does not exist")
+            raise BusinessRuleError("synthetic task does not exist")
         try:
             metadata = json.loads(task.metadata_text)
         except (TypeError, ValueError):
-            raise WorkflowError("invalid synthetic task metadata") from None
+            raise BusinessRuleError("invalid synthetic task metadata") from None
         if type(metadata) is not dict or metadata.get("synthetic") is not True:
-            raise WorkflowError("refusing to reset real history")
+            raise BusinessRuleError("refusing to reset real history")
         session = self._session
         task_id = spec.task_id
         # External workflow records are never removed by a fixture reset.
@@ -80,14 +80,14 @@ class SqlAlchemyAdminSeedRepository:
             .where(ReviewFinding.task_id == task_id, Review.task_id != task_id),
         )
         if any(session.scalar(query.limit(1)) is not None for query in checks):
-            raise WorkflowError("synthetic task has linked external history")
+            raise BusinessRuleError("synthetic task has linked external history")
         for model in (ReviewFinding, Review, ReviewAttempt, TaskEvent, Task):
             session.execute(delete(model).where(model.task_id == task_id))
         session.flush()
 
     def seed_synthetic(self, spec: TaskAuthorizationSpec) -> None:
         if spec.task_id != "POC-REVIEW-001" or spec.synthetic is not True:
-            raise WorkflowError("invalid synthetic fixture")
+            raise BusinessRuleError("invalid synthetic fixture")
         task = self._load(spec)
         if task is None:
             task = self._create(spec)
@@ -135,18 +135,18 @@ class SqlAlchemyAdminSeedRepository:
                 )
                 is not None
             ):
-                raise WorkflowError("synthetic handoff conflicts with task state")
+                raise BusinessRuleError("synthetic handoff conflicts with task state")
             return
         if task.status != "AWAITING_HANDOFF":
-            raise WorkflowError("synthetic handoff conflicts with task state")
+            raise BusinessRuleError("synthetic handoff conflicts with task state")
         if task.current_head_sha is not None or task.completed_review_rounds != 0:
-            raise WorkflowError("synthetic handoff conflicts with task state")
+            raise BusinessRuleError("synthetic handoff conflicts with task state")
         if "docs/handoff.md" not in spec.context_paths:
-            raise WorkflowError("handoff path is not authorized")
+            raise BusinessRuleError("handoff path is not authorized")
         if self._session.scalar(
             select(Review.review_id).where(Review.task_id == spec.task_id).limit(1)
         ):
-            raise WorkflowError("synthetic handoff conflicts with review history")
+            raise BusinessRuleError("synthetic handoff conflicts with review history")
         now = time.time()
         task.current_head_sha = spec.base_sha
         task.status = "READY_IN_REVIEW"
@@ -172,7 +172,7 @@ class SqlAlchemyAdminSeedRepository:
 
     def import_history(self, spec: TaskAuthorizationSpec) -> None:
         if spec.task_id != "TASK-001" or spec.synthetic is not False:
-            raise WorkflowError("invalid historical fixture")
+            raise BusinessRuleError("invalid historical fixture")
         records = (
             (
                 1,
@@ -302,7 +302,7 @@ class SqlAlchemyAdminSeedRepository:
             or len(findings) != 2
             or len(events) != 3
         ):
-            raise WorkflowError("refusing to overwrite divergent task history")
+            raise BusinessRuleError("refusing to overwrite divergent task history")
         if (
             session.scalar(
                 select(ReviewAttempt.token)
@@ -311,7 +311,7 @@ class SqlAlchemyAdminSeedRepository:
             )
             is not None
         ):
-            raise WorkflowError("refusing to overwrite divergent task history")
+            raise BusinessRuleError("refusing to overwrite divergent task history")
         expected_events = [
             (None, "AWAITING_HANDOFF", "LOCAL_AUTHORIZATION", None, {}),
             (
@@ -341,11 +341,11 @@ class SqlAlchemyAdminSeedRepository:
                 for e in events
             ]
         except (TypeError, ValueError):
-            raise WorkflowError(
+            raise BusinessRuleError(
                 "refusing to overwrite divergent task history"
             ) from None
         if actual_events != expected_events:
-            raise WorkflowError("refusing to overwrite divergent task history")
+            raise BusinessRuleError("refusing to overwrite divergent task history")
         for review, finding, record in zip(reviews, findings, records, strict=True):
             number, sha, verdict, resolutions, finding_id, ac, description, fix = record
             expected_review = (
@@ -401,4 +401,4 @@ class SqlAlchemyAdminSeedRepository:
                 or actual_finding != expected_finding
                 or review.imported_at is None
             ):
-                raise WorkflowError("refusing to overwrite divergent task history")
+                raise BusinessRuleError("refusing to overwrite divergent task history")
