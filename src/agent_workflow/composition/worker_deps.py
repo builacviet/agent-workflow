@@ -3,10 +3,9 @@ Responsibility: Compose a trusted Worker from Controller dependencies.
 Dependencies: Application operations and PostgreSQL adapters.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
-from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import ControllerDependencies
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
@@ -18,6 +17,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners.coder_runtime import CoderRuntime
 
 
@@ -27,7 +27,7 @@ def compose_postgres_worker(
     dependencies: ControllerDependencies,
     *,
     leadership_guard: Callable[[], None],
-    plugins: Iterable[IAgentRuntimePlugin] = (),
+    registry: RuntimeRegistry,
 ) -> CoderRuntime:
     """Borrow the Controller's adapters and its raising guard for this claim.
 
@@ -86,7 +86,7 @@ def compose_postgres_worker(
     return CoderRuntime(
         config,
         handoff_provider,
-        plugins=plugins,
+        registry=registry,
         dispatch=dispatch,
         ci=ci_tracking,
         leadership_guard=guard,

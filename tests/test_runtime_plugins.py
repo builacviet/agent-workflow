@@ -61,7 +61,21 @@ def request_spec():
     )
 
 
-def test_r01_codex_plugin_registration(registry, request_spec):
+def test_r01_codex_plugin_registration(registry, request_spec, monkeypatch):
+    plugin = registry._plugins[request_spec.spec.runtime][1]
+
+    def forbidden(*args):
+        pytest.fail("preflight must not invoke the plugin")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(plugin, "plan", forbidden)
+        patch.setattr(plugin, "result", forbidden)
+        registry.validate_selection(
+            request_spec.spec,
+            role=request_spec.role,
+            phase=request_spec.phase,
+            required_capabilities=request_spec.required_capabilities,
+        )
     plan = registry.plan(request_spec)
     assert plan.command == ("code",)
     assert plan.env == (("WFC_CODEX_MODEL", "gpt-6-luna"),)
@@ -102,6 +116,13 @@ def test_r03_unsupported_runtime(registry, request_spec):
     request = replace(request_spec, spec=replace(request_spec.spec, runtime="other"))
     with pytest.raises(BusinessRuleError, match="unsupported runtime$"):
         registry.plan(request)
+    with pytest.raises(BusinessRuleError, match="unsupported runtime$"):
+        registry.validate_selection(
+            request.spec,
+            role=request.role,
+            phase=request.phase,
+            required_capabilities=request.required_capabilities,
+        )
 
 
 def test_r04_unsupported_capability(registry, request_spec):

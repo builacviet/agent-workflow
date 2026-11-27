@@ -36,6 +36,8 @@ from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.models import CITask, Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.interfaces.review_assignment_response import (
@@ -234,6 +236,8 @@ def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, tmp_path, 
         "image",
         "runtime",
         "model",
+        "provider",
+        "effort",
     ],
 )
 def test_unsafe_config_before_resources(config, monkeypatch, unsafe):
@@ -265,13 +269,17 @@ def test_unsafe_config_before_resources(config, monkeypatch, unsafe):
         config["runtime"] = "unregistered"
     elif unsafe == "model":
         config["model"] = "unapproved"
+    elif unsafe == "provider":
+        config["provider"] = "unapproved"
+    elif unsafe == "effort":
+        config["effort"] = "medium"
     with pytest.raises(InvalidApplicationRequestError):
         run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
 
 
 def test_pg_validation_never_inspects_sqlite_database(config):
     config["database"] = object()
-    dispatch_deps._validate_worker_config(config)
+    dispatch_deps._validate_worker_config(config, RuntimeRegistry((CodexCLIPlugin(),)))
 
 
 def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
@@ -372,8 +380,11 @@ def test_single_factory_lazy_worker_and_terminal_order(
         lambda borrowed: deps if borrowed is factory else forbidden(),
     )
     monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
+    preflight = Mock(wraps=dispatch_deps._validate_worker_config)
+    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", preflight)
 
-    def compose(cfg, service, borrowed, *, leadership_guard):
+    def compose(cfg, service, borrowed, *, leadership_guard, registry):
+        assert registry is preflight.call_args.args[1]
         assert borrowed is deps and service is deps.handoff_provider
         assert cfg is config
         leadership_guard()

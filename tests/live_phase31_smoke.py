@@ -20,6 +20,8 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (  #
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError  # noqa: E402
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin  # noqa: E402
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry  # noqa: E402
 from agent_workflow.runners.coder_runtime import (  # noqa: E402
     CoderRuntime,
     safe_path,
@@ -74,6 +76,7 @@ def main() -> None:
         dispatch=dispatch,
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 120}
     try:

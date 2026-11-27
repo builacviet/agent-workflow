@@ -25,6 +25,10 @@ from agent_workflow.infrastructure.database.session_factory import PostgresFacto
 from agent_workflow.infrastructure.github.app_token import ControllerAppToken
 from agent_workflow.infrastructure.github.client import GitHubClient
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import (
+    RuntimeRegistry,
+    runtime_spec_from_config,
+)
 from agent_workflow.runners.coder_runtime import validate_config
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
@@ -34,13 +38,14 @@ def compose_dispatch_execution(
     config: dict, app_config: AppConfig
 ) -> Iterator[RunDispatchPassUseCase]:
     """Preflight the trusted adapters and lend one factory to the use case."""
-    _validate_worker_config(config)
+    registry = RuntimeRegistry((CodexCLIPlugin(),))
+    _validate_worker_config(config, registry)
     with PostgresFactory.open(app_config) as factory:
-        yield create_dispatch_use_case(config, factory)
+        yield create_dispatch_use_case(config, factory, registry=registry)
 
 
 def create_dispatch_use_case(
-    config: dict, factory: PostgresFactory
+    config: dict, factory: PostgresFactory, *, registry: RuntimeRegistry
 ) -> RunDispatchPassUseCase:
     dependencies = compose_postgres_controller(factory)
     handoff_provider = dependencies.handoff_provider
@@ -62,7 +67,11 @@ def create_dispatch_use_case(
         nonlocal runtime
         guard()
         runtime = compose_postgres_worker(
-            config, handoff_provider, dependencies, leadership_guard=guard
+            config,
+            handoff_provider,
+            dependencies,
+            leadership_guard=guard,
+            registry=registry,
         )
         guard()
         return runtime.execute_assignment(claim, cast(DispatchAssignment, context))
@@ -81,22 +90,17 @@ def create_dispatch_use_case(
     )
 
 
-def _validate_worker_config(config: dict) -> None:
+def _validate_worker_config(config: dict, registry: RuntimeRegistry) -> None:
     """Validate local settings only: no database, Docker or GitHub requests."""
     try:
         validate_config(config, require_database=False)
-        # This entrypoint installs only the existing trusted Codex plugin.
-        # Reject unsupported selection before opening any database resources.
-        if (
-            config.get("runtime", "codex") != "codex"
-            or (
-                config.get("provider", CodexCLIPlugin.default_provider),
-                config["model"],
-                config.get("effort"),
-            )
-            not in CodexCLIPlugin.manifest.supported_combinations
-        ):
-            raise BusinessRuleError("unsupported Worker runtime selection")
+        # The approved registry is shared with the per-claim Worker.
+        registry.validate_selection(
+            runtime_spec_from_config(config),
+            role="dev",
+            phase="code",
+            required_capabilities=frozenset({"workspace-write"}),
+        )
         # Reuse the trusted Worker's credential checks without authenticating.
         worker = GitHubApp(
             config["app_id"], config["installation_id"], Path(config["pem"])

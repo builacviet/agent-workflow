@@ -13,17 +13,12 @@ import stat
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.runtime.dtos import (
-    RuntimePlan,
-    RuntimeRequest,
-    RuntimeSpec,
-)
-from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
+from agent_workflow.application.runtime.dtos import RuntimePlan, RuntimeRequest
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
@@ -34,8 +29,10 @@ from agent_workflow.budget import check_deadline, cleanup_budget, operation_time
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
-from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.registry import (
+    RuntimeRegistry,
+    runtime_spec_from_config,
+)
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
@@ -319,7 +316,7 @@ class CoderRuntime:
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool],
-        plugins: Iterable[IAgentRuntimePlugin] = (),
+        registry: RuntimeRegistry,
     ) -> None:
         if (
             not callable(handoff_provider)
@@ -328,15 +325,16 @@ class CoderRuntime:
             or not callable(getattr(dispatch, "record_runtime_evidence", None))
             or not callable(getattr(ci, "execute", None))
             or not callable(leadership_guard)
+            or type(registry) is not RuntimeRegistry
         ):
             raise TypeError(
-                "Worker requires injected workflow, dispatch evidence, CI tracking "
-                "and leadership"
+                "Worker requires injected workflow, dispatch evidence, CI tracking, "
+                "leadership and runtime registry"
             )
         self._initialize(
             config,
             handoff_provider,
-            plugins,
+            registry,
             AppConfig.from_env(),
             dispatch,
             ci,
@@ -347,14 +345,14 @@ class CoderRuntime:
         self,
         config: dict,
         handoff_provider: HandoffUseCaseProvider,
-        plugins: Iterable[IAgentRuntimePlugin],
+        registry: RuntimeRegistry,
         app_config: AppConfig,
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool] | None,
     ) -> None:
         self.config, self.handoff_provider = config, handoff_provider
-        self.registry = RuntimeRegistry((CodexCLIPlugin(), *plugins))
+        self.registry = registry
         self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
         self.agent_runtime = AgentRuntime(
             self,
@@ -365,14 +363,8 @@ class CoderRuntime:
         )
 
     def _code_request(self, claim: dict) -> RuntimeRequest:
-        runtime = self.config.get("runtime", "codex")
-        provider = self.config.get(
-            "provider", CodexCLIPlugin.default_provider if runtime == "codex" else ""
-        )
         return RuntimeRequest(
-            spec=RuntimeSpec(
-                runtime, provider, self.config["model"], self.config.get("effort")
-            ),
+            spec=runtime_spec_from_config(self.config),
             role="dev",
             phase="code",
             dispatch_id=claim["dispatch_id"],

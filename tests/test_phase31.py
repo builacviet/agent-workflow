@@ -6,6 +6,8 @@ import json
 import pytest
 
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
@@ -397,6 +399,7 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     controller_runtime.sandbox.record_engine(
         "a" * 32, "unix:///fixture.sock", "fixture-daemon-a"

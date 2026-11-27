@@ -22,6 +22,8 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners import coder_runtime, sandbox, sandbox_watchdog
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import (
@@ -985,6 +987,7 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert first.sandbox._fence_dir == state
     dispatch = "a" * 32
@@ -996,6 +999,7 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert second.sandbox._fence_dir == state
     assert second.sandbox.has_launch_records(dispatch)
@@ -1014,6 +1018,7 @@ def test_runtime_without_state_override_uses_stable_default(monkeypatch, tmp_pat
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert (
         runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"

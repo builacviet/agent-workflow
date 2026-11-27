@@ -13,6 +13,8 @@ import pytest
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners.coder_runtime import CoderRuntime
 
 
@@ -58,6 +60,7 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
+        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     claim = {
         "dispatch_id": "a" * 32,
