@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Execute Docker stages and manage durable engine admission and recovery.
-Dependencies: Application dispatch and runtime contracts, Domain rules and sandbox operations.
+Dependencies: Application dispatch/runtime contracts, dispatch budget and Sandbox operations.
 """
 
 import hashlib
@@ -11,10 +11,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
 from agent_workflow.application.runtime.dtos import RuntimePlan
 from agent_workflow.application.runtime.ports import IDispatchLaunchState
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.infrastructure.runtime.sandbox import (
     _DOCKER_HOST,
@@ -67,7 +70,7 @@ class DockerRuntime:
 
     def validate_image(self, approved_image_id: str | None) -> None:
         if approved_image_id is not None and not self.config.get("runtime_image"):
-            raise BusinessRuleError(
+            raise RuntimeAdmissionError(
                 "explicit sandbox image required for runtime plugin"
             )
 
@@ -116,17 +119,17 @@ class DockerRuntime:
     def _remaining_seconds(claim: DispatchClaim) -> int:
         remaining = int(claim.deadline - time.time())
         if remaining <= 0:
-            raise BusinessRuleError("dispatch deadline exceeded")
+            raise TimeoutError("dispatch deadline exceeded")
         remaining = int(operation_timeout(remaining))
         if remaining <= 0:
-            raise BusinessRuleError("dispatch deadline exceeded")
+            raise TimeoutError("dispatch deadline exceeded")
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
         self.require_leadership()
         if self.dispatch.is_pre_launch(dispatch_id):
             if self.sandbox.has_launch_records(dispatch_id):
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "pre-launch evidence conflicts with Docker records"
                 )
             return
@@ -140,7 +143,7 @@ class DockerRuntime:
 
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
-            raise BusinessRuleError("invalid dispatch identifier")
+            raise RuntimeAdmissionError("invalid dispatch identifier")
         host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
         with cleanup_budget(), _bind_host(host):
             _assert_daemon(daemon_id)
@@ -169,7 +172,7 @@ class DockerRuntime:
                         f"name=^/{name}$",
                     ]
                 ).strip():
-                    raise BusinessRuleError("runtime termination not confirmed")
+                    raise RuntimeContractError("runtime termination not confirmed")
             _assert_daemon(daemon_id)
 
     def docker(
@@ -188,7 +191,7 @@ class DockerRuntime:
             self.require_leadership()
             existing = self.sandbox._engine_path(dispatch_id).exists()
             if existing and self.dispatch.is_pre_launch(dispatch_id):
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "pre-launch evidence conflicts with Docker records"
                 )
             host = (
@@ -233,7 +236,7 @@ class DockerRuntime:
                 hashlib.sha256(profile.read_bytes()).hexdigest()
                 != self.config["seccomp_sha256"]
             ):
-                raise BusinessRuleError("seccomp profile changed")
+                raise RuntimeContractError("seccomp profile changed")
             args += [
                 "--security-opt",
                 "seccomp=" + str(profile),
@@ -255,12 +258,12 @@ class DockerRuntime:
                 or code_plan.command != command
                 or code_plan.env != (("WFC_CODEX_MODEL", self.config["model"]),)
             ):
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "legacy Codex profile requires the Codex code plan"
                 )
             volume = self.config.get("codex_auth_volume")
             if volume != "techlead-review-poc_codex_auth":
-                raise BusinessRuleError("dedicated POC Codex auth volume required")
+                raise RuntimeAdmissionError("dedicated POC Codex auth volume required")
             sandbox.docker_command(["docker", "volume", "inspect", volume])
             args += [
                 "--mount",
