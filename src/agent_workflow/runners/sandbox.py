@@ -18,7 +18,7 @@ from typing import Iterator
 from uuid import uuid4
 
 from agent_workflow.budget import cleanup_budget, dispatch_budget, operation_timeout
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.runners.runtime_plugins import (
     credential_env_name,
     nonsecret_env_value,
@@ -67,7 +67,7 @@ _LOCAL_HOST = re.compile(r"(?:unix:///[^\s\x00]+|npipe:////\./pipe/[A-Za-z0-9_.-
 _DOCKER_HOST: ContextVar[str | None] = ContextVar("sandbox_docker_host", default=None)
 
 
-class DockerCreateRejected(WorkflowError):
+class DockerCreateRejected(BusinessRuleError):
     """Affirmative evidence that Docker did not accept the create request."""
 
 
@@ -94,9 +94,11 @@ def _selected_host() -> str:
                 timeout=operation_timeout(5),
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
-            raise WorkflowError("cannot resolve the local Docker endpoint") from None
+            raise BusinessRuleError(
+                "cannot resolve the local Docker endpoint"
+            ) from None
     if not _valid_host(host):
-        raise WorkflowError("sandbox requires a local Docker socket or named pipe")
+        raise BusinessRuleError("sandbox requires a local Docker socket or named pipe")
     return host
 
 
@@ -104,7 +106,7 @@ def _selected_host() -> str:
 def _bind_host(host: str) -> Iterator[None]:
     bound = _DOCKER_HOST.get()
     if not _valid_host(host) or (bound is not None and bound != host):
-        raise WorkflowError("Docker endpoint changed; dispatch remains blocked")
+        raise BusinessRuleError("Docker endpoint changed; dispatch remains blocked")
     token = _DOCKER_HOST.set(host)
     try:
         yield
@@ -134,12 +136,14 @@ def _docker_invocation(args: list[str]) -> tuple[list[str], dict[str, str] | Non
 
 def _assert_daemon(daemon_id: str) -> None:
     if _require_engine() != daemon_id:
-        raise WorkflowError("Docker daemon identity changed; dispatch remains blocked")
+        raise BusinessRuleError(
+            "Docker daemon identity changed; dispatch remains blocked"
+        )
 
 
 def _assert_selected_host(host: str) -> None:
     if _selected_host() != host:
-        raise WorkflowError("Docker endpoint changed during execution")
+        raise BusinessRuleError("Docker endpoint changed during execution")
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +220,7 @@ def _require_engine() -> str:
             json.loads(item) for item in raw
         )
     except (TypeError, ValueError):
-        raise WorkflowError("invalid Docker capability response") from None
+        raise BusinessRuleError("invalid Docker capability response") from None
     if (
         not isinstance(daemon, str)
         or not _DAEMON_ID.fullmatch(daemon)
@@ -225,7 +229,7 @@ def _require_engine() -> str:
         or not isinstance(security, list)
         or "name=seccomp,profile=builtin" not in security
     ):
-        raise WorkflowError(
+        raise BusinessRuleError(
             "Docker cannot enforce sandbox resource and security policy"
         )
     return daemon
@@ -253,7 +257,9 @@ def _local_image(image: str) -> str:
             return identifier
     except (AttributeError, KeyError, TypeError, ValueError):
         pass
-    raise WorkflowError("sandbox requires a local Linux image without declared volumes")
+    raise BusinessRuleError(
+        "sandbox requires a local Linux image without declared volumes"
+    )
 
 
 def _workspace_bind(workspace: Path, writable: bool) -> str:
@@ -269,7 +275,7 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
             or any(character in str(workspace) for character in ',"\r\n')
             or workspace.parent == workspace
         ):
-            raise WorkflowError("sandbox requires a canonical workspace directory")
+            raise BusinessRuleError("sandbox requires a canonical workspace directory")
         for root, dirs, files in os.walk(workspace, onerror=_walk_error):
             operation_timeout(float("inf"))
             for name in dirs + files:
@@ -279,11 +285,11 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
                     not stat.S_ISDIR(info.st_mode)
                     and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
                 ):
-                    raise WorkflowError(
+                    raise BusinessRuleError(
                         "sandbox workspace contains a link or special file"
                     )
     except OSError:
-        raise WorkflowError("sandbox workspace unavailable") from None
+        raise BusinessRuleError("sandbox workspace unavailable") from None
     mount = f"type=bind,src={workspace},dst=/workspace,bind-recursive=disabled"
     return mount if writable else mount + ",readonly"
 
@@ -369,10 +375,10 @@ class SandboxManager:
         if not isinstance(approved_image_id, str) or not _IMAGE_ID.fullmatch(
             approved_image_id
         ):
-            raise WorkflowError("sandbox requires an approved immutable image ID")
+            raise BusinessRuleError("sandbox requires an approved immutable image ID")
         fence = self._fence_path(dispatch_id)
         if fence is None:
-            raise WorkflowError("sandbox requires a durable create fence")
+            raise BusinessRuleError("sandbox requires a durable create fence")
         if (
             not isinstance(command, tuple)
             or not command
@@ -389,7 +395,9 @@ class SandboxManager:
             mount = _workspace_bind(workspace, policy.workspace_writable)
             daemon_id = _require_engine()
             if _local_image(image) != approved_image_id:
-                raise WorkflowError("sandbox image reference differs from approved pin")
+                raise BusinessRuleError(
+                    "sandbox image reference differs from approved pin"
+                )
             args = [
                 "create",
                 "--name",
@@ -423,12 +431,14 @@ class SandboxManager:
                     self._update_scope(scope, "REJECTED")
                     raise
                 if not _CONTAINER_ID.fullmatch(identifier):
-                    raise WorkflowError("Docker did not identify the sandbox container")
+                    raise BusinessRuleError(
+                        "Docker did not identify the sandbox container"
+                    )
                 observed_image_id = self._inspect_image(identifier, name, dispatch_id)
                 self._update_scope(scope, "CREATED")
                 self._clear_create(fence)
                 if observed_image_id != approved_image_id:
-                    raise WorkflowError(
+                    raise BusinessRuleError(
                         "sandbox container image differs from approved pin"
                     )
                 # Independent trusted host watchdog must acknowledge readiness
@@ -462,7 +472,7 @@ class SandboxManager:
         scope = self._scope_path(dispatch_id)
         if scope is None or not scope.exists():
             if fence is not None and fence.exists():
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "sandbox create lacks daemon identity; dispatch stays blocked"
                 )
             if _DOCKER_HOST.get() is not None:
@@ -481,7 +491,7 @@ class SandboxManager:
         _dispatch_prefix(dispatch_id)
         fence = self._fence_path(dispatch_id)
         if fence is None:
-            raise WorkflowError("runtime requires durable Docker endpoint storage")
+            raise BusinessRuleError("runtime requires durable Docker endpoint storage")
         return fence.with_name(fence.name + ".engine")
 
     def record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
@@ -494,7 +504,7 @@ class SandboxManager:
         if not path.exists():
             scope = self._scope_path(dispatch_id)
             if scope is None or not scope.exists():
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "dispatch lacks its original Docker endpoint; stays blocked"
                 )
             record = self._scope_data(scope)
@@ -506,7 +516,7 @@ class SandboxManager:
             or not isinstance(daemon_id, str)
             or not _DAEMON_ID.fullmatch(daemon_id)
         ):
-            raise WorkflowError("invalid durable Docker endpoint")
+            raise BusinessRuleError("invalid durable Docker endpoint")
         return host, daemon_id
 
     def has_launch_records(self, dispatch_id: str) -> bool:
@@ -545,9 +555,11 @@ class SandboxManager:
         try:
             record = json.loads(path.read_text(encoding="ascii"))
         except (OSError, ValueError):
-            raise WorkflowError("missing or invalid durable sandbox scope") from None
+            raise BusinessRuleError(
+                "missing or invalid durable sandbox scope"
+            ) from None
         if not isinstance(record, dict):
-            raise WorkflowError("invalid durable sandbox scope")
+            raise BusinessRuleError("invalid durable sandbox scope")
         return record
 
     @classmethod
@@ -565,7 +577,7 @@ class SandboxManager:
             or not isinstance(record.get("deadline"), (int, float))
             or not isinstance(record.get("monotonic_deadline"), (int, float))
         ):
-            raise WorkflowError("invalid durable sandbox scope")
+            raise BusinessRuleError("invalid durable sandbox scope")
         return record
 
     @staticmethod
@@ -577,7 +589,7 @@ class SandboxManager:
                 handle.flush()
                 os.fsync(handle.fileno())
         except FileExistsError:
-            raise WorkflowError(
+            raise BusinessRuleError(
                 "existing sandbox execution requires reconciliation"
             ) from None
         _sync_directory(path.parent)
@@ -594,7 +606,7 @@ class SandboxManager:
         host: str,
     ) -> None:
         if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
-            raise WorkflowError("Docker daemon has no trustworthy identity")
+            raise BusinessRuleError("Docker daemon has no trustworthy identity")
         cls._write_record(
             scope,
             {
@@ -628,7 +640,9 @@ class SandboxManager:
     def _assert_scope(cls, scope: Path, dispatch_id: str) -> None:
         record = cls._scope_data(scope)
         if record["dispatch_id"] != dispatch_id or record["host"] != _DOCKER_HOST.get():
-            raise WorkflowError("Docker endpoint differs from durable sandbox scope")
+            raise BusinessRuleError(
+                "Docker endpoint differs from durable sandbox scope"
+            )
         _assert_daemon(record["daemon_id"])
 
     @staticmethod
@@ -688,15 +702,17 @@ class SandboxManager:
         try:
             watchdog = subprocess.Popen(command, **options)
         except OSError:
-            raise WorkflowError("cannot launch independent sandbox watchdog") from None
+            raise BusinessRuleError(
+                "cannot launch independent sandbox watchdog"
+            ) from None
         start = time.monotonic()
         while time.monotonic() - start < operation_timeout(3):
             if ready.exists():
                 return
             if watchdog.poll() is not None:
-                raise WorkflowError("independent sandbox watchdog terminated")
+                raise BusinessRuleError("independent sandbox watchdog terminated")
             time.sleep(0.05)
-        raise WorkflowError(
+        raise BusinessRuleError(
             "independent sandbox watchdog did not acknowledge readiness"
         )
 
@@ -709,7 +725,7 @@ class SandboxManager:
                 record.flush()
                 os.fsync(record.fileno())
         except FileExistsError:
-            raise WorkflowError("a sandbox create is already pending") from None
+            raise BusinessRuleError("a sandbox create is already pending") from None
         _sync_directory(fence.parent)
         _sync_directory(fence.parent.parent)
 
@@ -732,7 +748,7 @@ class SandboxManager:
         except FileNotFoundError:
             return
         if not re.fullmatch(name_pattern, name):
-            raise WorkflowError("invalid sandbox create fence")
+            raise BusinessRuleError("invalid sandbox create fence")
         with cleanup_budget():
             owned = self._owned(dispatch_id, re.escape(name))
             if len(owned) != 1:
@@ -743,7 +759,7 @@ class SandboxManager:
                 ):
                     self._clear_create(fence)
                     return
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "sandbox Docker create remains uncertain; dispatch stays blocked"
                 )
         # The exact owned name is affirmative evidence this create settled.
@@ -775,19 +791,19 @@ class SandboxManager:
                 return image_id
         except (TypeError, ValueError):
             pass
-        raise WorkflowError("could not verify sandbox container identity")
+        raise BusinessRuleError("could not verify sandbox container identity")
 
     def _cleanup(self, dispatch_id: str, name_pattern: str) -> None:
         identifiers = self._owned(dispatch_id, name_pattern)
         for identifier in identifiers:
             try:
                 _docker(["rm", "-f", identifier])
-            except WorkflowError:
+            except BusinessRuleError:
                 # A concurrent removal can still be visible when rm fails.
                 if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
                     raise
         if self._owned(dispatch_id, name_pattern):
-            raise WorkflowError("sandbox termination not confirmed")
+            raise BusinessRuleError("sandbox termination not confirmed")
 
     def _wait_for_removal(
         self, dispatch_id: str, name_pattern: str, identifier: str
@@ -829,5 +845,5 @@ class SandboxManager:
                     raise ValueError("container ownership mismatch")
                 identifiers.append(row["ID"])
         except (AttributeError, KeyError, TypeError, ValueError):
-            raise WorkflowError("could not verify sandbox ownership") from None
+            raise BusinessRuleError("could not verify sandbox ownership") from None
         return identifiers

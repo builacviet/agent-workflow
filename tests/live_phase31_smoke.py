@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agent_workflow.application.task.use_cases.register_task_handoff import (  # noqa: E402
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError  # noqa: E402
+from agent_workflow.domain.exceptions import BusinessRuleError  # noqa: E402
 from agent_workflow.runners.coder_runtime import (  # noqa: E402
     CoderRuntime,
     safe_path,
@@ -53,7 +53,7 @@ def main() -> None:
         if not source.exists() and not source.is_symlink():
             continue  # tracked deletion in an uncommitted refactor
         if not stat.S_ISREG(source.lstat().st_mode):
-            raise WorkflowError("smoke source contains a linked/nonregular file")
+            raise BusinessRuleError("smoke source contains a linked/nonregular file")
         target = stage / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
@@ -93,7 +93,7 @@ def main() -> None:
     try:
         try:
             runtime.docker(claim, timeout_stage, "test")
-        except WorkflowError:
+        except BusinessRuleError:
             pass
         else:
             raise AssertionError("timeout probe unexpectedly completed")

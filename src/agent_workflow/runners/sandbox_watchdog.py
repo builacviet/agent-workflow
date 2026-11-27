@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.runners.sandbox import (
     SandboxManager,
     _assert_daemon,
@@ -61,7 +61,7 @@ def _enforce_bound(
                     manager._cleanup(dispatch_id, re.escape(record["name"]))
                     _assert_daemon(record["daemon_id"])
                 break
-            except (OSError, WorkflowError):
+            except (OSError, BusinessRuleError):
                 if attempt == 2:
                     # Retain the durable scope for operator reconciliation.
                     return

@@ -10,7 +10,7 @@ from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.ci.use_cases import reconcile_ci
 from agent_workflow.application.ci.use_cases.reconcile_ci import ReconcileCiUseCase
 from agent_workflow.domain.ci_evidence import WebhookNotification
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 REPO = "builacviet/agent-workflow"
 HEAD = "a" * 40
@@ -76,7 +76,7 @@ def test_invalid_signed_notification_rejects_without_acking(reconciliation):
             HEAD,
         )
     ]
-    with pytest.raises(WorkflowError, match="incompatible notification"):
+    with pytest.raises(BusinessRuleError, match="incompatible notification"):
         reconciliation.use_case.execute()
     assert reconciliation.effects.mock_calls == []
     assert reconciliation.scope_events == ["enter", "exit"]

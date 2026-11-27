@@ -11,7 +11,7 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.ci_evidence import CiEvidence
 from agent_workflow.domain.ci_tracking import CiRecordSnapshot
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 HEAD = "a" * 40
 OTHER = "b" * 40
@@ -83,7 +83,7 @@ def test_record_rejects_stale_head_before_inserting():
         REPOSITORY, OTHER, 21, HEAD, False
     )
     provider, uow, _ = scope_with(operation)
-    with pytest.raises(WorkflowError, match="mismatched"):
+    with pytest.raises(BusinessRuleError, match="mismatched"):
         RecordCiEvidenceUseCase(provider).execute(evidence())
     operation.record.assert_not_called()
     uow.commit.assert_not_called()

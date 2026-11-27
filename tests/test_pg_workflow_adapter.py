@@ -42,7 +42,7 @@ from agent_workflow.composition.postgres_mcp import (
 )
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.models import (
     CITask,
     Review,
@@ -792,7 +792,7 @@ def test_queue_holds_task_lock_against_competing_review_write(
     def compete():
         if operation == "claim":
             return claim_task(factory, task_id, HEAD, "next")
-        with pytest.raises(WorkflowError, match="claim expired"):
+        with pytest.raises(BusinessRuleError, match="claim expired"):
             submit_task(factory, payload(expired), "lead", clock=lambda: 999.0)
         return None
 
@@ -938,7 +938,7 @@ def test_active_claim_constraint_rolls_back_head_change(setup):
 def test_competing_claims_and_ci_fail_closed(setup):
     factory, task_id = setup
     ready(factory, task_id)
-    with pytest.raises(WorkflowError, match="CI"):
+    with pytest.raises(BusinessRuleError, match="CI"):
         claim_task(factory, task_id, HEAD, "lead", require_ci=True)
 
     start_together = Barrier(2)
@@ -947,7 +947,7 @@ def test_competing_claims_and_ci_fail_closed(setup):
         start_together.wait(timeout=5)
         try:
             return claim_task(factory, task_id, HEAD, "lead")
-        except WorkflowError:
+        except BusinessRuleError:
             return None
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -990,7 +990,7 @@ def test_claim_ci_query_failure_rolls_back_savepoint_and_fails_closed(
     monkeypatch.setattr(
         PostgresReviewWrites, "has_successful_ci", query_with_unavailable_evidence
     )
-    with pytest.raises(WorkflowError, match="verified exact-HEAD CI"):
+    with pytest.raises(BusinessRuleError, match="verified exact-HEAD CI"):
         claim_task(factory, task_id, HEAD, "lead", require_ci=True)
     with (
         factory.get_scoped_session() as session,
@@ -1010,7 +1010,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
             ),
             {"id": task_id, "head": HEAD},
         )
-    with pytest.raises(WorkflowError, match="not authorized"):
+    with pytest.raises(BusinessRuleError, match="not authorized"):
         record_handoff(
             factory,
             task_id,
@@ -1049,7 +1049,7 @@ def test_ci_repair_requires_matching_failure_evidence(setup, mcp_postgres, monke
         )
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     assert mcp_postgres("list_review_queue", {}) == {"tasks": []}
-    with pytest.raises(WorkflowError, match="CI"):
+    with pytest.raises(BusinessRuleError, match="CI"):
         claim_task(factory, task_id, NEXT, "lead")
     with factory.transaction() as conn:
         conn.execute(
@@ -1075,7 +1075,7 @@ def test_expired_claim_recovery(setup):
     first = claim_task(factory, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
     now[0] += 11
     second = claim_task(factory, task_id, HEAD, "lead", clock=lambda: now[0], lease=10)
-    with pytest.raises(WorkflowError, match="expired"):
+    with pytest.raises(BusinessRuleError, match="expired"):
         submit_task(factory, payload(first), "lead", clock=lambda: now[0])
     assert second["claim_token"] != first["claim_token"]
     assert second["review_round"] == 1
@@ -1104,7 +1104,7 @@ def test_reclaim_rolls_back_expiry_on_rejection_and_write_failure(setup, monkeyp
             assert task_row(session, task_id).status == "IN_REVIEW"
             assert event_rows(session, task_id) == original_events
 
-    with pytest.raises(WorkflowError, match="stale claim SHA"):
+    with pytest.raises(BusinessRuleError, match="stale claim SHA"):
         claim_task(factory, task_id, NEXT, "lead", clock=expired_clock)
     assert_old_lease_preserved()
 
@@ -1378,16 +1378,16 @@ def test_submit_requires_claim_owner_exact_head_ci_and_verified_effort(setup):
             {"id": task_id, "head": NEXT},
         )
 
-    with pytest.raises(WorkflowError, match="claim owner mismatch"):
+    with pytest.raises(BusinessRuleError, match="claim owner mismatch"):
         submit_task(factory, submission, "other", require_ci=True)
-    with pytest.raises(WorkflowError, match="verified exact-HEAD CI"):
+    with pytest.raises(BusinessRuleError, match="verified exact-HEAD CI"):
         submit_task(factory, submission, "lead", require_ci=True)
     with factory.transaction() as connection:
         connection.execute(
             text("UPDATE controller_ci_tasks SET head_sha=:head WHERE task_id=:id"),
             {"id": task_id, "head": HEAD},
         )
-    with pytest.raises(WorkflowError, match="required effort cannot be verified"):
+    with pytest.raises(BusinessRuleError, match="required effort cannot be verified"):
         submit_task(factory, submission, "lead", require_ci=True)
     with (
         factory.get_scoped_session() as session,

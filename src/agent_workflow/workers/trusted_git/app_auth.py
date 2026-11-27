@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent_workflow.budget import check_deadline, operation_timeout
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
-from agent_workflow.workers.trusted_git.github import GitHubVerifier, WorkflowError
+from agent_workflow.workers.trusted_git.github import GitHubVerifier
 
 BOT = "builacviet-wfc-coder[bot]"
 
@@ -29,7 +30,7 @@ def _stop_http_worker(process: subprocess.Popen) -> None:
     try:
         process.communicate(timeout=5)
     except subprocess.TimeoutExpired:
-        raise WorkflowError(
+        raise BusinessRuleError(
             "HTTP worker termination unconfirmed; reconciliation required"
         ) from None
 
@@ -50,7 +51,7 @@ def _run_http_worker(data: bytes) -> bytes:
         output, _ = process.communicate(data, timeout=remaining)
         check_deadline()
         if process.returncode or len(output) > 2_000_000:
-            raise WorkflowError("GitHub App request failed")
+            raise BusinessRuleError("GitHub App request failed")
         return output
     except BaseException:
         # No background HTTP thread/request survives a completed cancellation.
@@ -63,7 +64,7 @@ def request_json(
     method: str, endpoint: str, token: str, payload: dict | None = None
 ) -> Any:
     if not endpoint.startswith("/") or endpoint.startswith("//"):
-        raise WorkflowError("invalid GitHub endpoint")
+        raise BusinessRuleError("invalid GitHub endpoint")
     try:
         data = json.dumps(
             {
@@ -76,7 +77,7 @@ def request_json(
         body = _run_http_worker(data)
         return json.loads(body) if body else None
     except (OSError, subprocess.SubprocessError, ValueError):
-        raise WorkflowError(
+        raise BusinessRuleError(
             "GitHub App request failed or timed out; reconciliation required"
         ) from None
 
@@ -93,7 +94,7 @@ def sign_rs256(data: bytes, key: Path) -> bytes:
         check_deadline()
         return result
     except (OSError, subprocess.SubprocessError):
-        raise WorkflowError("GitHub App signing failed") from None
+        raise BusinessRuleError("GitHub App signing failed") from None
 
 
 def b64(data: bytes) -> str:
@@ -114,7 +115,9 @@ class GitHubApp:
         if any(
             type(value) is not int or value <= 0 for value in (app_id, installation_id)
         ):
-            raise WorkflowError("positive integer App and installation IDs required")
+            raise BusinessRuleError(
+                "positive integer App and installation IDs required"
+            )
         pem = pem.resolve(strict=True)
         if (
             any("agent_workflow" in part.lower() for part in pem.parts)
@@ -122,7 +125,7 @@ class GitHubApp:
             or pem.parent.name != ".secret"
             or not pem.is_file()
         ):
-            raise WorkflowError("PEM must be a file in .secret")
+            raise BusinessRuleError("PEM must be a file in .secret")
         self.app_id, self.installation_id, self.pem = (
             app_id,
             installation_id,
@@ -167,7 +170,7 @@ class GitHubApp:
             or installation.get("app_id") != self.app_id
             or installation.get("suspended_at") is not None
         ):
-            raise WorkflowError("GitHub App or installation identity mismatch")
+            raise BusinessRuleError("GitHub App or installation identity mismatch")
         result = self._request(
             "POST",
             f"/app/installations/{self.installation_id}/access_tokens",
@@ -189,7 +192,7 @@ class GitHubApp:
             ):
                 raise ValueError
         except (KeyError, TypeError, ValueError):
-            raise WorkflowError("invalid installation token response") from None
+            raise BusinessRuleError("invalid installation token response") from None
         self._token, self._expires = token, expires
         return token
 
@@ -203,7 +206,7 @@ class GitHubApp:
             or bot.get("type") != "Bot"
             or type(bot.get("id")) is not int
         ):
-            raise WorkflowError("GitHub bot identity mismatch")
+            raise BusinessRuleError("GitHub bot identity mismatch")
         return BOT, f"{bot['id']}+{BOT}@users.noreply.github.com"
 
     def revoke(self) -> None:

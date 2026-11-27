@@ -1,14 +1,10 @@
-"""Workflow repository identity, errors and SHA validation."""
+"""Workflow repository identity and SHA validation."""
 
 import re
 
 from agent_workflow.domain.exceptions import BusinessRuleError
 
 REPOSITORY = "builacviet/agent-workflow"
-
-
-# Legacy public name; new R2 code uses DomainError from domain.exceptions.
-WorkflowError = BusinessRuleError
 
 
 def validate_sha(sha: str) -> None:

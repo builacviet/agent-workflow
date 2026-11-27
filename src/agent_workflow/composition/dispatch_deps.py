@@ -20,7 +20,7 @@ from agent_workflow.composition.postgres_controller import compose_postgres_cont
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.github.app_token import ControllerAppToken
 from agent_workflow.infrastructure.github.client import GitHubClient
@@ -69,7 +69,7 @@ def create_dispatch_use_case(
 
     def finished(dispatch_id: str) -> None:
         if runtime is None:
-            raise WorkflowError("missing dispatched Worker for terminal cleanup")
+            raise BusinessRuleError("missing dispatched Worker for terminal cleanup")
         runtime.release_engine(dispatch_id)
 
     return RunDispatchPassUseCase(
@@ -96,7 +96,7 @@ def _validate_worker_config(config: dict) -> None:
             )
             not in CodexCLIPlugin.manifest.supported_combinations
         ):
-            raise WorkflowError("unsupported Worker runtime selection")
+            raise BusinessRuleError("unsupported Worker runtime selection")
         # Reuse the trusted Worker's credential checks without authenticating.
         worker = GitHubApp(
             config["app_id"], config["installation_id"], Path(config["pem"])
@@ -115,7 +115,9 @@ def _validate_worker_config(config: dict) -> None:
             or worker.app_id == controller.app_id
             or worker.installation_id == controller.installation_id
         ):
-            raise WorkflowError("separate Controller and Worker credentials required")
+            raise BusinessRuleError(
+                "separate Controller and Worker credentials required"
+            )
         roots = [Path(config["scratch"]).resolve()] + [
             Path(task["worktree"]).resolve() for task in config["tasks"].values()
         ]
@@ -124,8 +126,8 @@ def _validate_worker_config(config: dict) -> None:
             for pem in (worker.pem, controller_pem)
             for root in roots
         ):
-            raise WorkflowError("App credentials must remain outside Worker paths")
-    except (KeyError, TypeError, ValueError, OSError, WorkflowError):
+            raise BusinessRuleError("App credentials must remain outside Worker paths")
+    except (KeyError, TypeError, ValueError, OSError):
         raise InvalidApplicationRequestError(
             "invalid PostgreSQL dispatch Worker configuration"
         ) from None

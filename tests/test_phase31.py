@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.runners.coder_runtime import safe_path, validate_config
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
@@ -36,7 +36,7 @@ HEAD = "b" * 40
     ],
 )
 def test_reject_unsafe_paths(path):
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         safe_path(path)
 
 
@@ -52,10 +52,10 @@ def test_export_only_allowlisted_changes(tmp_path):
         {"path": "docs/removed.md", "mode": "100644", "content": None},
         {"path": "src/app.py", "mode": "100644", "content": b"new"},
     ]
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         changes(tmp_path, baseline, ["src"])
     (tmp_path / "AGENTS.md").write_bytes(b"changed policy")
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         changes(tmp_path, baseline, ["src", "docs"])
 
 
@@ -64,7 +64,7 @@ def test_export_reject_symlink(tmp_path):
         (tmp_path / "linked").symlink_to(tmp_path, target_is_directory=True)
     except OSError:
         pytest.skip("host symlink privilege unavailable")
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         changes(tmp_path, {}, ["src"])
 
 
@@ -146,7 +146,7 @@ def test_jwt_cache_refresh_scope_and_identity(app):
 def test_app_identity_and_stale_sha_fail_closed(app):
     client, transport, _ = app
     transport.slug = "wrong-app"
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         client.token()
     transport.slug = "builacviet-wfc-coder"
     verifier = AppVerifier(client)
@@ -155,23 +155,23 @@ def test_app_identity_and_stale_sha_fail_closed(app):
         transport.calls[-2][1]
         == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
     )
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         verifier(REPOSITORY, "codex/test", BASE, BASE)
     calls_before_rejection = list(transport.calls)
     for repository in ("other/repository", "builacviet/techlead-review-poc"):
-        with pytest.raises(WorkflowError, match="repository is not authorized"):
+        with pytest.raises(BusinessRuleError, match="repository is not authorized"):
             verifier(repository, "codex/test", BASE, HEAD)
         assert transport.calls == calls_before_rejection
 
 
 @pytest.mark.parametrize("ids", [(True, 2), (0, 2), (1, -2), ("1", 2)])
 def test_invalid_app_ids(app, ids):
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         GitHubApp(*ids, app[0].pem)
 
 
 def test_configuration_requires_explicit_scope():
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         validate_config({"repository": "other/repo", "tasks": {}})
 
 
@@ -229,7 +229,7 @@ def test_malformed_and_expired_installation_tokens(app):
         return original(method, endpoint, token, payload)
 
     client.transport = broken
-    with pytest.raises(WorkflowError, match="invalid installation"):
+    with pytest.raises(BusinessRuleError, match="invalid installation"):
         client.token()
 
 
@@ -240,7 +240,7 @@ def test_app_http_error_never_exposes_token(monkeypatch):
         raise OSError("secret synthetic-token")
 
     monkeypatch.setattr(module, "_run_http_worker", fail)
-    with pytest.raises(WorkflowError) as error:
+    with pytest.raises(BusinessRuleError) as error:
         module.request_json("GET", "/app", "synthetic-token")
     assert "synthetic-token" not in str(error.value)
 
@@ -284,7 +284,7 @@ def config(tmp_path):
 def test_valid_config_and_profile_digest(config):
     validate_config(config)
     config["seccomp_sha256"] = "0" * 64
-    with pytest.raises(WorkflowError, match="digest"):
+    with pytest.raises(BusinessRuleError, match="digest"):
         validate_config(config)
 
 
@@ -307,7 +307,7 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
     if value == "v2-path":
         value = str(tmp_path / "agent_workflow_v2" / "data.sqlite3")
     config[key] = value
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         validate_config(config)
 
 
@@ -322,7 +322,7 @@ def test_invalid_config_boundaries(config, key, value, tmp_path):
     ],
 )
 def test_cross_platform_path_aliases_are_rejected(path):
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         safe_path(path)
 
 
@@ -332,7 +332,7 @@ def test_export_rejects_hardlinks(tmp_path):
     first = tmp_path / "a.py"
     first.write_text("fixture")
     os.link(first, tmp_path / "b.py")
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         changes(tmp_path, {}, ["a.py", "b.py"])
 
 
@@ -354,7 +354,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     sample["tasks"] = config["tasks"]
     validate_config(sample)
     sample["database"] = str(tmp_path / "agent_workflow_v2/data/workflow.sqlite3")
-    with pytest.raises(WorkflowError, match="v2 paths"):
+    with pytest.raises(BusinessRuleError, match="v2 paths"):
         validate_config(sample)
 
 
@@ -365,7 +365,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
 def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
     from agent_workflow.runners.coder_runtime import independent_path
 
-    with pytest.raises(WorkflowError, match="v2 paths"):
+    with pytest.raises(BusinessRuleError, match="v2 paths"):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
 
 
