@@ -3,8 +3,6 @@
 import importlib
 from pathlib import Path
 
-import pytest
-
 from agent_workflow.interfaces.cli.admin import historical_spec
 
 
@@ -12,29 +10,21 @@ def test_packaged_reference_available():
     assert len(historical_spec()["acceptance_criteria"]) == 5
 
 
-@pytest.mark.parametrize(
-    ("module", "package"),
-    [
-        ("coder_runtime", "runners"),
-    ],
-)
-def test_flat_imports_resolve_to_the_same_module(module, package):
-    original = importlib.import_module(f"agent_workflow.{module}")
-    implementation = importlib.import_module(f"agent_workflow.{package}.{module}")
-    assert original is implementation
-
-
 def test_retired_packages_and_entrypoints_are_absent():
     source = Path(__file__).resolve().parents[1] / "src"
     assert not (source / "my_wfc").exists()
     assert not (source / "order_service").exists()
     assert not (source / "agent_workflow" / "mcp").exists()
+    assert not (source / "agent_workflow" / "coder_runtime.py").exists()
+    assert not (source / "agent_workflow" / "runners").exists()
     assert not (source / "agent_workflow" / "bootstrap").exists()
     assert not (source / "agent_workflow" / "integrations").exists()
     assert not (source / "agent_workflow" / "orchestration").exists()
     assert not (source / "agent_workflow" / "infrastructure" / "providers").exists()
     for module in (
         "agent_workflow.mcp",
+        "agent_workflow.coder_runtime",
+        "agent_workflow.runners",
         "agent_workflow.auth0_oauth",
         "agent_workflow.security",
         "agent_workflow.tools",

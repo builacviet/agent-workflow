@@ -5,7 +5,7 @@ import json
 import runpy
 import sqlite3
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
+from test_agent_runtime import assignment_for
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
@@ -22,6 +23,10 @@ from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextOutput,
+)
+from agent_workflow.application.runtime.ports import RuntimeAdapters
+from agent_workflow.application.runtime.services.agent_execution import (
+    AgentExecutionService,
 )
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
@@ -36,15 +41,18 @@ from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.models import CITask, Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
-from agent_workflow.infrastructure.runtime import sandbox
+from agent_workflow.infrastructure.runtime import docker_runtime, sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.worker_payload import (
+    worker_assignment_payload,
+)
+from agent_workflow.infrastructure.runtime.workspace import source_digest
 from agent_workflow.interfaces.cli import controller_cli
 from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
-from agent_workflow.runners import coder_runtime
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
@@ -294,7 +302,9 @@ def test_invalid_explicit_sandbox_path_fails_before_resources(config, monkeypatc
 
 def test_pg_validation_never_inspects_sqlite_database(config):
     config["database"] = object()
-    dispatch_deps._validate_worker_config(config, RuntimeRegistry((CodexCLIPlugin(),)))
+    dispatch_deps.validate_dispatch_worker_config(
+        config, RuntimeRegistry((CodexCLIPlugin(),)), dispatch_deps.GitHubApp
+    )
 
 
 def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
@@ -388,7 +398,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
         assert held and task_id == claim.task_id
         if outcome == "leadership_lost_after_assignment":
             held = False
-        return context
+        return assignment_for(context)
 
     monkeypatch.setattr(
         dispatch_deps.GetCoderAssignmentUseCase, "get_coder_assignment", get_assignment
@@ -400,9 +410,9 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "compose_postgres_controller",
         lambda borrowed: deps if borrowed is factory else forbidden(),
     )
-    monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
-    preflight = Mock(wraps=dispatch_deps._validate_worker_config)
-    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", preflight)
+    monkeypatch.setattr(docker_runtime, "_require_engine", forbidden)
+    preflight = Mock(wraps=dispatch_deps.validate_dispatch_worker_config)
+    monkeypatch.setattr(dispatch_deps, "validate_dispatch_worker_config", preflight)
 
     app = AppConfig(
         pg_runtime_dsn=DSN,
@@ -411,21 +421,12 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(AppConfig, "from_env", forbidden)
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", "relative-ambient")
 
-    def compose(cfg, service, borrowed, *, leadership_guard, registry, app_config):
+    def compose(cfg, service, borrowed, leadership_guard, *, app_config):
         assert app_config is app
-        assert registry is preflight.call_args.args[1]
         assert borrowed is deps and service is deps.handoff_provider
         assert cfg is config
         leadership_guard()
         events.append("compose_worker")
-
-        def execute(actual_claim, actual_context):
-            assert actual_claim is claim and actual_context is context
-            leadership_guard()
-            events.append("worker")
-            if outcome == "worker_error":
-                raise RuntimeError("fake Worker uncertain")
-            return HEAD
 
         def clear(dispatch_id):
             leadership_guard()
@@ -434,8 +435,24 @@ def test_single_factory_lazy_worker_and_terminal_order(
             if outcome == "cleanup_error":
                 raise RuntimeError("pin retained")
 
-        return SimpleNamespace(execute_assignment=execute, release_engine=clear)
+        engine = Mock(release_engine=clear, require_leadership=leadership_guard)
+        engine.bind_engine.return_value = nullcontext()
+        return RuntimeAdapters(engine, Mock())
 
+    def execute_phases(service, adapters, actual_claim, payload, request, plan, pin):
+        assert actual_claim is claim and payload["task_id"] == context["task_id"]
+        assert payload["base_sha"] == context["base_sha"]
+        assert service._registry is preflight.call_args.args[1]
+        assert service._handoff_provider is deps.handoff_provider
+        assert service._dispatch is deps.dispatch
+        assert service._ci is deps.ci_tracking and service._require_ci_tracking is True
+        adapters.engine.require_leadership()
+        events.append("worker")
+        if outcome == "worker_error":
+            raise RuntimeError("fake Worker uncertain")
+        return HEAD
+
+    monkeypatch.setattr(AgentExecutionService, "_execute_phases", execute_phases)
     worker = Mock(side_effect=compose)
     monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", worker)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
@@ -544,7 +561,7 @@ def test_pg_once_runs_native_dev_stages(
         task_id="T",
         input_sha=base_sha,
         round_number=0,
-        deadline=coder_runtime.time.time() + 120,
+        deadline=docker_runtime.time.time() + 120,
     )
     context_paths = (handoff_path, "src/value.txt")
     snapshot = GetReviewContextOutput(
@@ -575,6 +592,7 @@ def test_pg_once_runs_native_dev_stages(
     reader.execute.return_value = snapshot
     projection = GetCoderAssignmentUseCase(reader).get_coder_assignment("T")
     assignment = coder_assignment_response(projection["details"])
+    assert worker_assignment_payload(projection["details"]) == assignment
 
     factory = offline_factory
     deps = compose_postgres_controller(factory)
@@ -659,7 +677,7 @@ def test_pg_once_runs_native_dev_stages(
             yield session
 
     monkeypatch.setattr(factory, "get_scoped_session", session_scope)
-    for module in (coder_runtime, sandbox):
+    for module in (docker_runtime, sandbox):
         monkeypatch.setattr(module, "_selected_host", lambda: "unix:///fixture.sock")
         monkeypatch.setattr(module, "_require_engine", lambda: "fixture-daemon")
     monkeypatch.setattr(trusted_worker, "ROOT", stage)
@@ -742,7 +760,7 @@ def test_pg_once_runs_native_dev_stages(
             if mode == "prepare":
                 trusted_worker.prepare(envelope, github)
             else:
-                assert coder_runtime.source_digest(source) == tested_digest
+                assert source_digest(source) == tested_digest
                 trusted_worker.publish(envelope, github)
                 if fault == "invalid_result_head":
                     receipt = stage / "result.json"
@@ -769,7 +787,7 @@ def test_pg_once_runs_native_dev_stages(
             assert mode == "test" and "--network=none" in args
             assert mounts == [f"type=bind,src={source},dst=/workspace"]
             assert (source / "src" / "value.txt").read_bytes() == b"after\n"
-            tested_digest = coder_runtime.source_digest(source)
+            tested_digest = source_digest(source)
             if fault == "mutated_test":
                 (source / "src" / "value.txt").write_bytes(b"mutated\n")
         return b""

@@ -19,19 +19,14 @@ import pytest
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime import sandbox, sandbox_watchdog
-from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
 from agent_workflow.infrastructure.runtime.sandbox import (
     SandboxManager,
     SandboxPolicy,
     SandboxRunResult,
 )
-from agent_workflow.runners.coder_runtime import CoderRuntime
 
 _FIXTURE_PIN = "sha256:" + "b" * 64
 _ENGINE_INFO = (
@@ -983,14 +978,11 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     state = tmp_path / "sandbox-state"
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "ignored"))
     first_manager = SandboxManager(state)
-    first = CoderRuntime(
+    first = DockerRuntime(
         {},
-        Mock(spec=RegisterTaskHandoffUseCase),
         sandbox=first_manager,
         dispatch=Mock(),
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert first.sandbox is first_manager
     assert first.sandbox._fence_dir == state
@@ -998,14 +990,11 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     first.sandbox.record_engine(dispatch, "unix:///fixture.sock", "fixture-daemon-a")
     dsn = "postgresql://user:secret-password@localhost/database"
     second_manager = SandboxManager(state)
-    second = CoderRuntime(
+    second = DockerRuntime(
         {"database": dsn},
-        Mock(spec=RegisterTaskHandoffUseCase),
         sandbox=second_manager,
         dispatch=Mock(),
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert second.sandbox is second_manager
     assert second.sandbox is not first.sandbox
@@ -1021,14 +1010,11 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
 def test_explicit_default_state_uses_stable_config_path(monkeypatch):
     monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
     manager = SandboxManager(AppConfig.from_env({}).sandbox_state_dir)
-    runtime = CoderRuntime(
+    runtime = DockerRuntime(
         {},
-        Mock(spec=RegisterTaskHandoffUseCase),
         sandbox=manager,
         dispatch=Mock(),
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
     assert runtime.sandbox is manager
     assert (

@@ -3,9 +3,13 @@ Responsibility: Define runtime plugin and execution operation ports.
 Dependencies: Application runtime DTOs and Python typing.
 """
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import NotRequired, Protocol, TypedDict
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
@@ -25,11 +29,13 @@ class IAgentRuntimePlugin(Protocol):
     def result(self, request: RuntimeRequest, output: bytes) -> WorkerResult: ...
 
 
-class IDispatchEvidence(Protocol):
+class IDispatchLaunchState(Protocol):
     def is_pre_launch(self, dispatch_id: str) -> bool: ...
 
     def retire_pre_launch(self, dispatch_id: str) -> None: ...
 
+
+class IDispatchEvidence(Protocol):
     def record_runtime_evidence(
         self,
         dispatch_id: str,
@@ -48,41 +54,84 @@ class ICiTracking(Protocol):
     def execute(self, task_id: str, pr_number: int, head_sha: str) -> None: ...
 
 
-class IRuntimeHost(Protocol):
-    def docker(
+class IRuntimeRegistry(Protocol):
+    def plan(self, request: RuntimeRequest) -> RuntimePlan: ...
+
+    def approved_image_id(self, request: RuntimeRequest) -> str | None: ...
+
+    def result(
         self,
-        claim: dict,
-        stage: Path,
-        mode: str,
-        prompt: str = "",
+        request: RuntimeRequest,
+        output: bytes,
         *,
-        code_plan: RuntimePlan | None = None,
+        observed_image_id: str | None = None,
+    ) -> WorkerResult: ...
+
+
+class IRuntimeEngine(Protocol):
+    def require_leadership(self) -> None: ...
+
+    def validate_image(self, approved_image_id: str | None) -> None: ...
+
+    def bind_engine(self, dispatch_id: str) -> AbstractContextManager[None]: ...
+
+    def assert_engine(self, dispatch_id: str) -> None: ...
+
+    def docker(
+        self, claim: DispatchClaim, stage: Path, mode: str, prompt: str = ""
     ) -> bytes: ...
 
-    def stop(self, dispatch_id: str) -> None: ...
-
-    def _run_code(
+    def run_code(
         self,
-        claim: dict,
+        claim: DispatchClaim,
         source: Path,
-        request: RuntimeRequest,
         plan: RuntimePlan,
         prompt: str,
         approved_image_id: str | None,
-    ) -> WorkerResult: ...
+    ) -> tuple[bytes, str | None]: ...
 
-    def _prepare_stage(self, claim: dict, context: dict) -> tuple[Path, dict]: ...
+    def stop(self, dispatch_id: str) -> None: ...
 
-    def _source(self, stage: Path) -> Path: ...
+    def release_engine(self, dispatch_id: str) -> None: ...
 
-    def _source_digest(self, source: Path) -> str: ...
 
-    def _check_source_digest(self, source: Path, expected: str) -> None: ...
+class WorkerEnvelope(TypedDict):
+    context: dict
+    input_sha: str
+    deadline: float
+    write_paths: list[str]
+    handoff_path: str
+    app_id: int
+    installation_id: int
+    test_summary: NotRequired[str]
 
-    def _assert_engine(self, dispatch_id: str) -> None: ...
 
-    def _validated_result(self, stage: Path, claim: dict, context: dict) -> dict: ...
+@dataclass(frozen=True)
+class PublishedResult:
+    head_sha: str
+    pr_url: str
 
-    def _register_handoff(
-        self, context: dict, result: dict, test_summary: str
-    ) -> None: ...
+
+class IRuntimeWorkspace(Protocol):
+    def prepare_stage(
+        self, claim: DispatchClaim, context: dict
+    ) -> tuple[Path, WorkerEnvelope]: ...
+
+    def source(self, stage: Path) -> Path: ...
+
+    def source_digest(self, source: Path) -> str: ...
+
+    def check_source_digest(self, source: Path, expected: str) -> None: ...
+
+    def validated_result(
+        self, stage: Path, claim: DispatchClaim, context: dict
+    ) -> PublishedResult: ...
+
+
+@dataclass(frozen=True)
+class RuntimeAdapters:
+    engine: IRuntimeEngine
+    workspace: IRuntimeWorkspace
+
+
+RuntimeAdapterFactory = Callable[[Callable[[], None]], RuntimeAdapters]

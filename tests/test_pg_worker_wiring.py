@@ -2,7 +2,7 @@
 
 import sqlite3
 from contextlib import nullcontext
-from dataclasses import asdict, replace
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,13 +10,16 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from sqlalchemy import create_engine
+from test_agent_runtime import assignment_for
 from test_runtime_plugins import FakePlugin
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.composition import ci_deps, worker_deps
+from agent_workflow.application.runtime.services.agent_execution import (
+    AgentExecutionService,
+)
+from agent_workflow.composition import ci_deps, dispatch_deps, worker_deps
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.worker_deps import compose_postgres_worker
@@ -30,10 +33,9 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.infrastructure.runtime import sandbox
+from agent_workflow.infrastructure.runtime import docker_runtime, sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
-from agent_workflow.runners import coder_runtime
 
 DISPATCH = "a" * 32
 INPUT = "b" * 40
@@ -70,12 +72,23 @@ def _codex_registry():
     return RuntimeRegistry((CodexCLIPlugin(),))
 
 
+def _compose_dispatch(
+    monkeypatch, config, factory, dependencies, app_config, registry=None
+):
+    monkeypatch.setattr(
+        dispatch_deps, "compose_postgres_controller", lambda _: dependencies
+    )
+    return dispatch_deps.create_dispatch_use_case(
+        config, factory, registry=registry or _codex_registry(), app_config=app_config
+    )
+
+
 def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     wiring, monkeypatch
 ):
     factory, dependencies, service, app_config = wiring
     monkeypatch.setattr(factory, "get_scoped_session", forbidden)
-    monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
+    monkeypatch.setattr(docker_runtime, "_require_engine", forbidden)
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
     monkeypatch.setattr(factory, "connect_session", forbidden)
     connect = Mock(side_effect=forbidden)
@@ -89,23 +102,34 @@ def test_borrows_exact_dependencies_without_sqlite_or_external_work(
     build_sandbox = Mock(return_value=manager)
     monkeypatch.setattr(worker_deps, "SandboxManager", build_sandbox)
     monkeypatch.setattr(AppConfig, "from_env", forbidden)
-    runtime = compose_postgres_worker(
+    adapters = compose_postgres_worker(
         {"database": "legacy.db"},
         service,
         dependencies,
         leadership_guard=forbidden,
-        registry=registry,
         app_config=app_config,
     )
-    assert runtime.registry is registry
-    assert runtime.sandbox is manager
+    use_case = _compose_dispatch(
+        monkeypatch,
+        {"database": "legacy.db"},
+        factory,
+        dependencies,
+        app_config,
+        registry,
+    )
+    agent_execution = use_case._agent_execution
+    assert type(agent_execution) is AgentExecutionService
+    assert agent_execution._registry is registry
+    assert adapters.engine.sandbox is manager
     build_sandbox.assert_called_once_with(fence_dir=app_config.sandbox_state_dir)
     assert not app_config.sandbox_state_dir.exists()
 
-    assert runtime.handoff_provider is dependencies.handoff_provider
-    assert runtime.agent_runtime.dispatch is dependencies.dispatch
-    assert runtime.agent_runtime.ci is dependencies.ci_tracking
-    assert runtime.agent_runtime.require_ci_tracking is True
+    assert agent_execution._handoff_provider is dependencies.handoff_provider
+    assert (
+        agent_execution._dispatch is adapters.engine.dispatch is dependencies.dispatch
+    )
+    assert agent_execution._ci is dependencies.ci_tracking
+    assert agent_execution._require_ci_tracking is True
     assert dependencies.ci_write_scope.factory is factory
     connect.assert_not_called()
     dispose.assert_not_called()
@@ -121,16 +145,17 @@ def test_accepts_equivalent_deferred_factory_callable(wiring, monkeypatch):
     dependencies = compose_postgres_controller(factory)
     service = dependencies.handoff_provider
 
-    runtime = compose_postgres_worker(
+    adapters = compose_postgres_worker(
         {},
         service,
         dependencies,
         leadership_guard=forbidden,
-        registry=_codex_registry(),
         app_config=app_config,
     )
 
-    assert runtime.agent_runtime.ci is dependencies.ci_tracking
+    use_case = _compose_dispatch(monkeypatch, {}, factory, dependencies, app_config)
+    assert adapters.engine.dispatch is dependencies.dispatch
+    assert use_case._agent_execution._ci is dependencies.ci_tracking
     open_scope.assert_not_called()
     with dependencies.ci_write_scope() as (uow, repository):
         assert uow._session is repository._session is session
@@ -152,7 +177,7 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
     wiring, forbid_worker_effects, monkeypatch, missing
 ):
     _, dependencies, service, app_config = wiring
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
     for invalid in (None, object()):
         with pytest.raises(TypeError, match="Worker requires"):
             compose_postgres_worker(
@@ -160,7 +185,6 @@ def test_missing_or_wrong_controller_dependency_fails_closed(
                 service,
                 replace(dependencies, **{missing: invalid}),
                 leadership_guard=forbidden,
-                registry=_codex_registry(),
                 app_config=app_config,
             )
 
@@ -184,14 +208,13 @@ def test_mixed_factories_are_rejected(
     monkeypatch.setattr(factory, "get_scoped_session", forbidden)
     monkeypatch.setattr(other_factory, "get_scoped_session", forbidden)
     other = compose_postgres_controller(other_factory)
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
     with pytest.raises(TypeError, match="share the open Controller factory"):
         compose_postgres_worker(
             {},
             service,
             replace(dependencies, **{name: getattr(other, name) for name in foreign}),
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
 
@@ -220,7 +243,7 @@ def test_actual_ci_provider_and_session_binding_are_checked(
     substituted = replace(
         dependencies, ci_write_scope=scope, ci_tracking=TrackCiTaskUseCase(scope)
     )
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
 
     with pytest.raises(TypeError, match=expected):
         compose_postgres_worker(
@@ -228,7 +251,6 @@ def test_actual_ci_provider_and_session_binding_are_checked(
             service,
             substituted,
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
 
@@ -245,7 +267,6 @@ def test_mixed_ci_operations_are_rejected(wiring, foreign):
             service,
             replace(dependencies, **{foreign: getattr(other, foreign)}),
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
 
@@ -260,7 +281,6 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
             unrelated_service,
             dependencies,
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
     with pytest.raises(TypeError, match="Controller guard"):
@@ -272,7 +292,6 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
                 leadership=PostgresLeadershipLock(factory, LeadershipDomain.CI_WATCHER),
             ),
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
     factory.close()
@@ -282,7 +301,6 @@ def test_mismatched_service_wrong_lock_or_closed_factory_rejected(wiring):
             service,
             dependencies,
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
 
@@ -292,14 +310,13 @@ def test_released_lock_cannot_construct_worker(
 ):
     _, dependencies, service, app_config = wiring
     dependencies.leadership.release()
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
     with pytest.raises(PermissionError, match="active Controller leadership"):
         compose_postgres_worker(
             {},
             service,
             dependencies,
             leadership_guard=forbidden,
-            registry=_codex_registry(),
             app_config=app_config,
         )
 
@@ -308,11 +325,9 @@ def test_missing_or_invalid_controller_guard_cannot_construct_worker(
     wiring, forbid_worker_effects, monkeypatch
 ):
     _, dependencies, service, app_config = wiring
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
     with pytest.raises(TypeError, match="leadership_guard"):
-        compose_postgres_worker(
-            {}, service, dependencies, registry=_codex_registry(), app_config=app_config
-        )
+        compose_postgres_worker({}, service, dependencies, app_config=app_config)
     for invalid in (None, object()):
         with pytest.raises(TypeError, match="Controller guard"):
             compose_postgres_worker(
@@ -320,7 +335,6 @@ def test_missing_or_invalid_controller_guard_cannot_construct_worker(
                 service,
                 dependencies,
                 leadership_guard=invalid,
-                registry=_codex_registry(),
                 app_config=app_config,
             )
 
@@ -332,43 +346,64 @@ def test_missing_or_invalid_injection_cannot_fall_back(
     database = tmp_path / "misleading.sqlite"
     config = {"database": str(database)}
     monkeypatch.setattr(AppConfig, "from_env", forbidden)
-    with pytest.raises(TypeError, match="required keyword-only arguments"):
-        coder_runtime.CoderRuntime(config, service)
     injected = {
         "dispatch": dependencies.dispatch,
-        "ci": dependencies.ci_tracking,
         "leadership_guard": lambda: True,
-        "registry": _codex_registry(),
         "sandbox": sandbox.SandboxManager(app_config.sandbox_state_dir),
     }
+    with pytest.raises(TypeError, match="required keyword-only arguments"):
+        docker_runtime.DockerRuntime(config)
     for port in injected:
         with pytest.raises(TypeError, match=port):
-            coder_runtime.CoderRuntime(
-                config,
-                service,
-                **{key: value for key, value in injected.items() if key != port},
+            docker_runtime.DockerRuntime(
+                config, **{key: value for key, value in injected.items() if key != port}
             )
         for invalid in (None, object()):
-            with pytest.raises(TypeError, match="Worker requires injected workflow"):
-                coder_runtime.CoderRuntime(
-                    config, service, **(injected | {port: invalid})
-                )
-    with pytest.raises(TypeError, match="Worker requires injected workflow"):
-        coder_runtime.CoderRuntime(config, service, **dict.fromkeys(injected))
+            with pytest.raises(TypeError, match="Worker requires injected dispatch"):
+                docker_runtime.DockerRuntime(config, **(injected | {port: invalid}))
+    with pytest.raises(TypeError, match="Worker requires injected dispatch"):
+        docker_runtime.DockerRuntime(config, **dict.fromkeys(injected))
     for invalid in (
         sandbox.SandboxManager(),
         sandbox.SandboxManager(Path("relative")),
     ):
         with pytest.raises(TypeError, match="durable sandbox"):
-            coder_runtime.CoderRuntime(
-                config, service, **(injected | {"sandbox": invalid})
-            )
+            docker_runtime.DockerRuntime(config, **(injected | {"sandbox": invalid}))
     with pytest.raises(ValueError, match="safe, durable local directory"):
-        coder_runtime.CoderRuntime(
+        docker_runtime.DockerRuntime(
             config,
-            service,
             **(injected | {"sandbox": sandbox.SandboxManager(Path(tmp_path.anchor))}),
         )
+
+    use_case = _compose_dispatch(
+        monkeypatch, config, service.factory, dependencies, app_config
+    )
+    execution = use_case._agent_execution
+    operations = {
+        "registry": execution._registry,
+        "handoff_provider": execution._handoff_provider,
+        "ci": execution._ci,
+        "dispatch": execution._dispatch,
+        "adapter_factory": execution._adapter_factory,
+        "runtime_spec": execution._runtime_spec,
+        "assignment_payload": execution._assignment_payload,
+    }
+    for port in operations:
+        if port != "ci":
+            with pytest.raises(TypeError, match=port):
+                AgentExecutionService(
+                    **{key: value for key, value in operations.items() if key != port},
+                    require_ci_tracking=True,
+                )
+        for invalid in (None, object()):
+            if port == "ci" and invalid is None:
+                continue  # Explicitly absent CI fails closed on execute when required.
+            with pytest.raises(TypeError, match="Worker requires injected runtime"):
+                AgentExecutionService(
+                    **(operations | {port: invalid}), require_ci_tracking=True
+                )
+    with pytest.raises(TypeError, match="Worker requires injected runtime"):
+        AgentExecutionService(**dict.fromkeys(operations), require_ci_tracking=True)
     assert not database.exists()
 
 
@@ -376,10 +411,9 @@ def test_missing_or_invalid_app_config_cannot_construct_worker(
     wiring, forbid_worker_effects, monkeypatch
 ):
     _, dependencies, service, app_config = wiring
-    monkeypatch.setattr(worker_deps, "CoderRuntime", forbidden)
+    monkeypatch.setattr(worker_deps, "DockerRuntime", forbidden)
     kwargs = {
         "leadership_guard": forbidden,
-        "registry": _codex_registry(),
     }
     with pytest.raises(TypeError, match="app_config"):
         compose_postgres_worker({}, service, dependencies, **kwargs)
@@ -399,27 +433,33 @@ def test_missing_or_invalid_app_config_cannot_construct_worker(
 def test_callback_cannot_authorize_without_the_borrowed_lock(
     wiring, monkeypatch, guard_result
 ):
-    _, dependencies, service, app_config = wiring
-    # The real lock is unacquired. No runner or transport hooks may be entered.
-    runtime = compose_postgres_worker(
-        {},
+    factory, dependencies, service, app_config = wiring
+    # The real lock is unacquired. No adapter effect may be entered.
+    config = {"model": "gpt-6-luna"}
+    adapters = compose_postgres_worker(
+        config,
         service,
         dependencies,
         leadership_guard=lambda: guard_result,
-        registry=_codex_registry(),
         app_config=app_config,
     )
-    monkeypatch.setattr(coder_runtime, "_selected_host", forbidden)
-    monkeypatch.setattr(coder_runtime, "_require_engine", forbidden)
-    monkeypatch.setattr(runtime, "_code_request", forbidden)
-    monkeypatch.setattr(runtime, "_prepare_stage", forbidden)
-    monkeypatch.setattr(runtime, "_register_handoff", forbidden)
+    runtime = adapters.engine
+    monkeypatch.setattr(docker_runtime, "_selected_host", forbidden)
+    monkeypatch.setattr(docker_runtime, "_require_engine", forbidden)
+    monkeypatch.setattr(adapters.workspace, "prepare_stage", forbidden)
     monkeypatch.setattr(runtime.sandbox, "clear_engine", forbidden)
     monkeypatch.setattr(runtime, "stop", forbidden)
+    execution = _compose_dispatch(
+        monkeypatch, config, factory, dependencies, app_config
+    )._agent_execution
+    monkeypatch.setattr(execution, "_adapter_factory", lambda _guard: adapters)
+    monkeypatch.setattr(execution, "_assignment_payload", forbidden)
+    claim = DispatchClaim(**CLAIM, deadline=docker_runtime.time.time() + 60)
+    context = assignment_for({"task_id": "T", "base_sha": INPUT})
     with pytest.raises(PermissionError):
-        runtime.execute(CLAIM, {})
+        execution.execute(claim, context, lambda: None)
     with pytest.raises(PermissionError):
-        runtime.docker(CLAIM, None, "prepare")
+        runtime.docker(claim, None, "prepare")
     with pytest.raises(PermissionError):
         runtime.reconcile(DISPATCH)
     with pytest.raises(PermissionError):
@@ -430,7 +470,7 @@ def test_callback_cannot_authorize_without_the_borrowed_lock(
 def test_loss_during_engine_admission_leaves_slot_active(
     wiring, monkeypatch, lose_after
 ):
-    _, dependencies, service, app_config = wiring
+    factory, dependencies, _, app_config = wiring
     owns_lock = True
     calls = []
 
@@ -444,7 +484,7 @@ def test_loss_during_engine_admission_leaves_slot_active(
 
         return observe
 
-    claim = DispatchClaim(**CLAIM, deadline=coder_runtime.time.time() + 60)
+    claim = DispatchClaim(**CLAIM, deadline=docker_runtime.time.time() + 60)
     context = {
         "task_id": "T",
         "status": "AWAITING_HANDOFF",
@@ -462,33 +502,23 @@ def test_loss_during_engine_admission_leaves_slot_active(
     monkeypatch.setattr(dependencies.dispatch, "block", forbidden)
     monkeypatch.setattr(dependencies.dispatch, "finish", forbidden)
     assignment = Mock()
-    assignment.get_coder_assignment.return_value = context
-    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    assignment.get_coder_assignment.return_value = assignment_for(context)
     monkeypatch.setattr(
-        coder_runtime, "_require_engine", boundary("engine_probe", "daemon")
+        docker_runtime, "_selected_host", lambda: "unix:///fixture.sock"
+    )
+    monkeypatch.setattr(
+        docker_runtime, "_require_engine", boundary("engine_probe", "daemon")
     )
 
-    def execute(claim, context, guard):
-        runtime = compose_postgres_worker(
-            {"model": "gpt-6-luna"},
-            service,
-            dependencies,
-            leadership_guard=guard,
-            registry=_codex_registry(),
-            app_config=app_config,
-        )
-        monkeypatch.setattr(runtime.sandbox, "record_engine", forbidden)
-        monkeypatch.setattr(runtime, "_execute_bound", forbidden)
-        monkeypatch.setattr(runtime, "stop", forbidden)
-        runtime.execute(asdict(claim), context)
-
+    use_case = _compose_dispatch(
+        monkeypatch, {"model": "gpt-6-luna"}, factory, dependencies, app_config
+    )
+    monkeypatch.setattr(use_case, "_assignment", assignment)
+    monkeypatch.setattr(sandbox.SandboxManager, "record_engine", forbidden)
+    monkeypatch.setattr(AgentExecutionService, "_execute_phases", forbidden)
+    monkeypatch.setattr(docker_runtime.DockerRuntime, "stop", forbidden)
     with pytest.raises(PermissionError, match="leadership lost"):
-        RunDispatchPassUseCase(
-            dependencies.leadership,
-            dependencies.dispatch,
-            assignment,
-            execute,
-        ).execute({"T"})
+        use_case.execute({"T"})
     dependencies.dispatch.claim.assert_called_once_with(
         {"T"}, 1800, track_pre_launch=True
     )
@@ -502,15 +532,11 @@ def test_loss_during_engine_admission_leaves_slot_active(
 def test_injected_ci_tracks_only_authorized_head_as_blocked(
     wiring, monkeypatch, tracked_head
 ):
-    factory, dependencies, service, app_config = wiring
-    runtime = compose_postgres_worker(
-        {},
-        service,
-        dependencies,
-        leadership_guard=lambda: None,
-        registry=_codex_registry(),
-        app_config=app_config,
-    )
+    factory, dependencies, _, app_config = wiring
+    execution = _compose_dispatch(
+        monkeypatch, {}, factory, dependencies, app_config
+    )._agent_execution
+    assert execution._ci is dependencies.ci_tracking
     session = Mock()
     uow = MagicMock()
     make_uow = Mock(return_value=uow)
@@ -525,11 +551,11 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
 
     if tracked_head == INPUT:
         with pytest.raises(BusinessRuleError, match="authorized exact task HEAD"):
-            runtime.agent_runtime.ci.execute("T", 7, tracked_head)
+            execution._ci.execute("T", 7, tracked_head)
         session.add.assert_not_called()
         uow.commit.assert_not_called()
     else:
-        runtime.agent_runtime.ci.execute("T", 7, tracked_head)
+        execution._ci.execute("T", 7, tracked_head)
         binding = session.add.call_args.args[0]
         assert (
             binding.task_id,

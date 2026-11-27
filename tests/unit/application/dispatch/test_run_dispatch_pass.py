@@ -33,7 +33,7 @@ def ports():
         "base_sha": BASE,
         "current_head_sha": HEAD,
     }
-    effects.worker.return_value = HEAD
+    effects.agent_execution.execute.return_value = SimpleNamespace(head_sha=HEAD)
     return effects
 
 
@@ -42,8 +42,7 @@ def use_case(ports):
         ports.leadership,
         ports.dispatch,
         ports.assignment,
-        ports.worker,
-        on_finished=ports.cleanup,
+        ports.agent_execution,
     )
 
 
@@ -59,9 +58,9 @@ def test_success_fences_each_effect_and_cleans_up_before_release(ports):
         assert actual_assignment is assignment
         guards.append(guard)
         guard()
-        return HEAD
+        return ports.agent_execution.execute.return_value
 
-    ports.worker.side_effect = worker
+    ports.agent_execution.execute.side_effect = worker
     assert use_case(ports).execute({"T"}, 60)
 
     owner = call.leadership.is_held()
@@ -74,14 +73,16 @@ def test_success_fences_each_effect_and_cleans_up_before_release(ports):
         call.assignment.get_coder_assignment("T"),
         owner,
         owner,
-        call.worker(claim, assignment, guards[0]),
+        call.agent_execution.execute(claim, assignment, guards[0]),
         owner,  # The Worker uses its raising guard for its own effects.
         owner,
         owner,
         call.dispatch.finish("pass", HEAD),
         owner,
         owner,
-        call.cleanup("pass"),
+        call.agent_execution.release_engine(
+            "pass", ports.agent_execution.execute.return_value
+        ),
         owner,
         call.leadership.release(),
     ]
@@ -102,9 +103,9 @@ def test_stale_assignment_blocks_without_worker_or_cleanup(ports, field, value):
     with pytest.raises(BusinessRuleError, match="assignment changed"):
         use_case(ports).execute({"T"})
 
-    ports.worker.assert_not_called()
+    ports.agent_execution.execute.assert_not_called()
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     ports.dispatch.block.assert_called_once_with("pass")
     ports.leadership.release.assert_called_once()
 
@@ -130,9 +131,9 @@ def test_ineligible_task_blocks_before_worker_callback(
 
     ports.dispatch.claim.assert_called_once_with(task_ids, 1800, track_pre_launch=True)
     ports.assignment.get_coder_assignment.assert_called_once_with("T")
-    ports.worker.assert_not_called()
+    ports.agent_execution.execute.assert_not_called()
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     ports.dispatch.block.assert_called_once_with("pass")
     ports.leadership.release.assert_called_once()
 
@@ -146,9 +147,9 @@ def test_expired_claim_stops_before_assignment_and_releases_budget(ports):
         use_case(ports).execute({"T"})
 
     ports.assignment.get_coder_assignment.assert_not_called()
-    ports.worker.assert_not_called()
+    ports.agent_execution.execute.assert_not_called()
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     ports.dispatch.block.assert_called_once_with("pass")
     ports.leadership.release.assert_called_once()
     assert operation_timeout(10.0) == 10.0
@@ -175,12 +176,12 @@ def test_worker_deadline_allows_cleanup_and_blocks_before_release(ports, monkeyp
                 assert operation_timeout(10.0) == 10.0
                 ports.worker_cleanup()
 
-    ports.worker.side_effect = worker
+    ports.agent_execution.execute.side_effect = worker
     with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
         use_case(ports).execute({"T"})
 
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     assert ports.mock_calls[-6:] == [
         call.worker_cleanup(),
         call.leadership.is_held(),
@@ -198,7 +199,7 @@ def test_failed_worker_fences_block_and_releases(ports, lost_before_block):
         ports.leadership.is_held.side_effect = [True, not lost_before_block, False]
         raise RuntimeError("Worker failed")
 
-    ports.worker.side_effect = fail
+    ports.agent_execution.execute.side_effect = fail
     with pytest.raises(PermissionError, match="leadership lost"):
         use_case(ports).execute({"T"})
 
@@ -207,22 +208,22 @@ def test_failed_worker_fences_block_and_releases(ports, lost_before_block):
     else:
         ports.dispatch.block.assert_called_once_with("pass")
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     ports.leadership.release.assert_called_once()
 
 
 def test_lost_owner_leaves_active_claim_for_reconciliation(ports):
     def worker(*_):
         ports.leadership.is_held.return_value = False
-        return HEAD
+        return ports.agent_execution.execute.return_value
 
-    ports.worker.side_effect = worker
+    ports.agent_execution.execute.side_effect = worker
     with pytest.raises(PermissionError, match="reconcile in-flight work"):
         use_case(ports).execute({"T"})
 
     ports.dispatch.block.assert_not_called()
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
     ports.leadership.release.assert_called_once()
 
     # A fresh owner sees no available claim while the ledger retains the slot.
@@ -234,14 +235,13 @@ def test_lost_owner_leaves_active_claim_for_reconciliation(ports):
         successor,
         ports.dispatch,
         ports.assignment,
-        ports.worker,
-        on_finished=ports.cleanup,
+        ports.agent_execution,
     ).execute({"T"})
     successor.release.assert_called_once()
-    ports.worker.assert_called_once()
+    ports.agent_execution.execute.assert_called_once()
     ports.dispatch.block.assert_not_called()
     ports.dispatch.finish.assert_not_called()
-    ports.cleanup.assert_not_called()
+    ports.agent_execution.release_engine.assert_not_called()
 
 
 @pytest.mark.parametrize("lost_before_cleanup", [True, False])
@@ -255,8 +255,10 @@ def test_cleanup_fence_never_rewrites_committed_finish(ports, lost_before_cleanu
 
     ports.dispatch.finish.assert_called_once_with("pass", HEAD)
     if lost_before_cleanup:
-        ports.cleanup.assert_not_called()
+        ports.agent_execution.release_engine.assert_not_called()
     else:
-        ports.cleanup.assert_called_once_with("pass")
+        ports.agent_execution.release_engine.assert_called_once_with(
+            "pass", ports.agent_execution.execute.return_value
+        )
     ports.dispatch.block.assert_not_called()
     ports.leadership.release.assert_called_once()

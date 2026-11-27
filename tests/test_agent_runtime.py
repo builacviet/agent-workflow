@@ -2,27 +2,73 @@
 
 from __future__ import annotations
 
+import json
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.review.dtos import ReviewTask
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextOutput,
+)
 from agent_workflow.application.runtime.dtos import (
     RuntimePlan,
-    RuntimeRequest,
     RuntimeSpec,
     WorkerResult,
 )
+from agent_workflow.application.runtime.ports import PublishedResult, RuntimeAdapters
 from agent_workflow.application.runtime.services.agent_execution import (
     AgentExecutionService,
 )
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    CoderAssignmentOutput,
+)
+from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.domain.workflow_identity import REPOSITORY
+from agent_workflow.infrastructure.runtime.worker_payload import (
+    worker_assignment_payload,
+)
 
-CLAIM = {
-    "dispatch_id": "a" * 32,
-    "input_sha": "b" * 40,
-    "task_id": "TASK",
+CLAIM = DispatchClaim("a" * 32, "TASK", "b" * 40, 9_999_999_999, 0)
+CONTEXT = {
+    "task_id": CLAIM.task_id,
+    "repository": REPOSITORY,
+    "branch": "codex/test",
+    "base_sha": CLAIM.input_sha,
 }
-CONTEXT = {"task_id": "TASK"}
 HEAD = "c" * 40
+
+
+def assignment_for(context):
+    task = ReviewTask(
+        task_id=context["task_id"],
+        repository=context.get("repository", REPOSITORY),
+        branch=context.get("branch", "codex/test"),
+        base_sha=context["base_sha"],
+        current_head_sha=context.get("current_head_sha"),
+        requested_effort="medium",
+        require_verified_effort=0,
+        max_review_rounds=2,
+        completed_review_rounds=context.get("completed_review_rounds", 0),
+        status=WorkflowStatus(context.get("status", "AWAITING_HANDOFF")),
+        created_at=0,
+        updated_at=0,
+        context_paths=(),
+        spec_json=json.dumps(context),
+    )
+    return {
+        "task_id": task.task_id,
+        "base_sha": task.base_sha,
+        "current_head_sha": task.current_head_sha,
+        "completed_review_rounds": task.completed_review_rounds,
+        "status": task.status,
+        "details": CoderAssignmentOutput(
+            GetReviewContextOutput(task, 1, 2, None, None, (), ()), ()
+        ),
+    }
 
 
 class FakeDispatch:
@@ -48,7 +94,7 @@ class FakeCi:
         self.calls.append(("ci", *args))
 
 
-class FakeHost:
+class FakeRuntime:
     def __init__(self, calls: list, fail_at: str | None = None) -> None:
         self.calls = calls
         self.fail_at = fail_at
@@ -58,9 +104,12 @@ class FakeHost:
         if name == self.fail_at:
             raise RuntimeError(f"uncertain {name}")
 
-    def _prepare_stage(self, claim, context):
+    def prepare_stage(self, claim, context):
         self._call("stage")
-        return Path("/synthetic"), {"context": context}
+        return Path("/synthetic"), {
+            "context": context,
+            "handoff_path": "docs/handoff.md",
+        }
 
     def docker(self, claim, stage, mode, prompt="", *, code_plan=None):
         self._call(mode)
@@ -69,48 +118,80 @@ class FakeHost:
     def stop(self, dispatch_id):
         self._call("stop")
 
-    def _source(self, stage):
+    def source(self, stage):
         self._call("source")
         return stage / "source"
 
-    def _assert_engine(self, dispatch_id):
+    def assert_engine(self, dispatch_id):
         self._call("engine")
 
-    def _run_code(self, claim, source, request, plan, prompt, approved_image_id):
+    def run_code(self, claim, source, plan, prompt, approved_image_id):
         self._call("code")
-        return WorkerResult(request=request, declared_runtime_version="1")
+        return b"", None
 
-    def _source_digest(self, source):
+    def source_digest(self, source):
         self._call("digest")
         return "d" * 64
 
-    def _check_source_digest(self, source, expected):
+    def check_source_digest(self, source, expected):
         self._call("verify_digest")
         assert expected == "d" * 64
 
-    def _validated_result(self, stage, claim, context):
+    def validated_result(self, stage, claim, context):
         self._call("validate_result")
-        return {"head_sha": HEAD, "pr_url": "https://github.com/example/repo/pull/7"}
+        return PublishedResult(HEAD, "https://github.com/example/repo/pull/7")
 
-    def _register_handoff(self, context, result, test_summary):
-        self._call("handoff")
+    def require_leadership(self):
+        pass
+
+    def validate_image(self, approved_image_id):
+        assert approved_image_id is None
+
+    def bind_engine(self, dispatch_id):
+        return nullcontext()
+
+    def release_engine(self, dispatch_id):
+        self._call("release_engine")
+
+
+def make_service(
+    runtime, dispatch, ci=None, leadership_guard=None, *, require_ci_tracking
+):
+    if leadership_guard is not None:
+
+        def require_leadership():
+            if leadership_guard() is not True:
+                raise PermissionError("runtime leadership guard rejected execution")
+
+        runtime.require_leadership = require_leadership
+    registry = Mock()
+    registry.plan.return_value = RuntimePlan(("agent",))
+    registry.approved_image_id.return_value = None
+    registry.result.side_effect = lambda request, *_args, **_kwargs: WorkerResult(
+        request=request, declared_runtime_version="1"
+    )
+    handoff = Mock()
+    handoff.execute.side_effect = lambda _: runtime._call("handoff")
+    return AgentExecutionService(
+        adapter_factory=lambda _guard: RuntimeAdapters(runtime, runtime),
+        runtime_spec=lambda: RuntimeSpec("fake", "fixture", "model"),
+        registry=registry,
+        assignment_payload=worker_assignment_payload,
+        dispatch=dispatch,
+        handoff_provider=lambda: nullcontext(handoff),
+        ci=ci,
+        require_ci_tracking=require_ci_tracking,
+    )
 
 
 def run(runtime: AgentExecutionService):
-    request = RuntimeRequest(
-        spec=RuntimeSpec("fake", "fixture", "model"),
-        role="dev",
-        phase="code",
-        dispatch_id=CLAIM["dispatch_id"],
-        input_sha=CLAIM["input_sha"],
-    )
-    return runtime.execute(CLAIM, CONTEXT, request, RuntimePlan(("agent",)), None)
+    return runtime.execute(CLAIM, assignment_for(CONTEXT), lambda: None).head_sha
 
 
 def test_stage_order_and_injected_evidence_ci():
     calls = []
-    runtime = AgentExecutionService(
-        FakeHost(calls), FakeDispatch(calls), FakeCi(calls), require_ci_tracking=True
+    runtime = make_service(
+        FakeRuntime(calls), FakeDispatch(calls), FakeCi(calls), require_ci_tracking=True
     )
     assert run(runtime) == HEAD
     assert calls == [
@@ -130,9 +211,9 @@ def test_stage_order_and_injected_evidence_ci():
         "validate_result",
         (
             "evidence",
-            CLAIM["dispatch_id"],
+            CLAIM.dispatch_id,
             "TASK",
-            CLAIM["input_sha"],
+            CLAIM.input_sha,
             "fake",
             "1",
             None,
@@ -150,8 +231,10 @@ def test_stage_order_and_injected_evidence_ci():
 )
 def test_stage_failure_propagates_and_cleans_up(failure):
     calls = []
-    runtime = AgentExecutionService(
-        FakeHost(calls, fail_at=failure), FakeDispatch(calls), require_ci_tracking=False
+    runtime = make_service(
+        FakeRuntime(calls, fail_at=failure),
+        FakeDispatch(calls),
+        require_ci_tracking=False,
     )
     with pytest.raises(RuntimeError, match=f"uncertain {failure}"):
         run(runtime)
@@ -166,8 +249,8 @@ def test_stage_failure_propagates_and_cleans_up(failure):
 
 def test_leadership_guard_fails_closed_before_stage():
     calls = []
-    runtime = AgentExecutionService(
-        FakeHost(calls),
+    runtime = make_service(
+        FakeRuntime(calls),
         FakeDispatch(calls),
         leadership_guard=lambda: False,
         require_ci_tracking=False,
@@ -179,8 +262,8 @@ def test_leadership_guard_fails_closed_before_stage():
 
 def test_required_ci_port_fails_closed():
     calls = []
-    runtime = AgentExecutionService(
-        FakeHost(calls), FakeDispatch(calls), require_ci_tracking=True
+    runtime = make_service(
+        FakeRuntime(calls), FakeDispatch(calls), require_ci_tracking=True
     )
     with pytest.raises(RuntimeError, match="CI tracking required"):
         run(runtime)
@@ -198,8 +281,8 @@ def test_leadership_loss_during_evidence_blocks_handoff_and_ci():
         owns_lock[0] = False
 
     dispatch.record_runtime_evidence = lose_lock_after_evidence
-    runtime = AgentExecutionService(
-        FakeHost(calls),
+    runtime = make_service(
+        FakeRuntime(calls),
         dispatch,
         FakeCi(calls),
         leadership_guard=lambda: owns_lock[0],
@@ -233,9 +316,7 @@ def test_state_port_exception_propagates_without_republish(failed_port):
 
         ci.execute = fail_ci
 
-    runtime = AgentExecutionService(
-        FakeHost(calls), dispatch, ci, require_ci_tracking=True
-    )
+    runtime = make_service(FakeRuntime(calls), dispatch, ci, require_ci_tracking=True)
     with pytest.raises(RuntimeError, match=f"{failed_port} unavailable"):
         run(runtime)
     assert calls.count("publish") == 1
@@ -267,8 +348,8 @@ def test_leadership_loss_fences_each_material_boundary(lose_after, denied):
             return False
         return True
 
-    runtime = AgentExecutionService(
-        FakeHost(calls),
+    runtime = make_service(
+        FakeRuntime(calls),
         FakeDispatch(calls),
         FakeCi(calls),
         guard,
@@ -290,7 +371,7 @@ def test_leadership_loss_fences_each_material_boundary(lose_after, denied):
 def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
     calls = []
     owns_lock = True
-    host = FakeHost(calls)
+    host = FakeRuntime(calls)
 
     def interrupt(*args):
         nonlocal owns_lock
@@ -298,8 +379,8 @@ def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
         owns_lock = False
         raise failure
 
-    host._run_code = interrupt
-    runtime = AgentExecutionService(
+    host.run_code = interrupt
+    runtime = make_service(
         host,
         FakeDispatch(calls),
         leadership_guard=lambda: owns_lock,
@@ -314,8 +395,10 @@ def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
 
 def test_uncertain_cleanup_is_not_retried():
     calls = []
-    runtime = AgentExecutionService(
-        FakeHost(calls, fail_at="stop"), FakeDispatch(calls), require_ci_tracking=False
+    runtime = make_service(
+        FakeRuntime(calls, fail_at="stop"),
+        FakeDispatch(calls),
+        require_ci_tracking=False,
     )
     with pytest.raises(RuntimeError, match="uncertain stop"):
         run(runtime)

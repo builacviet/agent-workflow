@@ -1197,3 +1197,63 @@ def test_ci_composition_does_not_expose_postgres_state_bundle():
         isinstance(node, ast.Attribute) and node.attr == "ci_state"
         for node in ast.walk(worker)
     )
+
+
+def test_runtime_cutover_retires_legacy_imports_and_keeps_outbound_boundary():
+    package = SOURCE / "agent_workflow"
+    assert not (package / "runners").exists()
+    assert not (package / "coder_runtime.py").exists()
+    retired = ("agent_workflow.runners", "agent_workflow.coder_runtime")
+    for path in source_files():
+        dependencies = imports(path, set(retired))
+        assert not any(
+            module == prefix or module.startswith(prefix + ".")
+            for module in dependencies
+            for prefix in retired
+        ), path.relative_to(ROOT)
+        if path.parent == package / "infrastructure" / "runtime":
+            assert not any(
+                module == "agent_workflow.interfaces"
+                or module.startswith("agent_workflow.interfaces.")
+                for module in imports(path, {"agent_workflow.interfaces"})
+            ), path.relative_to(ROOT)
+
+
+def test_dispatch_composition_injects_the_concrete_agent_execution_service():
+    path = SOURCE / "agent_workflow" / "composition" / "dispatch_deps.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    factory = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_dispatch_use_case"
+    )
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.Lambda)) and node is not factory
+        for node in ast.walk(factory)
+    )
+    service = next(
+        node
+        for node in factory.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "AgentExecutionService"
+    )
+    returned = next(node.value for node in factory.body if isinstance(node, ast.Return))
+    assert isinstance(returned, ast.Call)
+    assert isinstance(returned.func, ast.Name)
+    assert returned.func.id == "RunDispatchPassUseCase"
+    injected = next(
+        keyword.value
+        for keyword in returned.keywords
+        if keyword.arg == "agent_execution"
+    )
+    assert isinstance(injected, ast.Name)
+    assert isinstance(service.targets[0], ast.Name)
+    assert injected.id == service.targets[0].id
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"execute", "release_engine"}
+        for node in ast.walk(tree)
+    )

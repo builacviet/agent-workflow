@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
+from agent_workflow.application.runtime.ports import RuntimeAdapters
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import ControllerDependencies
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
@@ -18,9 +19,9 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
 from agent_workflow.infrastructure.runtime.sandbox import SandboxManager
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.infrastructure.runtime.workspace import RuntimeWorkspace
 from agent_workflow.sandbox_state_paths import validate_sandbox_state_dir
 
 
@@ -28,11 +29,10 @@ def compose_postgres_worker(
     config: dict,
     handoff_provider: PostgresHandoffProvider,
     dependencies: ControllerDependencies,
-    *,
     leadership_guard: Callable[[], None],
-    registry: RuntimeRegistry,
+    *,
     app_config: AppConfig,
-) -> CoderRuntime:
+) -> RuntimeAdapters:
     """Borrow the Controller's adapters and its raising guard for this claim.
 
     Constructing the runtime performs no ownership check or Worker execution.
@@ -79,7 +79,7 @@ def compose_postgres_worker(
         raise PermissionError("Worker requires active Controller leadership")
 
     def guard() -> bool:
-        # The runner guard raises on loss. Also verify the borrowed lock itself
+        # The dispatch guard raises on loss. Also verify the borrowed lock itself
         # so a callback for another ownership lifetime cannot authorize work.
         return (
             not factory._closed
@@ -92,12 +92,9 @@ def compose_postgres_worker(
     sandbox = SandboxManager(
         fence_dir=validate_sandbox_state_dir(app_config.sandbox_state_dir)
     )
-    return CoderRuntime(
-        config,
-        handoff_provider,
-        registry=registry,
-        sandbox=sandbox,
-        dispatch=dispatch,
-        ci=ci_tracking,
-        leadership_guard=guard,
+    return RuntimeAdapters(
+        engine=DockerRuntime(
+            config, sandbox=sandbox, dispatch=dispatch, leadership_guard=guard
+        ),
+        workspace=RuntimeWorkspace(config),
     )

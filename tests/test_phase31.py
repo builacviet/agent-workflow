@@ -6,9 +6,10 @@ import json
 import pytest
 
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
-from agent_workflow.runners.coder_runtime import safe_path, validate_config
+from agent_workflow.infrastructure.runtime.worker_config import (
+    safe_path,
+    validate_config,
+)
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
     REPOSITORY,
@@ -365,7 +366,7 @@ def test_documented_shared_database_configuration(config, tmp_path):
     ["agent_workflow_v2", "workflow_console_v2", "workflow-console-v2"],
 )
 def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
-    from agent_workflow.runners.coder_runtime import independent_path
+    from agent_workflow.infrastructure.runtime.worker_config import independent_path
 
     with pytest.raises(BusinessRuleError, match="v2 paths"):
         independent_path(tmp_path / directory / "data/workflow.sqlite3")
@@ -373,7 +374,7 @@ def test_actual_v2_directory_roots_stay_forbidden(tmp_path, directory):
 
 def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
     import agent_workflow.budget as budget
-    import agent_workflow.runners.coder_runtime as runtime
+    from agent_workflow.infrastructure.runtime import docker_runtime as runtime
 
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])
@@ -388,17 +389,10 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     from unittest.mock import Mock
 
-    from agent_workflow.application.task.use_cases.register_task_handoff import (
-        RegisterTaskHandoffUseCase,
-    )
-
-    controller_runtime = runtime.CoderRuntime(
+    controller_runtime = runtime.DockerRuntime(
         {},
-        Mock(spec=RegisterTaskHandoffUseCase),
         dispatch=Mock(),
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
         sandbox=sandbox.SandboxManager(tmp_path / "sandbox-fences"),
     )
     controller_runtime.sandbox.record_engine(
