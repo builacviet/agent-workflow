@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from agent_workflow.application.admin.use_cases import AdminSeedUseCase
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
 from agent_workflow.composition import task_deps
@@ -266,6 +267,7 @@ def test_cli_reports_malformed_json_without_echoing_contents(
         (TimeoutError, 75, "The local operation timed out"),
         (CorruptedPersistenceDataError, 2, "stored workflow data failed validation"),
         (DomainError, 2, "workflow rule rejected the operation"),
+        (InvalidApplicationRequestError, 2, "workflow rule rejected the operation"),
         (ValueError, 2, "invalid local operation configuration"),
         (TypeError, None, ""),
         (RuntimeError, None, ""),

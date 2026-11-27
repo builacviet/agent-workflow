@@ -14,7 +14,7 @@ from agent_workflow.application.admin.use_cases import (
     ResetSyntheticReviewUseCase,
     SeedSyntheticReviewUseCase,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.database.models import (
     CITask,
     Review,
@@ -104,7 +104,7 @@ def test_fixture_replay_concurrency_and_reset_rollback(disposable_factory):
     after = snapshot(factory)
     assert len(after[0]) == 2 and len(after[1]) == 5
     assert after[2:] == before[2:]
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         execute(factory, SeedSyntheticReviewUseCase, synthetic | {"title": "conflict"})
     assert snapshot(factory) == after
 
@@ -116,7 +116,7 @@ def test_fixture_replay_concurrency_and_reset_rollback(disposable_factory):
             .values(current_head_sha="b" * 40)
         )
     tampered = snapshot(factory)
-    with pytest.raises(WorkflowError, match="synthetic handoff conflicts"):
+    with pytest.raises(BusinessRuleError, match="synthetic handoff conflicts"):
         execute(factory, SeedSyntheticReviewUseCase, synthetic)
     assert snapshot(factory) == tampered
     with factory.transaction() as connection:
@@ -138,7 +138,7 @@ def test_fixture_replay_concurrency_and_reset_rollback(disposable_factory):
                 repair_heads=0,
             )
         )
-    with pytest.raises(WorkflowError, match="linked external history"):
+    with pytest.raises(BusinessRuleError, match="linked external history"):
         execute(factory, ResetSyntheticReviewUseCase, synthetic)
     with factory.connect_session() as connection:
         assert (

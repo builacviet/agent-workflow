@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from agent_workflow.application.admin.use_cases import AdminSeedCommand
 from agent_workflow.application.exceptions import (
     CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.exceptions import DomainError
@@ -61,7 +62,11 @@ _SAFE_DOMAIN_MESSAGES = frozenset(
 )
 
 
-def _operator_message(error: ValueError, allowed: frozenset[str], fallback: str) -> str:
+def _operator_message(
+    error: ValueError | InvalidApplicationRequestError,
+    allowed: frozenset[str],
+    fallback: str,
+) -> str:
     if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in allowed:
         return error.args[0]
     return fallback
@@ -179,7 +184,7 @@ def _run_action(parser: argparse.ArgumentParser, args: argparse.Namespace) -> No
         parser.error(format_task_spec_error(exc))
     except CorruptedPersistenceDataError:
         parser.error("stored workflow data failed validation")
-    except DomainError as exc:
+    except (DomainError, InvalidApplicationRequestError) as exc:
         parser.error(
             _operator_message(
                 exc, _SAFE_DOMAIN_MESSAGES, "workflow rule rejected the operation"

@@ -7,11 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from agent_workflow.domain.workflow_identity import (
-    REPOSITORY,
-    WorkflowError,
-    validate_sha,
-)
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
 from agent_workflow.infrastructure.ci.github_ci_types import (
     DECISIVE_CONCLUSIONS,
     GitHubCheckConclusion,
@@ -103,7 +100,7 @@ class ControllerChecksClient:
             raise OSError("unapproved GitHub checks repository")
         try:
             validate_sha(sha)
-        except WorkflowError:
+        except BusinessRuleError:
             raise OSError("unapproved GitHub checks SHA") from None
 
         checks = self._pages(

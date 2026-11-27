@@ -15,8 +15,9 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiApprovalSnapshot
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database import transaction_options
 from agent_workflow.infrastructure.database.models import (
     CIObservation,
@@ -102,7 +103,7 @@ class SqlAlchemyCiStateReader:
                     for task in validated
                 )
                 if len(result) > limit:
-                    raise WorkflowError("too many in-flight CI tasks")
+                    raise BusinessRuleError("too many in-flight CI tasks")
                 return result
         except ValidationError:
             raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None

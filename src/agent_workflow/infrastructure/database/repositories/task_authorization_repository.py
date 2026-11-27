@@ -6,12 +6,14 @@ from dataclasses import asdict, fields
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from agent_workflow.application.exceptions import CorruptedPersistenceDataError
+from agent_workflow.application.exceptions import (
+    CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
+)
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.lock_keys import (
     TASK_AUTHORIZATION_HASH_SEED,
 )
@@ -23,11 +25,11 @@ _SPEC_KEYS = frozenset(field.name for field in fields(TaskAuthorizationSpec))
 def _assert_postgres_text(value: str, name: str) -> None:
     """Guard direct repository calls, independently of the CLI schema."""
     if "\0" in value:
-        raise WorkflowError(f"{name} must not contain NUL")
+        raise InvalidApplicationRequestError(f"{name} must not contain NUL")
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
-        raise WorkflowError(f"{name} must be valid UTF-8") from None
+        raise InvalidApplicationRequestError(f"{name} must be valid UTF-8") from None
 
 
 def _assert_persistable_spec(spec: TaskAuthorizationSpec) -> None:
@@ -75,7 +77,7 @@ class SqlAlchemyTaskAuthorizationRepository:
             if spec.task_id != task_id:
                 raise ValueError
             return spec
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, InvalidApplicationRequestError):
             raise CorruptedPersistenceDataError(
                 "Invalid persisted task authorization"
             ) from None

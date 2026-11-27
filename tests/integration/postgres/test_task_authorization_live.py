@@ -17,6 +17,7 @@ from sqlalchemy import delete, event, select, text, update
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.shared.errors import CorruptedPersistenceDataError
 from agent_workflow.application.task.use_cases import authorize_task
 from agent_workflow.application.task.use_cases.authorize_task import (
@@ -24,9 +25,10 @@ from agent_workflow.application.task.use_cases.authorize_task import (
 )
 from agent_workflow.composition.task_deps import create_authorize_task_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.authorization import TaskAuthorizationSpec
 from agent_workflow.domain.task.handoff import HandoffRequest
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.models import Task, TaskEvent
 from agent_workflow.infrastructure.database.repositories.task_authorization_repository import (
     SqlAlchemyTaskAuthorizationRepository,
@@ -153,7 +155,7 @@ def test_task_and_event_share_one_physical_commit(pg_authorization, monkeypatch)
     authorize(factory, spec)
     before = read_rows(factory, spec.task_id)
     authorize(factory, spec)
-    with pytest.raises(WorkflowError, match="conflicts with stored metadata"):
+    with pytest.raises(BusinessRuleError, match="conflicts with stored metadata"):
         authorize(factory, replace(spec, risk_level="high"))
 
     assert read_rows(factory, spec.task_id) == before
@@ -424,7 +426,9 @@ def test_concurrent_create_collision(pg_authorization, monkeypatch, conflict):
             finish.set()
         first.result(timeout=5)
         if conflict:
-            with pytest.raises(WorkflowError, match="conflicts with stored metadata"):
+            with pytest.raises(
+                BusinessRuleError, match="conflicts with stored metadata"
+            ):
                 second.result(timeout=5)
         else:
             second.result(timeout=5)
@@ -469,7 +473,7 @@ def test_direct_use_case_rejects_unsafe_storage_text_and_rolls_back(
     scopes = observe_scopes(factory, monkeypatch)
     unsafe = replace(spec, **updates)
 
-    with pytest.raises(WorkflowError, match="NUL|UTF-8"):
+    with pytest.raises(InvalidApplicationRequestError, match="NUL|UTF-8"):
         authorize(factory, unsafe)
 
     assert [outcomes for _, _, outcomes in scopes] == [["rollback"]]
