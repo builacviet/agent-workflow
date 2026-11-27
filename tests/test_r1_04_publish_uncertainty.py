@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.workers.trusted_git.app_auth import BOT
 
 BASE = "a" * 40
@@ -54,7 +55,7 @@ def test_publish_uncertainty_never_emits_success_receipt(
         git_calls.append(args)
         if args[0] == "push" and ambiguous_step == "push":
             # Simulate a push accepted remotely but acknowledgement lost.
-            raise WorkflowError("uncertain Git push response")
+            raise BusinessRuleError("uncertain Git push response")
         return b""
 
     monkeypatch.setattr(worker, "git", fake_git)
@@ -78,9 +79,9 @@ def test_publish_uncertainty_never_emits_success_receipt(
                     ]
                 return []
             # Remote request was hypothetically accepted, response was lost.
-            raise WorkflowError("uncertain PR write response")
+            raise BusinessRuleError("uncertain PR write response")
 
-    with pytest.raises(WorkflowError, match="uncertain"):
+    with pytest.raises(BusinessRuleError, match="uncertain"):
         worker.publish(
             {
                 "context": {

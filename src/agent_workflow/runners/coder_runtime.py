@@ -25,12 +25,9 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     HandoffUseCaseProvider,
 )
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
-from agent_workflow.domain.workflow_identity import (
-    REPOSITORY,
-    WorkflowError,
-    validate_sha,
-)
+from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
@@ -98,7 +95,7 @@ def safe_path(value: str) -> str:
         )
         or path.suffix.lower() in {".pem", ".key"}
     ):
-        raise WorkflowError("unsafe coder path")
+        raise BusinessRuleError("unsafe coder path")
     return value
 
 
@@ -119,52 +116,52 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
     for candidate in (path, path.resolve()):
         directories = candidate.parts if directory else candidate.parts[:-1]
         if any(part.casefold().startswith(forbidden) for part in directories):
-            raise WorkflowError("v2 paths are forbidden")
+            raise BusinessRuleError("v2 paths are forbidden")
 
 
 def validate_config(config: dict, *, require_database: bool = True) -> None:
     if config.get("repository") != REPOSITORY or not config.get("tasks"):
-        raise WorkflowError("explicit repository and task allowlist required")
+        raise BusinessRuleError("explicit repository and task allowlist required")
     for key in (
         ("database", "pem", "scratch") if require_database else ("pem", "scratch")
     ):
         path = Path(config[key])
         if not path.is_absolute():
-            raise WorkflowError("absolute operator paths required")
+            raise BusinessRuleError("absolute operator paths required")
         independent_path(path, directory=key == "scratch")
     if config.get("runtime", "codex") == "codex":
         profile = Path(config["seccomp_profile"])
         if not profile.is_absolute() or not profile.is_file() or profile.is_symlink():
-            raise WorkflowError("absolute independent seccomp profile required")
+            raise BusinessRuleError("absolute independent seccomp profile required")
         independent_path(profile)
         if hashlib.sha256(profile.read_bytes()).hexdigest() != config["seccomp_sha256"]:
-            raise WorkflowError("seccomp profile digest mismatch")
+            raise BusinessRuleError("seccomp profile digest mismatch")
         if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
-            raise WorkflowError("dedicated POC Codex auth volume required")
+            raise BusinessRuleError("dedicated POC Codex auth volume required")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", config["image"]):
-        raise WorkflowError("invalid runtime image")
+        raise BusinessRuleError("invalid runtime image")
     if not isinstance(config.get("model"), str) or not config["model"].strip():
-        raise WorkflowError("operator-selected model required")
+        raise BusinessRuleError("operator-selected model required")
     roots = set()
     for task in config["tasks"].values():
         root = Path(task["worktree"])
         if not root.is_absolute() or is_linked(root) or not root.is_dir():
-            raise WorkflowError("dedicated canonical worktree required")
+            raise BusinessRuleError("dedicated canonical worktree required")
         if str(root.resolve()) != str(root) or root.resolve() in roots:
-            raise WorkflowError("duplicate or noncanonical worktree")
+            raise BusinessRuleError("duplicate or noncanonical worktree")
         if not (root / ".git").is_file():
-            raise WorkflowError("task requires linked Git worktree")
+            raise BusinessRuleError("task requires linked Git worktree")
         independent_path(root, directory=True)
         roots.add(root.resolve())
         if not task.get("write_paths"):
-            raise WorkflowError("explicit write path allowlist required")
+            raise BusinessRuleError("explicit write path allowlist required")
         for prefix in task["write_paths"]:
             safe_path(prefix)
     if (
         type(config.get("timeout_seconds", 1800)) is not int
         or not 60 <= config.get("timeout_seconds", 1800) <= 3600
     ):
-        raise WorkflowError("invalid timeout")
+        raise BusinessRuleError("invalid timeout")
 
 
 def source_digest(root: Path) -> str:
@@ -177,7 +174,7 @@ def source_digest(root: Path) -> str:
         dirs.sort()
         for name in list(dirs):
             if is_linked(Path(directory) / name):
-                raise WorkflowError("linked source directory")
+                raise BusinessRuleError("linked source directory")
             if name in GENERATED:
                 dirs.remove(name)
         for name in sorted(files):
@@ -185,7 +182,7 @@ def source_digest(root: Path) -> str:
             path = Path(directory) / name
             info = path.lstat()
             if is_linked(path) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                raise WorkflowError("unsafe source file")
+                raise BusinessRuleError("unsafe source file")
             file_count += 1
             total_bytes += info.st_size
             if (
@@ -193,7 +190,7 @@ def source_digest(root: Path) -> str:
                 or info.st_size > MAX_SNAPSHOT_FILE_BYTES
                 or total_bytes > MAX_SNAPSHOT_TOTAL_BYTES
             ):
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "source snapshot exceeds bounded file or byte budget"
                 )
             name_bytes = path.relative_to(root).as_posix().encode("utf-8")
@@ -206,19 +203,19 @@ def source_digest(root: Path) -> str:
                     check_deadline()
                     chunk = handle.read(min(65536, remaining))
                     if not chunk:
-                        raise WorkflowError("source file changed while hashing")
+                        raise BusinessRuleError("source file changed while hashing")
                     digest.update(chunk)
                     remaining -= len(chunk)
                 if handle.read(1):
-                    raise WorkflowError("source file grew while hashing")
+                    raise BusinessRuleError("source file grew while hashing")
             if path.stat().st_size != info.st_size:
-                raise WorkflowError("source file size changed while hashing")
+                raise BusinessRuleError("source file size changed while hashing")
     return digest.hexdigest()
 
 
 def docker_command(args: list[str]) -> bytes:
     if not args or args[0] != "docker":
-        raise WorkflowError("Controller may only launch Docker")
+        raise BusinessRuleError("Controller may only launch Docker")
     # Use fixed operation names only. Arguments and subprocess output can
     # contain host paths, environment values or untrusted content.
     operation = "command"
@@ -243,7 +240,7 @@ def docker_command(args: list[str]) -> bytes:
         ).stdout
     except subprocess.TimeoutExpired:
         check_deadline()
-        raise WorkflowError(f"Docker {operation} timed out") from None
+        raise BusinessRuleError(f"Docker {operation} timed out") from None
     except subprocess.CalledProcessError as error:
         if operation == "create" and error.returncode == 1:
             # Only an exact daemon rejection of the requested immutable image
@@ -261,15 +258,15 @@ def docker_command(args: list[str]) -> bytes:
                 raise DockerCreateRejected(
                     "Docker rejected the sandbox image"
                 ) from None
-        raise WorkflowError(
+        raise BusinessRuleError(
             f"Docker {operation} failed (exit {error.returncode})"
         ) from None
     except (FileNotFoundError, PermissionError):
         if operation == "create":
             raise DockerCreateRejected("could not launch Docker create") from None
-        raise WorkflowError(f"could not launch Docker {operation}") from None
+        raise BusinessRuleError(f"could not launch Docker {operation}") from None
     except OSError:
-        raise WorkflowError(f"Docker {operation} I/O failed") from None
+        raise BusinessRuleError(f"Docker {operation} I/O failed") from None
 
 
 def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
@@ -294,13 +291,13 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
                         time.monotonic() - started >= remaining
                         or os.fstat(output.fileno()).st_size > 4_000_000
                     ):
-                        raise WorkflowError(
+                        raise BusinessRuleError(
                             "runtime deadline or output budget exceeded"
                         )
             check_deadline()
             size = output.tell()
             if process.returncode or size > 4_000_000:
-                raise WorkflowError(
+                raise BusinessRuleError(
                     "coder/test container failed or output exceeded limit"
                 )
             output.seek(0)
@@ -418,17 +415,19 @@ class CoderRuntime:
     def _remaining_seconds(claim: dict) -> int:
         remaining = int(claim["deadline"] - time.time())
         if remaining <= 0:
-            raise WorkflowError("dispatch deadline exceeded")
+            raise BusinessRuleError("dispatch deadline exceeded")
         remaining = int(operation_timeout(remaining))
         if remaining <= 0:
-            raise WorkflowError("dispatch deadline exceeded")
+            raise BusinessRuleError("dispatch deadline exceeded")
         return remaining
 
     def reconcile(self, dispatch_id: str) -> None:
         self.agent_runtime.require_leadership()
         if self.agent_runtime.dispatch.is_pre_launch(dispatch_id):
             if self.sandbox.has_launch_records(dispatch_id):
-                raise WorkflowError("pre-launch evidence conflicts with Docker records")
+                raise BusinessRuleError(
+                    "pre-launch evidence conflicts with Docker records"
+                )
             return
         host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
         self.agent_runtime.require_leadership()
@@ -440,7 +439,7 @@ class CoderRuntime:
 
     def stop(self, dispatch_id: str) -> None:
         if not re.fullmatch(r"[a-f0-9]{32}", dispatch_id):
-            raise WorkflowError("invalid dispatch identifier")
+            raise BusinessRuleError("invalid dispatch identifier")
         host, daemon_id = self.sandbox.recovery_engine(dispatch_id)
         with cleanup_budget(), _bind_host(host):
             _assert_daemon(daemon_id)
@@ -469,7 +468,7 @@ class CoderRuntime:
                         f"name=^/{name}$",
                     ]
                 ).strip():
-                    raise WorkflowError("runtime termination not confirmed")
+                    raise BusinessRuleError("runtime termination not confirmed")
             _assert_daemon(daemon_id)
 
     def docker(
@@ -488,7 +487,9 @@ class CoderRuntime:
             self.agent_runtime.require_leadership()
             existing = self.sandbox._engine_path(dispatch_id).exists()
             if existing and self.agent_runtime.dispatch.is_pre_launch(dispatch_id):
-                raise WorkflowError("pre-launch evidence conflicts with Docker records")
+                raise BusinessRuleError(
+                    "pre-launch evidence conflicts with Docker records"
+                )
             host = (
                 self.sandbox.recovery_engine(dispatch_id)[0]
                 if existing
@@ -531,7 +532,7 @@ class CoderRuntime:
                 hashlib.sha256(profile.read_bytes()).hexdigest()
                 != self.config["seccomp_sha256"]
             ):
-                raise WorkflowError("seccomp profile changed")
+                raise BusinessRuleError("seccomp profile changed")
             args += [
                 "--security-opt",
                 "seccomp=" + str(profile),
@@ -553,10 +554,12 @@ class CoderRuntime:
                 or code_plan.command != command
                 or code_plan.env != (("WFC_CODEX_MODEL", self.config["model"]),)
             ):
-                raise WorkflowError("legacy Codex profile requires the Codex code plan")
+                raise BusinessRuleError(
+                    "legacy Codex profile requires the Codex code plan"
+                )
             volume = self.config.get("codex_auth_volume")
             if volume != "techlead-review-poc_codex_auth":
-                raise WorkflowError("dedicated POC Codex auth volume required")
+                raise BusinessRuleError("dedicated POC Codex auth volume required")
             docker_command(["docker", "volume", "inspect", volume])
             args += [
                 "--mount",
@@ -596,7 +599,9 @@ class CoderRuntime:
         plan = self.registry.plan(request)
         approved_image_id = self.registry.approved_image_id(request)
         if approved_image_id is not None and not self.config.get("runtime_image"):
-            raise WorkflowError("explicit sandbox image required for runtime plugin")
+            raise BusinessRuleError(
+                "explicit sandbox image required for runtime plugin"
+            )
         host = _selected_host()
         with _bind_host(host):
             self.agent_runtime.require_leadership()
@@ -638,12 +643,12 @@ class CoderRuntime:
         stage = Path(task["worktree"]) / ".runtime" / "dispatch" / claim["dispatch_id"]
         root = Path(task["worktree"]).resolve(strict=True)
         if not stage.resolve().is_relative_to(root):
-            raise WorkflowError("dispatch path escapes allowed worktree")
+            raise BusinessRuleError("dispatch path escapes allowed worktree")
         for parent in stage.parents:
             if parent == root:
                 break
             if parent.exists() and is_linked(parent):
-                raise WorkflowError("linked dispatch parent")
+                raise BusinessRuleError("linked dispatch parent")
         stage.mkdir(parents=True, mode=0o700)
         stage.chmod(0o777)
         envelope = {
@@ -661,7 +666,7 @@ class CoderRuntime:
     def _source(stage: Path) -> Path:
         source = stage / "source"
         if not source.is_dir() or is_linked(source):
-            raise WorkflowError("worker source missing or linked")
+            raise BusinessRuleError("worker source missing or linked")
         return source
 
     @staticmethod
@@ -671,7 +676,7 @@ class CoderRuntime:
     @staticmethod
     def _check_source_digest(source: Path, expected: str) -> None:
         if source_digest(source) != expected:
-            raise WorkflowError("test phase mutated source")
+            raise BusinessRuleError("test phase mutated source")
 
     def _assert_engine(self, dispatch_id: str) -> None:
         _, daemon_id = self.sandbox.recovery_engine(dispatch_id)
@@ -680,7 +685,7 @@ class CoderRuntime:
     def _validated_result(self, stage: Path, claim: dict, context: dict) -> dict:
         result_path = stage / "result.json"
         if is_linked(result_path) or result_path.stat().st_size > 65536:
-            raise WorkflowError("unsafe worker result")
+            raise BusinessRuleError("unsafe worker result")
         result = json.loads(result_path.read_text())
         required = {
             "task_id",
@@ -692,18 +697,18 @@ class CoderRuntime:
             "pr_url",
         }
         if not isinstance(result, dict) or not required.issubset(result):
-            raise WorkflowError("incomplete worker result")
+            raise BusinessRuleError("incomplete worker result")
         if not isinstance(result["pr_url"], str) or not re.fullmatch(
             rf"https://github\.com/{re.escape(REPOSITORY)}/pull/[1-9][0-9]*",
             result["pr_url"],
         ):
-            raise WorkflowError("worker PR reference differs from repository")
+            raise BusinessRuleError("worker PR reference differs from repository")
         validate_sha(result["head_sha"])
         for field in ("task_id", "repository", "branch", "base_sha"):
             if result[field] != context[field]:
-                raise WorkflowError("worker result differs from authorized task")
+                raise BusinessRuleError("worker result differs from authorized task")
         if result["input_sha"] != claim["input_sha"]:
-            raise WorkflowError("worker result input mismatch")
+            raise BusinessRuleError("worker result input mismatch")
         return result
 
     def _register_handoff(

@@ -17,7 +17,7 @@ from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPas
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult
@@ -194,7 +194,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
             assert code_plan.env == (("WFC_CODEX_MODEL", "gpt-6-luna"),)
         calls.append(mode)
         if mode == failure:
-            raise WorkflowError("phase failed")
+            raise BusinessRuleError("phase failed")
         if mode == "prepare":
             (stage / "source").mkdir()
         if mode == "publish":
@@ -238,14 +238,14 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
             if runtime_name == "unregistered"
             else "unsupported runtime provider, model or effort"
         )
-        with pytest.raises(WorkflowError, match=message):
+        with pytest.raises(BusinessRuleError, match=message):
             dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
         assert calls == []
         assert not (tmp_path / ".runtime").exists()
         return
     if failure:
-        with pytest.raises(WorkflowError):
+        with pytest.raises(BusinessRuleError):
             dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
     else:
@@ -312,13 +312,13 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
         )
 
         def unavailable():
-            raise WorkflowError("synthetic Docker outage")
+            raise BusinessRuleError("synthetic Docker outage")
 
         monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
 
     runtime = injected_runtime(config, service, ledger)
     with pytest.raises(
-        WorkflowError, match="unsupported runtime|synthetic Docker outage"
+        BusinessRuleError, match="unsupported runtime|synthetic Docker outage"
     ):
         _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
     dispatch_id = _blocked_dispatch(ledger)
@@ -349,17 +349,17 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
         original(manager, dispatch_id, host, daemon_id)
 
     def uncertain(*args):
-        raise WorkflowError("synthetic launch uncertainty")
+        raise BusinessRuleError("synthetic launch uncertainty")
 
     monkeypatch.setattr(sandbox.SandboxManager, "record_engine", record_pin)
     monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
-    with pytest.raises((OSError, WorkflowError), match="synthetic"):
+    with pytest.raises((OSError, BusinessRuleError), match="synthetic"):
         _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
     dispatch_id = _blocked_dispatch(ledger)
     if pin_written:
         runtime.sandbox._engine_path(dispatch_id).unlink()
     assert not ledger.is_pre_launch(dispatch_id)
-    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+    with pytest.raises(BusinessRuleError, match="lacks its original Docker endpoint"):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
@@ -370,7 +370,7 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim.dispatch_id
     ledger.block(dispatch_id)
-    with pytest.raises(WorkflowError, match="lacks its original Docker endpoint"):
+    with pytest.raises(BusinessRuleError, match="lacks its original Docker endpoint"):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
@@ -387,7 +387,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     path.parent.mkdir()
     path.touch()
     with pytest.raises(
-        WorkflowError, match="pre-launch evidence conflicts with Docker records"
+        BusinessRuleError, match="pre-launch evidence conflicts with Docker records"
     ):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
@@ -418,7 +418,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
             name = args[args.index("--name") + 1]
             if definitive:
                 raise sandbox.DockerCreateRejected("simulated definitive rejection")
-            raise WorkflowError("simulated create timeout")
+            raise BusinessRuleError("simulated create timeout")
         if args[:2] == ["container", "ls"]:
             if visible:
                 return json.dumps(
@@ -458,13 +458,13 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         )
         pytest.fail("an uncertain create must never start a workload")
 
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         _dispatch_pass(service, ledger, execute).execute({"TEST"})
     assert name is not None
     assert ledger.claim({"NEXT"}, 60) is None
     if not definitive:
         # Empty inventory is not proof an accepted request cannot appear later.
-        with pytest.raises(WorkflowError, match="create remains uncertain"):
+        with pytest.raises(BusinessRuleError, match="create remains uncertain"):
             runtime.reconcile(dispatch_id)
         assert ledger.claim({"NEXT"}, 60) is None
         visible = True

@@ -6,7 +6,7 @@ import pytest
 from starlette.requests import Request
 
 from agent_workflow.application.review.dtos import ReviewQueueItem
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.interfaces.cli.admin import BASE, REPO
 from agent_workflow.interfaces.mcp.security import authorize_request
 from agent_workflow.workers.trusted_git.github import GitHubVerifier
@@ -116,14 +116,14 @@ def test_github_verifier_fail_closed_and_escapes_branch(monkeypatch):
     verify = GitHubVerifier({REPO})
     verify(REPO, "task/test", BASE, HEAD)
     assert "task%2Ftest" in calls[0][-1]
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         verify("unknown/repo", "x", BASE, HEAD)
 
     def fail(*args, **kwargs):
         raise subprocess.TimeoutExpired("gh", 15)
 
     monkeypatch.setattr(subprocess, "run", fail)
-    with pytest.raises(WorkflowError, match="unavailable"):
+    with pytest.raises(BusinessRuleError, match="unavailable"):
         verify(REPO, "task/test", BASE, HEAD)
 
 

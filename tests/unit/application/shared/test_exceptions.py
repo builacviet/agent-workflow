@@ -2,15 +2,15 @@
 
 from agent_workflow.application import exceptions
 from agent_workflow.application.shared import errors
+from agent_workflow.domain import workflow_identity
 from agent_workflow.domain.exceptions import BusinessRuleError, DomainError
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database import session_factory, unit_of_work
 
 
 def test_domain_error_retains_legacy_value_error_contract():
-    assert WorkflowError.__base__ is DomainError
-    assert issubclass(WorkflowError, ValueError)
-    assert WorkflowError is BusinessRuleError
+    assert BusinessRuleError.__base__ is DomainError
+    assert issubclass(BusinessRuleError, ValueError)
+    assert not hasattr(workflow_identity, "WorkflowError")
 
 
 def test_application_errors_have_one_canonical_identity():

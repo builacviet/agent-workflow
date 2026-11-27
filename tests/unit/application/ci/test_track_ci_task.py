@@ -10,7 +10,7 @@ from agent_workflow.application.ci.ports import ICiBusinessWriteRepository
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 
 HEAD = "a" * 40
 OTHER = "b" * 40
@@ -65,7 +65,7 @@ def test_rejected_tracking_does_not_write(snapshot, reason):
     operation = Mock(spec=ICiBusinessWriteRepository)
     operation.load_for_tracking.return_value = snapshot
     provider, uow, scope = scope_with(operation)
-    with pytest.raises(WorkflowError, match=reason):
+    with pytest.raises(BusinessRuleError, match=reason):
         TrackCiTaskUseCase(provider).execute("task-1", 21, HEAD)
     operation.track.assert_not_called()
     uow.commit.assert_not_called()

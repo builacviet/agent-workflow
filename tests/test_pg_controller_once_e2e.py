@@ -31,8 +31,9 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
 )
 from agent_workflow.composition import ci_deps, dispatch_deps
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.models import CITask, Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.interfaces.cli import controller_cli
@@ -408,7 +409,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "worker_error",
         "cleanup_error",
     }:
-        with pytest.raises((WorkflowError, RuntimeError)):
+        with pytest.raises((BusinessRuleError, RuntimeError)):
             run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
     else:
         assert run_dispatch(config, AppConfig(pg_runtime_dsn=DSN)) == (
@@ -679,7 +680,7 @@ def test_pg_once_runs_native_dev_stages(
             assert args[:-1] == ["docker", "container", "ls", "-aq", "--filter"]
             assert args[-1].startswith(f"name=^/my-wfc-{dispatch_id}-")
             if fault == "publish_cleanup" and stage_calls[-1] == "publish":
-                raise WorkflowError("cleanup unconfirmed")
+                raise BusinessRuleError("cleanup unconfirmed")
         return b""
 
     def run_stage(args, prompt, remaining):
@@ -739,7 +740,7 @@ def test_pg_once_runs_native_dev_stages(
     monkeypatch.setattr(coder_runtime, "run_container", run_stage)
     app_config = AppConfig(pg_runtime_dsn=DSN)
     if error:
-        with pytest.raises(WorkflowError, match=error):
+        with pytest.raises(BusinessRuleError, match=error):
             run_dispatch(config, app_config)
         assert [call[0] for call in events.mock_calls] == [
             "retire",

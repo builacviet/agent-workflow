@@ -21,7 +21,7 @@ from agent_workflow import budget
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.runners import coder_runtime, sandbox, sandbox_watchdog
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import (
@@ -85,7 +85,7 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
         return b'"fixture-daemon-a" "linux" true false true true ["name=seccomp,profile=builtin"]'
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="cannot enforce"):
+    with pytest.raises(BusinessRuleError, match="cannot enforce"):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
             dispatch_id="a" * 32,
@@ -110,7 +110,7 @@ def test_declared_image_volumes_fail_closed(monkeypatch):
         ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="without declared volumes"):
+    with pytest.raises(BusinessRuleError, match="without declared volumes"):
         sandbox._local_image("sandbox-fixture")
 
 
@@ -120,7 +120,7 @@ def test_workspace_hardlink_is_rejected(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     os.link(source, workspace / "alias")
-    with pytest.raises(WorkflowError, match="link or special file"):
+    with pytest.raises(BusinessRuleError, match="link or special file"):
         sandbox._workspace_bind(workspace, True)
 
 
@@ -226,14 +226,14 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         with pytest.raises(TimeoutError, match="fixture deadline exceeded"):
             run()
     elif outcome == "rm-failure":
-        with pytest.raises(WorkflowError, match=r"^Docker rm failed \(exit 1\)$"):
+        with pytest.raises(BusinessRuleError, match=r"^Docker rm failed \(exit 1\)$"):
             run()
         assert owned is not None
         assert (tmp_path / "fences" / f"{dispatch}.scope").exists()
         return
     else:
         with pytest.raises(
-            WorkflowError, match="container image differs from approved pin"
+            BusinessRuleError, match="container image differs from approved pin"
         ):
             run()
 
@@ -272,7 +272,7 @@ def test_retagged_image_does_not_create_container(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(
-        WorkflowError, match="image reference differs from approved pin"
+        BusinessRuleError, match="image reference differs from approved pin"
     ):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
@@ -303,7 +303,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
             case "create":
                 requested_name = args[args.index("--name") + 1]
                 assert (fences / dispatch).read_text() == requested_name
-                raise WorkflowError("create client timed out")
+                raise BusinessRuleError("create client timed out")
             case "container":
                 assert args[1] == "ls"
                 if present:
@@ -325,7 +325,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
         raise AssertionError(args)
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="create remains uncertain"):
+    with pytest.raises(BusinessRuleError, match="create remains uncertain"):
         SandboxManager(fences).run(
             SandboxPolicy(),
             dispatch_id=dispatch,
@@ -336,7 +336,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
         )
 
     fresh = SandboxManager(fences)
-    with pytest.raises(WorkflowError, match="create remains uncertain"):
+    with pytest.raises(BusinessRuleError, match="create remains uncertain"):
         fresh.stop(dispatch)
     assert (fences / dispatch).read_text() == requested_name
     assert not removed
@@ -373,7 +373,7 @@ def test_cleanup_rejects_unowned_id(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="verify sandbox ownership"):
+    with pytest.raises(BusinessRuleError, match="verify sandbox ownership"):
         manager.stop(dispatch)
     assert len(calls) == 1
 
@@ -530,7 +530,7 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
     ).stdout.strip()
     assert re.fullmatch(r"[0-9a-f]{64}", fixture)
     try:
-        with pytest.raises((TimeoutError, WorkflowError), match="deadline"):
+        with pytest.raises((TimeoutError, BusinessRuleError), match="deadline"):
             run(
                 "from pathlib import Path; import time; "
                 "Path('started').touch(); time.sleep(30)",
@@ -584,7 +584,7 @@ def test_image_with_unapproved_secret_env_is_rejected(monkeypatch):
         ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="local Linux image"):
+    with pytest.raises(BusinessRuleError, match="local Linux image"):
         sandbox._local_image("fixture:secret")
 
 
@@ -620,7 +620,7 @@ def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_require_engine", lambda: engine["id"])
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(WorkflowError, match="daemon identity changed"):
+    with pytest.raises(BusinessRuleError, match="daemon identity changed"):
         manager.stop(dispatch)
     assert scope.exists() and not engine["removed"]
     engine["id"] = "daemon-A-123"
@@ -681,7 +681,7 @@ import sys
 from pathlib import Path
 
 if "agent_workflow.runners.sandbox_watchdog" in sys.orig_argv:
-    from agent_workflow.domain.workflow_identity import WorkflowError
+    from agent_workflow.domain.exceptions import BusinessRuleError
     from agent_workflow.runners import sandbox
 
     original = sandbox._docker
@@ -693,7 +693,7 @@ if "agent_workflow.runners.sandbox_watchdog" in sys.orig_argv:
             assert "WFC_SYNTHETIC_CREDENTIAL" not in os.environ
             assert "HTTPS_PROXY" not in os.environ
             fault.touch()
-            raise WorkflowError("synthetic watchdog daemon outage")
+            raise BusinessRuleError("synthetic watchdog daemon outage")
         return original(args)
 
     sandbox._docker = injected
@@ -800,7 +800,7 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
         lambda *args: pytest.fail("attached after switch"),
     )
     manager = SandboxManager(tmp_path / "fences")
-    with pytest.raises(WorkflowError, match="endpoint changed during execution"):
+    with pytest.raises(BusinessRuleError, match="endpoint changed during execution"):
         manager.run(
             SandboxPolicy(),
             dispatch_id=dispatch,
@@ -837,12 +837,12 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
             if info_calls > 1 and (
                 failure == "persistent" or (failure == "info" and info_calls == 2)
             ):
-                raise WorkflowError("synthetic daemon outage")
+                raise BusinessRuleError("synthetic daemon outage")
             return _ENGINE_INFO
         if args[:2] == ["container", "ls"]:
             inventory_calls += 1
             if failure == "inventory" and inventory_calls == 1:
-                raise WorkflowError("synthetic inventory failure")
+                raise BusinessRuleError("synthetic inventory failure")
             return (
                 json.dumps(
                     {
@@ -904,7 +904,7 @@ def test_create_fence_clears_only_on_definitive_rejection(
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(coder_runtime.subprocess, "run", create)
     terminal = outcome in {"not-launched", "rejected"}
-    expected = sandbox.DockerCreateRejected if terminal else WorkflowError
+    expected = sandbox.DockerCreateRejected if terminal else BusinessRuleError
     with pytest.raises(expected) as error:
         manager.run(
             SandboxPolicy(),
@@ -937,7 +937,7 @@ def test_approved_image_env_name_cannot_carry_proxy_credentials(monkeypatch):
     image = json.loads(_image_metadata(_FIXTURE_PIN))
     image[0]["Config"]["Env"] = ["LANG=https://fixture:synthetic-canary@proxy.invalid"]
     monkeypatch.setattr(sandbox, "_docker", lambda args: json.dumps(image).encode())
-    with pytest.raises(WorkflowError, match="local Linux image"):
+    with pytest.raises(BusinessRuleError, match="local Linux image"):
         sandbox._local_image("fixture")
 
 

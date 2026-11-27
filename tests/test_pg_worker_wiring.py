@@ -17,7 +17,8 @@ from agent_workflow.composition import ci_deps, worker_deps
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.worker_deps import compose_postgres_worker
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
@@ -395,7 +396,7 @@ def test_injected_ci_tracks_only_authorized_head_as_blocked(
     monkeypatch.setattr(factory, "get_scoped_session", lambda: nullcontext(session))
 
     if tracked_head == INPUT:
-        with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
+        with pytest.raises(BusinessRuleError, match="authorized exact task HEAD"):
             runtime.agent_runtime.ci.execute("T", 7, tracked_head)
         session.add.assert_not_called()
         uow.commit.assert_not_called()

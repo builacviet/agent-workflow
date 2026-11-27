@@ -15,7 +15,7 @@ import pytest
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
 from agent_workflow.budget import cleanup_budget, dispatch_budget
-from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.workers.trusted_git import app_auth
 
 
@@ -113,7 +113,7 @@ def loopback(monkeypatch):
 def test_http_total_deadline_kills_and_reaps_request_worker(loopback, endpoint):
     started = time.monotonic()
     with dispatch_budget(time.time() + 5):
-        with pytest.raises(WorkflowError) as error:
+        with pytest.raises(BusinessRuleError) as error:
             app_auth.request_json("GET", endpoint, "synthetic-secret-only")
     assert time.monotonic() - started < 8
     assert loopback.started.is_set()
@@ -130,7 +130,7 @@ def test_http_total_deadline_kills_and_reaps_request_worker(loopback, endpoint):
 def test_fast_response_and_redirect_refusal(loopback):
     with dispatch_budget(time.time() + 10):
         assert app_auth.request_json("GET", "/fast", "synthetic") == {"ok": True}
-        with pytest.raises(WorkflowError):
+        with pytest.raises(BusinessRuleError):
             app_auth.request_json("GET", "/redirect", "synthetic")
     assert loopback.paths == ["/fast", "/redirect"]
     assert all(process.poll() is not None for process in loopback.processes)
@@ -172,7 +172,7 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback):
         ports.leadership, ports.ledger, ports.assignment, execute
     )
     started = time.monotonic()
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         dispatch.execute({task_id}, timeout=60)
     assert time.monotonic() - started < 8
     assert loopback.headers.is_set()
@@ -188,7 +188,7 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback):
 @pytest.mark.parametrize("endpoint", ["/invalid", "/oversize"])
 def test_worker_response_limits_and_errors_are_sanitized(loopback, endpoint):
     with dispatch_budget(time.time() + 10):
-        with pytest.raises(WorkflowError) as error:
+        with pytest.raises(BusinessRuleError) as error:
             app_auth.request_json("GET", endpoint, "synthetic-secret-only")
     assert "synthetic-secret" not in str(error.value)
     assert all(process.poll() is not None for process in loopback.processes)
@@ -204,7 +204,7 @@ def test_empty_worker_response_remains_none(loopback):
     "endpoint", ["//external.example/path", "https://external.example"]
 )
 def test_invalid_endpoint_never_starts_http_worker(loopback, endpoint):
-    with pytest.raises(WorkflowError):
+    with pytest.raises(BusinessRuleError):
         app_auth.request_json("GET", endpoint, "synthetic")
     assert loopback.processes == []
     assert loopback.paths == []

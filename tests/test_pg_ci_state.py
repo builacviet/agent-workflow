@@ -48,9 +48,9 @@ from agent_workflow.composition.mcp_deps import review_writes_provider
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
 from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.webhook.inbox import InboxResult
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
@@ -196,10 +196,10 @@ def test_ci_read_scope_rolls_back_without_commit(fail_during_read, monkeypatch):
     reader = SqlAlchemyCiStateReader(lambda: scope)
 
     if fail_during_read:
-        with pytest.raises(WorkflowError, match="forced read failure"):
+        with pytest.raises(BusinessRuleError, match="forced read failure"):
             with reader._read_session() as active_session:
                 assert active_session is session
-                raise WorkflowError("forced read failure")
+                raise BusinessRuleError("forced read failure")
     else:
         with reader._read_session() as active_session:
             assert active_session is session
@@ -233,7 +233,7 @@ def test_ci_tracking_use_case_load_decide_write_atomically(
     provider = Mock(return_value=scope)
 
     if expected_error:
-        with pytest.raises(WorkflowError, match=expected_error):
+        with pytest.raises(BusinessRuleError, match=expected_error):
             TrackCiTaskUseCase(provider).execute("sample", PR, HEAD)
         operation.track.assert_not_called()
     else:
@@ -389,13 +389,13 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     track = TrackCiTaskUseCase(PostgresCiWriteScope(factory)).execute
     approved = CheckCiApprovalUseCase(reader).execute
     record = RecordCiEvidenceUseCase(PostgresCiWriteScope(factory)).execute
-    with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
+    with pytest.raises(BusinessRuleError, match="authorized exact task HEAD"):
         track(task_id, PR, HEAD)
     handoff(factory, task_id, HEAD)
     for invalid_task, invalid_pr, invalid_head, error_type in [
-        ("unknown", PR, HEAD, WorkflowError),
+        ("unknown", PR, HEAD, BusinessRuleError),
         (task_id, True, HEAD, InvalidApplicationRequestError),
-        (task_id, PR, NEXT, WorkflowError),
+        (task_id, PR, NEXT, BusinessRuleError),
         (task_id, PR, HEAD.upper(), InvalidApplicationRequestError),
     ]:
         with pytest.raises(error_type):
@@ -404,7 +404,7 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
         conn.execute(
             update(Task).where(Task.task_id == task_id).values(repository="other/repo")
         )
-    with pytest.raises(WorkflowError, match="authorized exact task HEAD"):
+    with pytest.raises(BusinessRuleError, match="authorized exact task HEAD"):
         track(task_id, PR, HEAD)
     with factory.transaction() as conn:
         conn.execute(
@@ -412,7 +412,7 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
         )
 
     run_race(lambda: track(task_id, PR, HEAD), lambda: track(task_id, PR, HEAD))
-    with pytest.raises(WorkflowError, match="PR differs"):
+    with pytest.raises(BusinessRuleError, match="PR differs"):
         track(task_id, PR + 1, HEAD)
     tracked = reader.tracked(limit=1)
     assert tracked == (CiTrackedTaskSnapshot(task_id, PR, HEAD, "BLOCKED", 0),)
@@ -426,7 +426,7 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     assert not approved(task_id, NEXT)
 
     valid = evidence(task_id)
-    with pytest.raises(WorkflowError, match="untrusted CI evidence"):
+    with pytest.raises(BusinessRuleError, match="untrusted CI evidence"):
         record(valid.as_dict())
     for overrides in (
         {"repository": "other/repo"},
@@ -440,7 +440,7 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
         {"observed_head_sha": NEXT},
         {"tested_sha": NEXT},
     ):
-        with pytest.raises(WorkflowError):
+        with pytest.raises(BusinessRuleError):
             record(replace(valid, **overrides))
     assert observations(factory, task_id) == []
     record(valid)
@@ -468,12 +468,12 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     assert reader.tracked() == ()
     with (
         review_writes_provider() as (claim_use_case, _),
-        pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
+        pytest.raises(BusinessRuleError, match="verified exact-HEAD CI is required"),
     ):
         claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
-    with pytest.raises(WorkflowError, match="HEAD differs"):
+    with pytest.raises(BusinessRuleError, match="HEAD differs"):
         track(task_id, PR, NEXT)
-    with pytest.raises(WorkflowError, match="mismatched"):
+    with pytest.raises(BusinessRuleError, match="mismatched"):
         record(valid)
     assert len(observations(factory, task_id)) == 1
 
@@ -494,7 +494,9 @@ def test_mcp_provider_claims_require_exact_head_ci(
     if ci_required == "1":
         with (
             review_writes_provider() as (claim_use_case, _),
-            pytest.raises(WorkflowError, match="verified exact-HEAD CI is required"),
+            pytest.raises(
+                BusinessRuleError, match="verified exact-HEAD CI is required"
+            ),
         ):
             claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))
         track(task_id, PR, HEAD)
@@ -502,7 +504,7 @@ def test_mcp_provider_claims_require_exact_head_ci(
         assert approved(task_id, HEAD)
 
     with review_writes_provider() as (claim_use_case, _):
-        with pytest.raises(WorkflowError, match="stale claim SHA"):
+        with pytest.raises(BusinessRuleError, match="stale claim SHA"):
             claim_use_case.execute(ClaimReviewInput(task_id, NEXT, "lead"))
         claim = claim_use_case.execute(ClaimReviewInput(task_id, HEAD, "lead"))
     assert claim.task_id == task_id
@@ -570,7 +572,7 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
     current_handoff(HEAD)
     track(task_id, PR, HEAD)
     record(evidence(task_id, "BLOCKED"))
-    with pytest.raises(WorkflowError, match="repair"):
+    with pytest.raises(BusinessRuleError, match="repair"):
         current_handoff(NEXT)
     record(evidence(task_id, "FAILURE"))
 
@@ -581,14 +583,14 @@ def test_repair_limit_uses_existing_workflow_authorization(setup):
         assert reader.tracked() == (
             CiTrackedTaskSnapshot(task_id, PR, head, "BLOCKED", count),
         )
-        with pytest.raises(WorkflowError, match="mismatched"):
+        with pytest.raises(BusinessRuleError, match="mismatched"):
             record(evidence(task_id, head=previous))
         record(evidence(task_id, "FAILURE", head))
         previous = head
 
-    with pytest.raises(WorkflowError, match="stale"):
+    with pytest.raises(BusinessRuleError, match="stale"):
         current_handoff(HEAD)
-    with pytest.raises(WorkflowError, match="repair"):
+    with pytest.raises(BusinessRuleError, match="repair"):
         current_handoff("d" * 40)
     assert reader.tracked()[0].repair_heads == 2
     assert [row["head_sha"] for row in observations(factory, task_id)] == [
@@ -634,7 +636,7 @@ def test_conflicting_repairs_commit_only_one_head(failed_handoff, monkeypatch):
         try:
             with provide_handoff() as operation:
                 operation.execute(replace(request, new_head_sha=head))
-        except WorkflowError as exc:
+        except BusinessRuleError as exc:
             assert "repair" in str(exc).lower()
             return
         winners.append(head)
@@ -772,7 +774,7 @@ def test_repair_with_unavailable_evidence_is_fail_closed_and_retryable(failed_ha
     try:
         with (
             provider() as operation,
-            pytest.raises(WorkflowError, match="CI repair evidence is unavailable"),
+            pytest.raises(BusinessRuleError, match="CI repair evidence is unavailable"),
         ):
             operation.execute(correction)
     finally:
@@ -994,10 +996,10 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
     for invalid_limit in (0, 21, True):
         with pytest.raises(ValueError, match="bounded"):
             reader.pending_events(invalid_limit)
-    with pytest.raises(WorkflowError, match="invalid"):
+    with pytest.raises(BusinessRuleError, match="invalid"):
         acknowledge(first.delivery_id.upper())
     missing = str(uuid4())
-    with pytest.raises(WorkflowError, match="unknown"):
+    with pytest.raises(BusinessRuleError, match="unknown"):
         acknowledge(missing)
     with pytest.raises(IntegrityError) as fk:
         with factory.transaction() as conn:
