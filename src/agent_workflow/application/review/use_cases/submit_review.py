@@ -14,13 +14,13 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ci_allows,
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.review.policy import (
     TaskFacts,
     effort_allowed,
     submission_allowed,
     verdict_allowed,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 class SubmitReviewUseCase:
@@ -81,7 +81,7 @@ class SubmitReviewUseCase:
         with self.uow:
             task = repo.lock_task(submission.task_id)
             if task is None:
-                raise WorkflowError("unknown authorized task")
+                raise BusinessRuleError("unknown authorized task")
             claim = repo.find_claim(task.task_id, submission.claim_token)
             duplicate = submission_allowed(
                 task,

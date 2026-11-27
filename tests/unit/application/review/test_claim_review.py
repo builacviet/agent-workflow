@@ -4,26 +4,35 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from test_review_writes import HEAD, TASK
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.use_cases.claim_review import ClaimReviewUseCase
 from agent_workflow.application.review.use_cases.write_contracts import ClaimReviewInput
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.review.policy import ClaimFacts
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @pytest.mark.parametrize(
-    ("request_data", "message"),
+    ("request_data", "error_type", "message"),
     [
-        (ClaimReviewInput(" ", HEAD, "lead"), "unknown authorized task"),
-        (ClaimReviewInput("T", HEAD, " "), "invalid reviewer"),
-        (ClaimReviewInput("T", "short", "lead"), "full lowercase"),
+        (
+            ClaimReviewInput(" ", HEAD, "lead"),
+            InvalidApplicationRequestError,
+            "unknown authorized task",
+        ),
+        (
+            ClaimReviewInput("T", HEAD, " "),
+            InvalidApplicationRequestError,
+            "invalid reviewer",
+        ),
+        (ClaimReviewInput("T", "short", "lead"), BusinessRuleError, "full lowercase"),
     ],
 )
-def test_invalid_claim_does_not_open_uow(request_data, message):
+def test_invalid_claim_does_not_open_uow(request_data, error_type, message):
     uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     case = ClaimReviewUseCase(uow, repo, clock=Mock(), token=Mock(), require_ci=True)
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(error_type, match=message):
         case.execute(request_data)
     uow.__enter__.assert_not_called()
     uow.commit.assert_not_called()
@@ -33,6 +42,7 @@ def test_invalid_claim_does_not_open_uow(request_data, message):
 @pytest.mark.parametrize(
     ("task", "sha", "claim", "message"),
     [
+        (None, HEAD, None, "unknown authorized task"),
         (replace(TASK, status="AWAITING_HANDOFF"), HEAD, None, "not reviewable"),
         (replace(TASK, rounds=2), HEAD, None, "not reviewable"),
         (TASK, "c" * 40, None, "stale claim SHA"),
@@ -53,7 +63,7 @@ def test_claim_rejections_do_not_write(task, sha, claim, message):
     case = ClaimReviewUseCase(
         uow, repo, clock=lambda: 100, token=lambda: "token", require_ci=True
     )
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(BusinessRuleError, match=message):
         case.execute(ClaimReviewInput("T", sha, "lead"))
     repo.claim.assert_not_called()
     repo.expire.assert_not_called()

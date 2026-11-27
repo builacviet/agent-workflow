@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock, call
 import pytest
 from test_review_writes import HEAD, TASK, submission
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.use_cases.submit_review import (
     SubmitReviewUseCase,
 )
@@ -13,9 +14,9 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     SubmitReviewInput,
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.review.policy import ClaimFacts
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 FINDING = ReviewFinding(
@@ -42,7 +43,7 @@ def test_submit_duplicate_and_effort_gate():
     case = SubmitReviewUseCase(
         uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
-    with pytest.raises(WorkflowError, match="effort cannot be verified"):
+    with pytest.raises(BusinessRuleError, match="effort cannot be verified"):
         case.execute(SubmitReviewInput(submission(), "lead"))
     repo.submit.assert_not_called()
     uow.commit.assert_not_called()
@@ -72,6 +73,7 @@ def test_submit_duplicate_and_effort_gate():
 @pytest.mark.parametrize(
     ("change", "message"),
     [
+        ({"task": None}, "unknown authorized task"),
         ({"reviewer": "other"}, "owner mismatch"),
         ({"claim": None}, "owner mismatch"),
         (
@@ -107,7 +109,7 @@ def test_submit_rejections_have_no_persistence(change, message):
     case = SubmitReviewUseCase(
         uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(BusinessRuleError, match=message):
         case.execute(
             SubmitReviewInput(
                 change.get("data", submission()), change.get("reviewer", "lead")
@@ -133,7 +135,7 @@ def test_verdict_policy_rejects_invalid_cases(
 ):
     from agent_workflow.domain.review.policy import verdict_allowed
 
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(BusinessRuleError, match=message):
         verdict_allowed(round_number, verdict, prior, resolutions, new_ids)
 
 
@@ -196,7 +198,7 @@ def test_submit_matches_and_replays_historical_canonical_payload(fixture, submit
         claim, status="SUBMITTED", submitted_payload=historical.decode("ascii")
     )
     assert case.execute(SubmitReviewInput(submitted, "lead")).duplicate
-    with pytest.raises(WorkflowError, match="conflicting duplicate"):
+    with pytest.raises(BusinessRuleError, match="conflicting duplicate"):
         case.execute(SubmitReviewInput(replace(submitted, summary="different"), "lead"))
     repo.submit.assert_not_called()
     uow.commit.assert_not_called()
@@ -204,34 +206,87 @@ def test_submit_matches_and_replays_historical_canonical_payload(fixture, submit
 
 
 @pytest.mark.parametrize(
-    ("updates", "reviewer", "message"),
+    ("updates", "reviewer", "error_type", "message"),
     [
-        ({"task_id": 1}, "lead", "task_id must be a string"),
-        ({"task_id": " "}, "lead", "unknown claim"),
-        ({"claim_token": ""}, "lead", "unknown claim"),
-        ({"reviewed_head_sha": "short"}, "lead", "full lowercase"),
-        ({"review_round": True}, "lead", "review_round must be 1 or 2"),
-        ({"review_round": 3}, "lead", "review_round must be 1 or 2"),
-        ({"verdict": WorkflowStatus.IN_REVIEW}, "lead", "invalid review verdict"),
-        ({"summary": ""}, "lead", "summary must be a nonempty string"),
-        ({"findings": ({},)}, "lead", "findings must be a tuple of review findings"),
-        ({"prior_resolutions": []}, "lead", "prior_resolutions must be a mapping"),
-        ({"prior_resolutions": {1: "FIXED"}}, "lead", "invalid prior resolution"),
-        ({"prior_resolutions": {"F": "unknown"}}, "lead", "invalid prior resolution"),
-        ({"actual_effort": 3}, "lead", "actual_effort must be a string"),
+        (
+            {"task_id": 1},
+            "lead",
+            InvalidApplicationRequestError,
+            "task_id must be a string",
+        ),
+        ({"task_id": " "}, "lead", InvalidApplicationRequestError, "unknown claim"),
+        ({"claim_token": ""}, "lead", InvalidApplicationRequestError, "unknown claim"),
+        ({"reviewed_head_sha": "short"}, "lead", BusinessRuleError, "full lowercase"),
+        (
+            {"review_round": True},
+            "lead",
+            InvalidApplicationRequestError,
+            "review_round must be 1 or 2",
+        ),
+        (
+            {"review_round": 3},
+            "lead",
+            InvalidApplicationRequestError,
+            "review_round must be 1 or 2",
+        ),
+        (
+            {"verdict": WorkflowStatus.IN_REVIEW},
+            "lead",
+            InvalidApplicationRequestError,
+            "invalid review verdict",
+        ),
+        (
+            {"summary": ""},
+            "lead",
+            InvalidApplicationRequestError,
+            "summary must be a nonempty string",
+        ),
+        (
+            {"findings": ({},)},
+            "lead",
+            InvalidApplicationRequestError,
+            "findings must be a tuple of review findings",
+        ),
+        (
+            {"prior_resolutions": []},
+            "lead",
+            InvalidApplicationRequestError,
+            "prior_resolutions must be a mapping",
+        ),
+        (
+            {"prior_resolutions": {1: "FIXED"}},
+            "lead",
+            InvalidApplicationRequestError,
+            "invalid prior resolution",
+        ),
+        (
+            {"prior_resolutions": {"F": "unknown"}},
+            "lead",
+            InvalidApplicationRequestError,
+            "invalid prior resolution",
+        ),
+        (
+            {"actual_effort": 3},
+            "lead",
+            InvalidApplicationRequestError,
+            "actual_effort must be a string",
+        ),
         (
             {"verification_evidence": False},
             "lead",
+            InvalidApplicationRequestError,
             "verification_evidence must be a string",
         ),
-        ({}, " ", "invalid reviewer"),
+        ({}, " ", InvalidApplicationRequestError, "invalid reviewer"),
     ],
 )
-def test_invalid_typed_submission_does_not_open_scope(updates, reviewer, message):
+def test_invalid_typed_submission_does_not_open_scope(
+    updates, reviewer, error_type, message
+):
     uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     case = SubmitReviewUseCase(uow, repo, clock=Mock(), token=Mock(), require_ci=True)
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(error_type, match=message):
         case.execute(SubmitReviewInput(submission(**updates), reviewer))
     uow.__enter__.assert_not_called()
     uow.commit.assert_not_called()
@@ -251,7 +306,7 @@ def test_invalid_typed_finding_does_not_open_scope(updates, message):
     uow = MagicMock(spec=IUnitOfWork)
     repo = Mock()
     case = SubmitReviewUseCase(uow, repo, clock=Mock(), token=Mock(), require_ci=True)
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(InvalidApplicationRequestError, match=message):
         case.execute(
             SubmitReviewInput(
                 submission(findings=(replace(FINDING, **updates),)), "lead"

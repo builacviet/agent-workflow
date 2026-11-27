@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Protocol, get_args
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.domain.review.policy import ClaimFacts, TaskFacts, require_ci
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
+from agent_workflow.domain.workflow_identity import validate_sha
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ _REVIEW_VERDICTS = (
 def _require_text(field: str, value: object, *, nonempty: bool = False) -> None:
     if not isinstance(value, str) or (nonempty and not value):
         requirement = "a nonempty string" if nonempty else "a string"
-        raise WorkflowError(f"{field} must be {requirement}")
+        raise InvalidApplicationRequestError(f"{field} must be {requirement}")
 
 
 @dataclass(frozen=True)
@@ -69,9 +70,11 @@ class ReviewFinding:
         if not isinstance(self.severity, str) or self.severity not in get_args(
             FindingSeverity
         ):
-            raise WorkflowError("invalid finding severity")
+            raise InvalidApplicationRequestError("invalid finding severity")
         if self.line is not None and (type(self.line) is not int or self.line < 1):
-            raise WorkflowError("finding line must be a positive integer")
+            raise InvalidApplicationRequestError(
+                "finding line must be a positive integer"
+            )
 
 
 @dataclass(frozen=True)
@@ -97,18 +100,20 @@ class ReviewSubmission:
             if value is not None:
                 _require_text(name, value)
         if type(self.review_round) is not int or not 1 <= self.review_round <= 2:
-            raise WorkflowError("review_round must be 1 or 2")
+            raise InvalidApplicationRequestError("review_round must be 1 or 2")
         if (
             not isinstance(self.verdict, WorkflowStatus)
             or self.verdict not in _REVIEW_VERDICTS
         ):
-            raise WorkflowError("invalid review verdict")
+            raise InvalidApplicationRequestError("invalid review verdict")
         if not isinstance(self.findings, tuple) or any(
             not isinstance(finding, ReviewFinding) for finding in self.findings
         ):
-            raise WorkflowError("findings must be a tuple of review findings")
+            raise InvalidApplicationRequestError(
+                "findings must be a tuple of review findings"
+            )
         if not isinstance(self.prior_resolutions, Mapping):
-            raise WorkflowError("prior_resolutions must be a mapping")
+            raise InvalidApplicationRequestError("prior_resolutions must be a mapping")
         resolutions = dict(self.prior_resolutions)
         allowed = get_args(Resolution)
         if any(
@@ -117,7 +122,7 @@ class ReviewSubmission:
             or value not in allowed
             for key, value in resolutions.items()
         ):
-            raise WorkflowError("invalid prior resolution")
+            raise InvalidApplicationRequestError("invalid prior resolution")
         object.__setattr__(self, "prior_resolutions", MappingProxyType(resolutions))
 
 
@@ -128,14 +133,16 @@ class SubmitReviewInput:
 
     def __post_init__(self) -> None:
         if not isinstance(self.submission, ReviewSubmission):
-            raise WorkflowError("invalid review submission")
+            raise InvalidApplicationRequestError("invalid review submission")
         if (
             not self.submission.task_id.strip()
             or not self.submission.claim_token.strip()
         ):
-            raise WorkflowError("unknown claim or claim owner mismatch")
+            raise InvalidApplicationRequestError(
+                "unknown claim or claim owner mismatch"
+            )
         if not isinstance(self.reviewer, str) or not self.reviewer.strip():
-            raise WorkflowError("invalid reviewer")
+            raise InvalidApplicationRequestError("invalid reviewer")
         validate_sha(self.submission.reviewed_head_sha)
 
 

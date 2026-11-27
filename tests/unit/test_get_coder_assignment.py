@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import (
     PreviousReview,
     ReviewFinding,
@@ -16,7 +17,6 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
@@ -86,6 +86,6 @@ def test_latest_resolution_filters_findings_and_preserves_wire_context():
 
 def test_blank_id_rejected_before_reader():
     reader = Mock()
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(InvalidApplicationRequestError):
         GetCoderAssignmentUseCase(reader).execute(" ")
     reader.execute.assert_not_called()

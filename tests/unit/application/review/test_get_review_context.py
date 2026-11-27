@@ -3,6 +3,7 @@ from typing import assert_type
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import (
     PreviousReview,
     ReviewContextSnapshot,
@@ -16,8 +17,8 @@ from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextOutput,
     GetReviewContextUseCase,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 BASE = "a" * 40
 HEAD = "b" * 40
@@ -174,7 +175,9 @@ def test_blank_task_id_is_rejected_before_read(task_id: str) -> None:
     reader = FakeReviewContextReader(None)
     use_case = GetReviewContextUseCase(reader)
 
-    with pytest.raises(WorkflowError, match="^task_id must not be blank$"):
+    with pytest.raises(
+        InvalidApplicationRequestError, match="^task_id must not be blank$"
+    ):
         use_case.execute(GetReviewContextInput(task_id))
 
     assert reader.reads == []
@@ -183,13 +186,15 @@ def test_blank_task_id_is_rejected_before_read(task_id: str) -> None:
 @pytest.mark.parametrize("task_id", ["missing", " missing "])
 def test_unknown_task_fails_closed(task_id: str) -> None:
     reader = FakeReviewContextReader(None)
-    with pytest.raises(WorkflowError, match="^unknown authorized task$"):
+    with pytest.raises(BusinessRuleError, match="^unknown authorized task$"):
         GetReviewContextUseCase(reader).execute(GetReviewContextInput(task_id))
     assert reader.reads == [task_id]
 
 
 def test_non_string_task_id_is_rejected():
-    with pytest.raises(WorkflowError, match="^task_id must be a string$"):
+    with pytest.raises(
+        InvalidApplicationRequestError, match="^task_id must be a string$"
+    ):
         GetReviewContextInput(1)
 
 
