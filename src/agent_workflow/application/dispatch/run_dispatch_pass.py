@@ -13,6 +13,7 @@ from agent_workflow.application.dispatch.ports import (
     IDispatchLeadership,
     IDispatchRepository,
 )
+from agent_workflow.application.exceptions import DispatchCleanupUnconfirmedError
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
@@ -115,7 +116,7 @@ class RunDispatchPassUseCase:
                     execution,
                 )
             except Exception:
-                raise BusinessRuleError(
+                raise DispatchCleanupUnconfirmedError(
                     "terminal dispatch cleanup unconfirmed; reconcile engine pin"
                 ) from None
             return True

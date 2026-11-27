@@ -1,4 +1,4 @@
-"""Backend-independent persistence failures exposed to application boundaries."""
+"""Backend-independent failures exposed to application boundaries."""
 
 
 class ApplicationError(RuntimeError):
@@ -19,3 +19,7 @@ class PersistenceUnavailableError(PersistenceError):
 
 class CorruptedPersistenceDataError(PersistenceError):
     """Persisted workflow data does not satisfy its expected contract."""
+
+
+class DispatchCleanupUnconfirmedError(ApplicationError):
+    """Terminal dispatch cleanup could not be confirmed."""
