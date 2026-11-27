@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from agent_workflow.runners.agent_runtime import AgentRuntime
+from agent_workflow.application.runtime.dtos import (
+    RuntimePlan,
+    RuntimeRequest,
+    RuntimeSpec,
+    WorkerResult,
+)
+from agent_workflow.application.runtime.services.agent_execution import (
+    AgentExecutionService,
+)
 
-CLAIM = {"dispatch_id": "a" * 32, "input_sha": "b" * 40}
+CLAIM = {
+    "dispatch_id": "a" * 32,
+    "input_sha": "b" * 40,
+    "task_id": "TASK",
+}
 CONTEXT = {"task_id": "TASK"}
 HEAD = "c" * 40
 
@@ -67,11 +78,7 @@ class FakeHost:
 
     def _run_code(self, claim, source, request, plan, prompt, approved_image_id):
         self._call("code")
-        return SimpleNamespace(
-            declared_runtime_version="1",
-            observed_image_id=None,
-            telemetry="UNVERIFIED",
-        )
+        return WorkerResult(request=request, declared_runtime_version="1")
 
     def _source_digest(self, source):
         self._call("digest")
@@ -89,15 +96,22 @@ class FakeHost:
         self._call("handoff")
 
 
-def run(runtime: AgentRuntime):
-    request = SimpleNamespace(spec=SimpleNamespace(runtime="fake"))
-    return runtime.execute_bound(CLAIM, CONTEXT, request, SimpleNamespace(), None)
+def run(runtime: AgentExecutionService):
+    request = RuntimeRequest(
+        spec=RuntimeSpec("fake", "fixture", "model"),
+        role="dev",
+        phase="code",
+        dispatch_id=CLAIM["dispatch_id"],
+        input_sha=CLAIM["input_sha"],
+    )
+    return runtime.execute(CLAIM, CONTEXT, request, RuntimePlan(("agent",)), None)
 
 
-def test_stage_order_and_injected_evidence_ci(monkeypatch):
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+def test_stage_order_and_injected_evidence_ci():
     calls = []
-    runtime = AgentRuntime(FakeHost(calls), FakeDispatch(calls), FakeCi(calls))
+    runtime = AgentExecutionService(
+        FakeHost(calls), FakeDispatch(calls), FakeCi(calls), require_ci_tracking=True
+    )
     assert run(runtime) == HEAD
     assert calls == [
         "stage",
@@ -134,10 +148,11 @@ def test_stage_order_and_injected_evidence_ci(monkeypatch):
 @pytest.mark.parametrize(
     "failure", ["prepare", "code", "test", "publish", "validate_result"]
 )
-def test_stage_failure_propagates_and_cleans_up(monkeypatch, failure):
-    monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
+def test_stage_failure_propagates_and_cleans_up(failure):
     calls = []
-    runtime = AgentRuntime(FakeHost(calls, fail_at=failure), FakeDispatch(calls))
+    runtime = AgentExecutionService(
+        FakeHost(calls, fail_at=failure), FakeDispatch(calls), require_ci_tracking=False
+    )
     with pytest.raises(RuntimeError, match=f"uncertain {failure}"):
         run(runtime)
     if failure == "validate_result":
@@ -149,30 +164,30 @@ def test_stage_failure_propagates_and_cleans_up(monkeypatch, failure):
     assert calls.count("publish") <= 1
 
 
-def test_leadership_guard_fails_closed_before_stage(monkeypatch):
-    monkeypatch.delenv("WFC_CI_GATE_REQUIRED", raising=False)
+def test_leadership_guard_fails_closed_before_stage():
     calls = []
-    runtime = AgentRuntime(
+    runtime = AgentExecutionService(
         FakeHost(calls),
         FakeDispatch(calls),
         leadership_guard=lambda: False,
+        require_ci_tracking=False,
     )
     with pytest.raises(PermissionError, match="leadership guard"):
         run(runtime)
     assert calls == []
 
 
-def test_required_ci_port_fails_closed(monkeypatch):
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+def test_required_ci_port_fails_closed():
     calls = []
-    runtime = AgentRuntime(FakeHost(calls), FakeDispatch(calls))
+    runtime = AgentExecutionService(
+        FakeHost(calls), FakeDispatch(calls), require_ci_tracking=True
+    )
     with pytest.raises(RuntimeError, match="CI tracking required"):
         run(runtime)
     assert calls == []
 
 
-def test_leadership_loss_during_evidence_blocks_handoff_and_ci(monkeypatch):
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+def test_leadership_loss_during_evidence_blocks_handoff_and_ci():
     calls = []
     owns_lock = [True]
     dispatch = FakeDispatch(calls)
@@ -183,11 +198,12 @@ def test_leadership_loss_during_evidence_blocks_handoff_and_ci(monkeypatch):
         owns_lock[0] = False
 
     dispatch.record_runtime_evidence = lose_lock_after_evidence
-    runtime = AgentRuntime(
+    runtime = AgentExecutionService(
         FakeHost(calls),
         dispatch,
         FakeCi(calls),
         leadership_guard=lambda: owns_lock[0],
+        require_ci_tracking=True,
     )
     with pytest.raises(PermissionError, match="leadership guard"):
         run(runtime)
@@ -199,8 +215,7 @@ def test_leadership_loss_during_evidence_blocks_handoff_and_ci(monkeypatch):
 
 
 @pytest.mark.parametrize("failed_port", ["evidence", "ci"])
-def test_state_port_exception_propagates_without_republish(monkeypatch, failed_port):
-    monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "1")
+def test_state_port_exception_propagates_without_republish(failed_port):
     calls = []
     dispatch = FakeDispatch(calls)
     ci = FakeCi(calls)
@@ -218,7 +233,9 @@ def test_state_port_exception_propagates_without_republish(monkeypatch, failed_p
 
         ci.execute = fail_ci
 
-    runtime = AgentRuntime(FakeHost(calls), dispatch, ci)
+    runtime = AgentExecutionService(
+        FakeHost(calls), dispatch, ci, require_ci_tracking=True
+    )
     with pytest.raises(RuntimeError, match=f"{failed_port} unavailable"):
         run(runtime)
     assert calls.count("publish") == 1
@@ -250,7 +267,7 @@ def test_leadership_loss_fences_each_material_boundary(lose_after, denied):
             return False
         return True
 
-    runtime = AgentRuntime(
+    runtime = AgentExecutionService(
         FakeHost(calls),
         FakeDispatch(calls),
         FakeCi(calls),
@@ -282,8 +299,11 @@ def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
         raise failure
 
     host._run_code = interrupt
-    runtime = AgentRuntime(
-        host, FakeDispatch(calls), leadership_guard=lambda: owns_lock
+    runtime = AgentExecutionService(
+        host,
+        FakeDispatch(calls),
+        leadership_guard=lambda: owns_lock,
+        require_ci_tracking=False,
     )
     with pytest.raises(failure):
         run(runtime)
@@ -294,7 +314,9 @@ def test_in_flight_phase_ends_on_deadline_or_cancellation(failure):
 
 def test_uncertain_cleanup_is_not_retried():
     calls = []
-    runtime = AgentRuntime(FakeHost(calls, fail_at="stop"), FakeDispatch(calls))
+    runtime = AgentExecutionService(
+        FakeHost(calls, fail_at="stop"), FakeDispatch(calls), require_ci_tracking=False
+    )
     with pytest.raises(RuntimeError, match="uncertain stop"):
         run(runtime)
     assert calls == ["stage", "prepare", "stop"]

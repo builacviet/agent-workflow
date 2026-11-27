@@ -1,101 +1,38 @@
-"""Trusted stage coordinator with injected dispatch, CI and ownership seams.
-
-Adapters and Docker capabilities are supplied by the host facade. This module
-does not select a database, grant worker permissions or implement leadership.
+"""Layer: Application
+Responsibility: Coordinate trusted agent execution phases and evidence recording.
+Dependencies: Runtime operation ports, DTOs and dispatch budget.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Protocol
 
-from agent_workflow.application.runtime.dtos import (
-    RuntimePlan,
-    RuntimeRequest,
-    WorkerResult,
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.runtime.dtos import RuntimePlan, RuntimeRequest
+from agent_workflow.application.runtime.ports import (
+    ICiTracking,
+    IDispatchEvidence,
+    IRuntimeHost,
 )
 from agent_workflow.budget import check_deadline
 
 
-class DispatchEvidence(Protocol):
-    def is_pre_launch(self, dispatch_id: str) -> bool: ...
-
-    def retire_pre_launch(self, dispatch_id: str) -> None: ...
-
-    def record_runtime_evidence(
-        self,
-        dispatch_id: str,
-        task_id: str,
-        input_sha: str,
-        runtime_name: str,
-        declared_version: str,
-        image_id: str | None,
-        telemetry: str,
-        tested_digest: str,
-        published_head_sha: str,
-    ) -> None: ...
-
-
-class CiTracking(Protocol):
-    def execute(self, task_id: str, pr_number: int, head_sha: str) -> None: ...
-
-
-class RuntimeHost(Protocol):
-    def docker(
-        self,
-        claim: dict,
-        stage: Path,
-        mode: str,
-        prompt: str = "",
-        *,
-        code_plan: RuntimePlan | None = None,
-    ) -> bytes: ...
-
-    def stop(self, dispatch_id: str) -> None: ...
-
-    def _run_code(
-        self,
-        claim: dict,
-        source: Path,
-        request: RuntimeRequest,
-        plan: RuntimePlan,
-        prompt: str,
-        approved_image_id: str | None,
-    ) -> WorkerResult: ...
-
-    def _prepare_stage(self, claim: dict, context: dict) -> tuple[Path, dict]: ...
-
-    def _source(self, stage: Path) -> Path: ...
-
-    def _source_digest(self, source: Path) -> str: ...
-
-    def _check_source_digest(self, source: Path, expected: str) -> None: ...
-
-    def _assert_engine(self, dispatch_id: str) -> None: ...
-
-    def _validated_result(self, stage: Path, claim: dict, context: dict) -> dict: ...
-
-    def _register_handoff(
-        self, context: dict, result: dict, test_summary: str
-    ) -> None: ...
-
-
-class AgentRuntime:
+class AgentExecutionService:
     """Coordinate one trusted dispatch using explicitly supplied state ports."""
 
     def __init__(
         self,
-        host: RuntimeHost,
-        dispatch: DispatchEvidence,
-        ci: CiTracking | None = None,
+        host: IRuntimeHost,
+        dispatch: IDispatchEvidence,
+        ci: ICiTracking | None = None,
         leadership_guard: Callable[[], bool] | None = None,
         *,
-        require_ci_tracking: bool = False,
+        require_ci_tracking: bool,
     ) -> None:
+        if type(require_ci_tracking) is not bool:
+            raise InvalidApplicationRequestError("explicit boolean CI policy required")
         self.host = host
         self.dispatch = dispatch
         self.ci = ci
@@ -119,7 +56,7 @@ class AgentRuntime:
             # its pinned resources once, including after loss or cancellation.
             self.host.stop(dispatch_id)
 
-    def execute_bound(
+    def execute(
         self,
         claim: dict,
         context: dict,
@@ -127,10 +64,20 @@ class AgentRuntime:
         plan: RuntimePlan,
         approved_image_id: str | None,
     ) -> str:
-        track_ci = (
-            self.require_ci_tracking or os.environ.get("WFC_CI_GATE_REQUIRED") == "1"
-        )
-        if track_ci and self.ci is None:
+        if not (
+            isinstance(claim, dict)
+            and isinstance(context, dict)
+            and isinstance(request, RuntimeRequest)
+            and isinstance(plan, RuntimePlan)
+            and claim.get("dispatch_id") == request.dispatch_id
+            and claim.get("input_sha") == request.input_sha
+            and isinstance(claim.get("task_id"), str)
+            and claim["task_id"].strip()
+            and claim["task_id"] == claim["task_id"].strip()
+            and claim["task_id"] == context.get("task_id")
+        ):
+            raise InvalidApplicationRequestError("invalid agent execution input")
+        if self.require_ci_tracking and self.ci is None:
             raise RuntimeError("CI tracking required but not configured")
         self.require_leadership()
         stage, envelope = self.host._prepare_stage(claim, context)
@@ -176,7 +123,7 @@ class AgentRuntime:
         self.require_leadership()
         self.host._register_handoff(context, result, envelope["test_summary"])
         # CI remains BLOCKED until the separate Controller re-verifies HEAD.
-        if track_ci and self.ci is not None:
+        if self.require_ci_tracking and self.ci is not None:
             self.require_leadership()
             self.ci.execute(
                 context["task_id"],
