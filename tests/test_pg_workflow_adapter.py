@@ -42,6 +42,7 @@ from agent_workflow.composition.postgres_mcp import (
 )
 from agent_workflow.composition.review_deps import create_get_review_context_use_case
 from agent_workflow.composition.task_handoff_deps import PostgresHandoffProvider
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.models import (
     CITask,
     Review,
@@ -64,7 +65,6 @@ from agent_workflow.infrastructure.database.repositories.task_handoff import (
 )
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
 from agent_workflow.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.mcp.server import build_mcp_server
 from agent_workflow.interfaces.review_assignment_response import review_context_response

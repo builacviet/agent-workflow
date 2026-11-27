@@ -17,6 +17,7 @@ from agent_workflow.composition import ci_deps, worker_deps
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.composition.worker_deps import compose_postgres_worker
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.infrastructure.database.repositories.ci_state_repository import (
     SqlAlchemyCiStateRepository,
 )
@@ -25,7 +26,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 from agent_workflow.runners import coder_runtime
 
 DISPATCH = "a" * 32

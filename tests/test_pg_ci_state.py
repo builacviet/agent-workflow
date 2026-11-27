@@ -50,6 +50,7 @@ from agent_workflow.domain.ci_evidence import CiEvidence, WebhookNotification
 from agent_workflow.domain.ci_tracking import CiTrackingSnapshot
 from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.webhook.inbox import InboxResult
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database.models import (
     CIObservation,
     CIProcessedDelivery,
@@ -81,7 +82,6 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.cli.ci_controller import (
     CiRunRequest,
     CiRunResponse,
