@@ -12,6 +12,7 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     SubmitReviewInput,
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.review.policy import (
     ClaimFacts,
     TaskFacts,
@@ -19,7 +20,6 @@ from agent_workflow.domain.review.policy import (
     verdict_allowed,
 )
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 HEAD = "a" * 40
 TASK = TaskFacts("T", "READY_IN_REVIEW", HEAD, "b" * 40, 0, "medium", False)
@@ -52,7 +52,7 @@ def test_claim_checks_ci_and_commits_only_after_validation():
     case = ClaimReviewUseCase(
         uow, repo, clock=lambda: 100, token=lambda: "token", require_ci=True
     )
-    with pytest.raises(WorkflowError, match="exact-HEAD CI"):
+    with pytest.raises(BusinessRuleError, match="exact-HEAD CI"):
         case.execute(ClaimReviewInput("T", HEAD, "lead"))
     repo.claim.assert_not_called()
     uow.commit.assert_not_called()
@@ -87,12 +87,12 @@ def test_submit_rejects_expired_and_conflicting_duplicate_without_write():
     case = SubmitReviewUseCase(
         uow, repo, clock=lambda: 100, token=lambda: "review", require_ci=True
     )
-    with pytest.raises(WorkflowError, match="claim expired"):
+    with pytest.raises(BusinessRuleError, match="claim expired"):
         case.execute(SubmitReviewInput(submission(), "lead"))
     repo.find_claim.return_value = ClaimFacts(
         "token", "lead", HEAD, 100, "SUBMITTED", "different"
     )
-    with pytest.raises(WorkflowError, match="conflicting duplicate"):
+    with pytest.raises(BusinessRuleError, match="conflicting duplicate"):
         case.execute(SubmitReviewInput(submission(), "lead"))
     repo.submit.assert_not_called()
     uow.commit.assert_not_called()
@@ -102,9 +102,9 @@ def test_round_policy_and_repair_ci():
     assert not require_ci(False, "CI_REPAIR_HANDOFF", False)
     assert require_ci(False, "HANDOFF", False)
     verdict_allowed(2, "APPROVED", {"F"}, {"F": "FIXED"}, [])
-    with pytest.raises(WorkflowError, match="two-round"):
+    with pytest.raises(BusinessRuleError, match="two-round"):
         verdict_allowed(2, "CHANGES_REQUESTED", set(), {}, ["F"])
-    with pytest.raises(WorkflowError, match="explicit resolution"):
+    with pytest.raises(BusinessRuleError, match="explicit resolution"):
         verdict_allowed(2, "APPROVED", {"F"}, {}, [])
-    with pytest.raises(WorkflowError, match="unique"):
+    with pytest.raises(BusinessRuleError, match="unique"):
         verdict_allowed(2, "ESCALATED", {"F"}, {"F": "FIXED"}, ["F"])

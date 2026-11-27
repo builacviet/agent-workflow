@@ -5,8 +5,8 @@ Dependencies: Domain errors and immutable review facts.
 
 from dataclasses import dataclass
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @dataclass(frozen=True)
@@ -36,11 +36,11 @@ def require_ci(required: bool, handoff: str | None, success: bool) -> bool:
 
 def claim_allowed(task: TaskFacts, sha: str, ci_ok: bool, active: bool) -> None:
     if task.status != WorkflowStatus.READY_IN_REVIEW or task.rounds >= 2 or active:
-        raise WorkflowError("task is not reviewable")
+        raise BusinessRuleError("task is not reviewable")
     if sha != task.head:
-        raise WorkflowError("stale claim SHA")
+        raise BusinessRuleError("stale claim SHA")
     if not ci_ok:
-        raise WorkflowError("verified exact-HEAD CI is required before review")
+        raise BusinessRuleError("verified exact-HEAD CI is required before review")
 
 
 def submission_allowed(
@@ -55,21 +55,23 @@ def submission_allowed(
     ci_ok: bool,
 ) -> bool:
     if claim is None or claim.reviewer != reviewer:
-        raise WorkflowError("unknown claim or claim owner mismatch")
+        raise BusinessRuleError("unknown claim or claim owner mismatch")
     if claim.status == "SUBMITTED":
         if claim.submitted_payload != canonical:
-            raise WorkflowError("conflicting duplicate submission")
+            raise BusinessRuleError("conflicting duplicate submission")
         return True
     if claim.status != "ACTIVE" or claim.expires_at <= now:
-        raise WorkflowError("claim expired; reclaim without consuming a round")
+        raise BusinessRuleError("claim expired; reclaim without consuming a round")
     if task.status != WorkflowStatus.IN_REVIEW or task.rounds >= 2:
-        raise WorkflowError("task is not in an active review")
+        raise BusinessRuleError("task is not in an active review")
     if sha != task.head or sha != claim.expected_sha:
-        raise WorkflowError("stale submission SHA")
+        raise BusinessRuleError("stale submission SHA")
     if not ci_ok:
-        raise WorkflowError("verified exact-HEAD CI is required for review submission")
+        raise BusinessRuleError(
+            "verified exact-HEAD CI is required for review submission"
+        )
     if round_number != task.rounds + 1 or effort != task.effort:
-        raise WorkflowError("round or requested effort mismatch")
+        raise BusinessRuleError("round or requested effort mismatch")
     return False
 
 
@@ -81,23 +83,23 @@ def verdict_allowed(
     new_ids: list[str],
 ) -> None:
     if set(resolutions) != prior:
-        raise WorkflowError("all prior findings require explicit resolution")
+        raise BusinessRuleError("all prior findings require explicit resolution")
     if len(set(new_ids)) != len(new_ids) or prior.intersection(new_ids):
-        raise WorkflowError("finding identities must be new and unique")
+        raise BusinessRuleError("finding identities must be new and unique")
     failure = (
         WorkflowStatus.CHANGES_REQUESTED
         if round_number == 1
         else WorkflowStatus.ESCALATED
     )
     if verdict not in {WorkflowStatus.APPROVED, failure}:
-        raise WorkflowError("verdict violates two-round policy")
+        raise BusinessRuleError("verdict violates two-round policy")
     unresolved = any(value != "FIXED" for value in resolutions.values())
     if verdict == WorkflowStatus.APPROVED and (new_ids or unresolved):
-        raise WorkflowError(
+        raise BusinessRuleError(
             "approval requires no new findings and all prior findings fixed"
         )
     if verdict != WorkflowStatus.APPROVED and not new_ids and not unresolved:
-        raise WorkflowError(
+        raise BusinessRuleError(
             "failure verdict requires a code finding; operational limitations are not verdicts"
         )
 
@@ -110,6 +112,6 @@ def effort_allowed(
         and task.verified_effort
         and (actual != task.effort or not evidence or evidence == "unverified")
     ):
-        raise WorkflowError(
+        raise BusinessRuleError(
             "required effort cannot be verified; approval blocked without consuming a round"
         )
