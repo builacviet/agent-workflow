@@ -15,7 +15,7 @@ Follow [AGENTS.md](../../AGENTS.md) and the approved task's Scope Envelope; publ
 
 ## R2 layer, DI and file header contract
 
-**Read this section only for new/migrated R2 modules or changes to entrypoints, wiring or layer boundaries.** It defines the mandatory R2 convention. The remaining `orchestration/` code is a tracked migration.
+**Read this section only for new/migrated R2 modules or changes to entrypoints, wiring or layer boundaries.** It defines the mandatory R2 convention.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
