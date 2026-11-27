@@ -36,6 +36,7 @@ from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database.models import CITask, Task
 from agent_workflow.infrastructure.database.session_factory import PostgresFactory
+from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.interfaces.cli import controller_cli
@@ -43,7 +44,6 @@ from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
-from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.runners import coder_runtime
 from agent_workflow.workers.trusted_git import main as trusted_worker
 

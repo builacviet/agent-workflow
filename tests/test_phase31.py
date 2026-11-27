@@ -386,7 +386,6 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
     from agent_workflow.infrastructure.runtime import sandbox
 
     monkeypatch.setattr(sandbox, "docker_command", command)
-
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     from unittest.mock import Mock
 

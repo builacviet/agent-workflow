@@ -161,13 +161,7 @@ def runtime_modules() -> dict[str, Path]:
     return modules
 
 
-def test_runtime_dependency_cycles_have_exact_legacy_inventory():
-    modules = runtime_modules()
-    known = set(modules)
-    edges = {
-        name: (imports(path, known) & known) - {name}
-        for name, path in modules.items()
-    }
+def runtime_dependency_cycles(edges: dict[str, set[str]]) -> set[tuple[str, ...]]:
     cycles = set()
 
     def visit(start, current, route):
@@ -177,11 +171,21 @@ def test_runtime_dependency_cycles_have_exact_legacy_inventory():
                     tuple(route[index:] + route[:index]) for index in range(len(route))
                 ]
                 cycles.add(min(variants))
-            elif target not in route and len(route) < len(modules):
+            elif target not in route and len(route) < len(edges):
                 visit(start, target, route + [target])
 
     for start in sorted(edges):
         visit(start, start, [start])
+    return cycles
+
+
+def test_runtime_dependency_cycles_have_exact_legacy_inventory():
+    modules = runtime_modules()
+    known = set(modules)
+    edges = {
+        name: (imports(path, known) & known) - {name} for name, path in modules.items()
+    }
+    cycles = runtime_dependency_cycles(edges)
     expected = {tuple(cycle) for cycle in POLICY["cycles"]["legacy"]}
     assert cycles == expected, (
         f"Runtime import-cycle drift. New: {cycles - expected}; "
@@ -203,6 +207,27 @@ def test_runtime_graph_resolves_absolute_and_relative_child_imports():
         known,
     )
     assert found & known == known
+
+
+def test_runtime_graph_detects_cross_layer_and_infrastructure_cycles():
+    runner = "agent_workflow.runners.coder_runtime"
+    sandbox = "agent_workflow.infrastructure.runtime.sandbox"
+    workspace = "agent_workflow.infrastructure.runtime.workspace"
+    sources = {
+        runner: "from agent_workflow.infrastructure.runtime import sandbox",
+        sandbox: "from agent_workflow.runners import coder_runtime\n"
+        "from . import workspace",
+        workspace: "from . import sandbox",
+    }
+    known = set(sources)
+    edges = {
+        name: imports_from_source(source, name.rpartition(".")[0], known) & known
+        for name, source in sources.items()
+    }
+    assert runtime_dependency_cycles(edges) == {
+        (sandbox, runner),
+        (sandbox, workspace),
+    }
 
 
 def test_runtime_infrastructure_does_not_import_legacy_runners():
