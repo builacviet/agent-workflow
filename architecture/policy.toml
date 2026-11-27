@@ -30,6 +30,6 @@ composition = ["agent_workflow.interfaces"]
 "architecture/**" = "architecture-governance"
 "docs/adr/AW-001-clean-architecture-governance.md" = "architecture-governance"
 
-# The single accepted runner cycle is retired during R2; any additional cycle fails CI.
+# No legacy runtime dependency cycles remain; any cycle fails CI.
 [cycles]
-legacy = [["agent_workflow.runners.coder_runtime", "agent_workflow.runners.sandbox"]]
+legacy = []

@@ -2,6 +2,8 @@
 
 **CURRENT:** `src/agent_workflow/application/runtime/dtos.py` defines RuntimeRequest/Spec, RuntimeManifest, RuntimePlan and WorkerResult; `application/runtime/ports.py` defines IAgentRuntimePlugin (manifest, plan, result). `infrastructure/runtime/registry.py` defines RuntimeRegistry, and `infrastructure/runtime/codex_plugin.py` implements CodexCLIPlugin. Composition constructs the trusted Codex-only registry once per dispatch scope, validates selection before database acquisition, and injects the same registry into the Worker when a claim is eligible. The host accepts an approved image and capability-matched request. RuntimeRegistry._resolve currently supports **only role=dev and phase=code**. CodexCLIPlugin is a built-in legacy adapter with special approved auth behavior.
 
+The concrete offline Docker backend, its transport helpers and detached watchdog live in `infrastructure/runtime/sandbox.py` and `infrastructure/runtime/sandbox_watchdog.py`. The watchdog launches via `agent_workflow.infrastructure.runtime.sandbox_watchdog`. Host link detection lives in `infrastructure/runtime/workspace.py`. The legacy CoderRuntime still owns construction until the explicit sandbox DI task. This ownership change is not evidence of real Docker conformance; authorized live checks remain NOT VERIFIED until run.
+
 **NOT CURRENT:** generic Planner/QC/Reviewer adapter role routing, a public plugin installation/SDK marketplace, a Docker/Podman interchangeable ExecutionBackend port, trusted model/effort attestation or automatic provider credentials. Do not report these as implemented.
 
 ## TARGET (proposed)

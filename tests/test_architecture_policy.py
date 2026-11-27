@@ -34,15 +34,17 @@ def area_for(path: Path) -> str | None:
     return None
 
 
-def imports(path: Path) -> set[str]:
+def imports(path: Path, known_modules: set[str] | None = None) -> set[str]:
     """AST catches imports even inside functions and conditional blocks."""
     source = path.read_text(encoding="utf-8")
     module_path = path.relative_to(SOURCE).with_suffix("").parts
     package = ".".join(module_path if path.name == "__init__.py" else module_path[:-1])
-    return imports_from_source(source, package)
+    return imports_from_source(source, package, known_modules)
 
 
-def imports_from_source(source: str, package: str) -> set[str]:
+def imports_from_source(
+    source: str, package: str, known_modules: set[str] | None = None
+) -> set[str]:
     tree = ast.parse(source)
     found = set()
     for node in ast.walk(tree):
@@ -78,7 +80,9 @@ def imports_from_source(source: str, package: str) -> set[str]:
                         for prefix in forbidden_imports
                         if prefix == imported or prefix.startswith(imported + ".")
                     )
-                if node.module == "agent_workflow.runners":
+                if node.module == "agent_workflow.runners" or (
+                    known_modules is not None and imported in known_modules
+                ):
                     found.add(imported)
     return found
 
@@ -144,15 +148,24 @@ def test_trusted_worker_never_imports_workflow_db_drivers():
             ), f"Worker must not access workflow DB: {path.relative_to(ROOT)}: {module}"
 
 
-def test_runner_dependency_cycles_have_exact_legacy_inventory():
-    paths = list((SOURCE / "agent_workflow" / "runners").glob("*.py"))
-    modules = {
-        "agent_workflow.runners." + path.stem: path
-        for path in paths
-        if path.name != "__init__.py"
-    }
+def runtime_modules() -> dict[str, Path]:
+    modules = {}
+    for root in (
+        SOURCE / "agent_workflow" / "runners",
+        SOURCE / "agent_workflow" / "infrastructure" / "runtime",
+    ):
+        for path in root.rglob("*.py"):
+            parts = path.relative_to(SOURCE).with_suffix("").parts
+            name = ".".join(parts[:-1] if path.name == "__init__.py" else parts)
+            modules[name] = path
+    return modules
+
+
+def test_runtime_dependency_cycles_have_exact_legacy_inventory():
+    modules = runtime_modules()
+    known = set(modules)
     edges = {
-        name: {other for other in imports(path) if other in modules}
+        name: (imports(path, known) & known) - {name}
         for name, path in modules.items()
     }
     cycles = set()
@@ -171,14 +184,43 @@ def test_runner_dependency_cycles_have_exact_legacy_inventory():
         visit(start, start, [start])
     expected = {tuple(cycle) for cycle in POLICY["cycles"]["legacy"]}
     assert cycles == expected, (
-        f"Runner import-cycle drift. New: {cycles - expected}; "
+        f"Runtime import-cycle drift. New: {cycles - expected}; "
         f"obsolete allowed cycles: {expected - cycles}"
     )
 
 
+def test_runtime_graph_resolves_absolute_and_relative_child_imports():
+    known = {
+        "agent_workflow.runners.coder_runtime",
+        "agent_workflow.infrastructure.runtime.sandbox",
+        "agent_workflow.infrastructure.runtime.workspace",
+    }
+    found = imports_from_source(
+        "from agent_workflow.runners import coder_runtime as runner\n"
+        "from . import sandbox\n"
+        "from agent_workflow.infrastructure.runtime import workspace\n",
+        "agent_workflow.infrastructure.runtime",
+        known,
+    )
+    assert found & known == known
+
+
+def test_runtime_infrastructure_does_not_import_legacy_runners():
+    known = set(runtime_modules())
+    for name, path in runtime_modules().items():
+        if not name.startswith("agent_workflow.infrastructure.runtime"):
+            continue
+        assert not any(
+            module == "agent_workflow.runners"
+            or module.startswith("agent_workflow.runners.")
+            for module in imports(path, known)
+        ), f"{name} imports legacy runners"
+
+
 def test_import_policy_rejects_future_violations():
     assert forbidden("domain", "agent_workflow.storage.postgres")
-    assert forbidden("application", "agent_workflow.runners.sandbox")
+    assert forbidden("application", "agent_workflow.runners.coder_runtime")
+    assert forbidden("application", "agent_workflow.infrastructure.runtime.sandbox")
     assert forbidden("domain", "agent_workflow.workers.trusted_git.main")
     assert forbidden("application", "agent_workflow.workers.trusted_git.app_auth")
     assert forbidden("trusted_git", "agent_workflow.storage.repository")
@@ -449,9 +491,6 @@ src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agen
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.load_auth0_config|1
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
-src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1
-src/agent_workflow/runners/sandbox.py|inline-import|_docker|agent_workflow.runners.coder_runtime.docker_command|1
-src/agent_workflow/runners/sandbox.py|inline-import|_workspace_bind|agent_workflow.runners.coder_runtime.is_linked|1
 src/agent_workflow/sandbox_state_paths.py|inline-import|_windows_fixed_drive|ctypes|1
 src/agent_workflow/workers/trusted_git/main.py|inline-import|git_auth|base64|1
 """

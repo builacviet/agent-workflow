@@ -150,7 +150,9 @@ def test_pg_ci_launcher_does_not_import_dispatch_provider_or_worker(
             "agent_workflow.composition.dispatch_deps",
             "agent_workflow.composition.worker_deps",
             "agent_workflow.runners.coder_runtime",
-            "agent_workflow.runners.sandbox",
+            "agent_workflow.infrastructure.runtime.sandbox",
+            "agent_workflow.infrastructure.runtime.sandbox_watchdog",
+            "agent_workflow.infrastructure.runtime.workspace",
             "agent_workflow.storage.dispatch_repository",
         }
 

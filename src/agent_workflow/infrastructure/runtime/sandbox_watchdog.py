@@ -1,4 +1,6 @@
-"""Detached trusted host watchdog for strict offline sandbox deadlines.
+"""Layer: Infrastructure
+Responsibility: Enforce strict offline sandbox deadlines in a detached host process.
+Dependencies: Sandbox backend, dispatch budgets and Domain errors.
 
 Runs in a separate process/session, pinned to the original local Docker endpoint.
 Never receives credentials or untrusted prompt content. Fail closed on engine drift.
@@ -14,7 +16,7 @@ from pathlib import Path
 
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.runners.sandbox import (
+from agent_workflow.infrastructure.runtime.sandbox import (
     SandboxManager,
     _assert_daemon,
     _bind_host,

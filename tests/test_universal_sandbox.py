@@ -22,15 +22,15 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime import sandbox, sandbox_watchdog
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
-from agent_workflow.runners import coder_runtime, sandbox, sandbox_watchdog
-from agent_workflow.runners.coder_runtime import CoderRuntime
-from agent_workflow.runners.sandbox import (
+from agent_workflow.infrastructure.runtime.sandbox import (
     SandboxManager,
     SandboxPolicy,
     SandboxRunResult,
 )
+from agent_workflow.runners.coder_runtime import CoderRuntime
 
 _FIXTURE_PIN = "sha256:" + "b" * 64
 _ENGINE_INFO = (
@@ -177,7 +177,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
                     if outcome == "watchdog-race":
                         # Docker still lists the ID while the watchdog removes it.
                         removal_pending = True
-                    return coder_runtime.docker_command(["docker", *args])
+                    return sandbox.docker_command(["docker", *args])
                 owned = None
                 return b""
         raise AssertionError(args)
@@ -205,8 +205,8 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         return b"fixture output"
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    monkeypatch.setattr(coder_runtime, "run_container", attach)
-    monkeypatch.setattr(coder_runtime.subprocess, "run", failed_rm)
+    monkeypatch.setattr(sandbox, "run_container", attach)
+    monkeypatch.setattr(sandbox.subprocess, "run", failed_rm)
     monkeypatch.setattr(sandbox.time, "sleep", wait_for_docker)
     monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
 
@@ -660,7 +660,7 @@ def test_watchdog_recovers_from_daemon_error_after_controller_death(
     code = """\
 import sys
 from pathlib import Path
-from agent_workflow.runners.sandbox import SandboxManager, SandboxPolicy
+from agent_workflow.infrastructure.runtime.sandbox import SandboxManager, SandboxPolicy
 manager = SandboxManager(Path(sys.argv[1]))
 manager.run(
     SandboxPolicy(timeout_seconds=8), dispatch_id=sys.argv[2],
@@ -682,9 +682,9 @@ import os
 import sys
 from pathlib import Path
 
-if "agent_workflow.runners.sandbox_watchdog" in sys.orig_argv:
+if "agent_workflow.infrastructure.runtime.sandbox_watchdog" in sys.orig_argv:
     from agent_workflow.domain.exceptions import BusinessRuleError
-    from agent_workflow.runners import sandbox
+    from agent_workflow.infrastructure.runtime import sandbox
 
     original = sandbox._docker
     ready = Path({str(scope.with_name(scope.name + ".ready"))!r})
@@ -797,7 +797,7 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(SandboxManager, "_start_watchdog", lambda *args: None)
     monkeypatch.setattr(
-        coder_runtime,
+        sandbox,
         "run_container",
         lambda *args: pytest.fail("attached after switch"),
     )
@@ -899,12 +899,12 @@ def test_create_fence_clears_only_on_definitive_rejection(
         if args[0] == "image":
             return _image_metadata(_FIXTURE_PIN)
         if args[0] == "create":
-            return coder_runtime.docker_command(["docker", *args])
+            return sandbox.docker_command(["docker", *args])
         assert args[:2] == ["container", "ls"]
         return b""
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    monkeypatch.setattr(coder_runtime.subprocess, "run", create)
+    monkeypatch.setattr(sandbox.subprocess, "run", create)
     terminal = outcome in {"not-launched", "rejected"}
     expected = sandbox.DockerCreateRejected if terminal else BusinessRuleError
     with pytest.raises(expected) as error:

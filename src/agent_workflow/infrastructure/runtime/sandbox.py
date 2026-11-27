@@ -1,4 +1,7 @@
-"""Credential-free Docker execution for trusted runtime plans."""
+"""Layer: Infrastructure
+Responsibility: Execute and reconcile trusted, isolated Docker runtime plans.
+Dependencies: Application runtime contracts, Domain errors and dispatch budgets.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +12,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -21,8 +25,14 @@ from agent_workflow.application.runtime.dtos import (
     credential_env_name,
     nonsecret_env_value,
 )
-from agent_workflow.budget import cleanup_budget, dispatch_budget, operation_timeout
+from agent_workflow.budget import (
+    check_deadline,
+    cleanup_budget,
+    dispatch_budget,
+    operation_timeout,
+)
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime.workspace import is_linked
 
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
@@ -195,10 +205,103 @@ def docker_security_args(policy: SandboxPolicy) -> list[str]:
     ]
 
 
-def _docker(args: list[str]) -> bytes:
-    # Reuse the trusted runner's subprocess and shared dispatch budget.
-    from agent_workflow.runners.coder_runtime import docker_command
+def docker_command(args: list[str]) -> bytes:
+    if not args or args[0] != "docker":
+        raise BusinessRuleError("Controller may only launch Docker")
+    # Use fixed operation names only. Arguments and subprocess output can
+    # contain host paths, environment values or untrusted content.
+    operation = "command"
+    for prefix, name in (
+        (["info"], "info"),
+        (["image", "inspect"], "image inspect"),
+        (["create"], "create"),
+        (["container", "inspect"], "container inspect"),
+        (["container", "ls"], "container ls"),
+        (["rm"], "rm"),
+        (["volume", "inspect"], "volume inspect"),
+    ):
+        if args[1 : 1 + len(prefix)] == prefix:
+            operation = name
+            break
 
+    timeout = operation_timeout(30)
+    invocation, env = _docker_invocation(args)
+    try:
+        return subprocess.run(
+            invocation, env=env, capture_output=True, check=True, timeout=timeout
+        ).stdout
+    except subprocess.TimeoutExpired:
+        check_deadline()
+        raise BusinessRuleError(f"Docker {operation} timed out") from None
+    except subprocess.CalledProcessError as error:
+        if operation == "create" and error.returncode == 1:
+            # Only an exact daemon rejection of the requested immutable image
+            # is terminal. Timeouts, transport errors and conflicts are not.
+            rejection = (error.stderr or b"").strip()
+            image = next(
+                (arg for arg in args if re.fullmatch(r"sha256:[0-9a-f]{64}", arg)), None
+            )
+            if (
+                image
+                and rejection
+                == b"Error response from daemon: No such image: "
+                + image.encode("ascii")
+            ):
+                raise DockerCreateRejected(
+                    "Docker rejected the sandbox image"
+                ) from None
+        raise BusinessRuleError(
+            f"Docker {operation} failed (exit {error.returncode})"
+        ) from None
+    except (FileNotFoundError, PermissionError):
+        if operation == "create":
+            raise DockerCreateRejected("could not launch Docker create") from None
+        raise BusinessRuleError(f"could not launch Docker {operation}") from None
+    except OSError:
+        raise BusinessRuleError(f"Docker {operation} I/O failed") from None
+
+
+def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
+    # Output goes to private bounded temporary storage, never Docker logs/chat.
+    with tempfile.TemporaryFile() as output:
+        invocation, env = _docker_invocation(args)
+        process = subprocess.Popen(
+            invocation, env=env, stdin=subprocess.PIPE, stdout=output, stderr=output
+        )
+        try:
+            started = time.monotonic()
+            payload = prompt.encode()
+            while True:
+                try:
+                    process.communicate(
+                        payload, timeout=operation_timeout(min(1, remaining))
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    payload = None
+                    if (
+                        time.monotonic() - started >= remaining
+                        or os.fstat(output.fileno()).st_size > 4_000_000
+                    ):
+                        raise BusinessRuleError(
+                            "runtime deadline or output budget exceeded"
+                        )
+            check_deadline()
+            size = output.tell()
+            if process.returncode or size > 4_000_000:
+                raise BusinessRuleError(
+                    "coder/test container failed or output exceeded limit"
+                )
+            output.seek(0)
+            return output.read()
+        except BaseException:
+            process.kill()
+            process.wait(timeout=10)
+            raise
+
+
+def _docker(args: list[str]) -> bytes:
+    # Reuse the Docker transport and shared dispatch budget.
     return docker_command(["docker", *args])
 
 
@@ -264,8 +367,6 @@ def _local_image(image: str) -> str:
 
 def _workspace_bind(workspace: Path, writable: bool) -> str:
     # The trusted caller supplies an exclusive, disposable snapshot.
-    from agent_workflow.runners.coder_runtime import is_linked
-
     try:
         if (
             not workspace.is_absolute()
@@ -364,8 +465,6 @@ class SandboxManager:
         env: tuple[tuple[str, str], ...] = (),
     ) -> SandboxRunResult:
         """Launch the pinned image and return bounded output with observed identity."""
-        from agent_workflow.runners.coder_runtime import run_container
-
         security = docker_security_args(policy)
         prefix = _dispatch_prefix(dispatch_id)
         if not isinstance(phase, str) or not _PHASE.fullmatch(phase):
@@ -662,7 +761,7 @@ class SandboxManager:
         command = [
             sys.executable,
             "-m",
-            "agent_workflow.runners.sandbox_watchdog",
+            "agent_workflow.infrastructure.runtime.sandbox_watchdog",
             str(scope),
             dispatch_id,
         ]

@@ -43,7 +43,8 @@ from agent_workflow.interfaces.cli import dispatch_controller as dispatch_cli
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
 )
-from agent_workflow.runners import coder_runtime, sandbox
+from agent_workflow.infrastructure.runtime import sandbox
+from agent_workflow.runners import coder_runtime
 from agent_workflow.workers.trusted_git import main as trusted_worker
 
 DSN = "postgresql+psycopg://user:pass@127.0.0.1/workflow_test"
@@ -747,8 +748,8 @@ def test_pg_once_runs_native_dev_stages(
                 (source / "src" / "value.txt").write_bytes(b"mutated\n")
         return b""
 
-    monkeypatch.setattr(coder_runtime, "docker_command", fake_docker_command)
-    monkeypatch.setattr(coder_runtime, "run_container", run_stage)
+    monkeypatch.setattr(sandbox, "docker_command", fake_docker_command)
+    monkeypatch.setattr(sandbox, "run_container", run_stage)
     app_config = AppConfig(pg_runtime_dsn=DSN)
     if error:
         with pytest.raises(BusinessRuleError, match=error):

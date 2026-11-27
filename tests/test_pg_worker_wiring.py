@@ -28,6 +28,7 @@ from agent_workflow.infrastructure.postgres_leadership import (
     LeadershipDomain,
     PostgresLeadershipLock,
 )
+from agent_workflow.infrastructure.runtime import sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 from agent_workflow.runners import coder_runtime
@@ -57,8 +58,8 @@ def forbidden(*args, **kwargs):
 def forbid_worker_effects(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
-    monkeypatch.setattr(coder_runtime, "docker_command", forbidden)
-    monkeypatch.setattr(coder_runtime, "run_container", forbidden)
+    monkeypatch.setattr(sandbox, "docker_command", forbidden)
+    monkeypatch.setattr(sandbox, "run_container", forbidden)
 
 
 def _codex_registry():
