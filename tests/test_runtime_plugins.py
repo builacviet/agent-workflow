@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.runtime_plugins import (
     CodexCLIPlugin,
     RuntimeManifest,
@@ -15,7 +15,6 @@ from agent_workflow.runners.runtime_plugins import (
     WorkerResult,
 )
 
-
 FAKE_IMAGE_ID = "sha256:" + "b" * 64
 
 
@@ -23,11 +22,13 @@ class FakePlugin:
     manifest = RuntimeManifest(
         runtime="fake",
         declared_runtime_version="fixture-1",
-        supported_combinations=frozenset({
-            ("fixture", "fixture-model", "medium"),
-            ("fixture", "fixture-fast", "low"),
-            ("other", "other-model", "low"),
-        }),
+        supported_combinations=frozenset(
+            {
+                ("fixture", "fixture-model", "medium"),
+                ("fixture", "fixture-fast", "low"),
+                ("other", "other-model", "low"),
+            }
+        ),
         capabilities=frozenset({"workspace-read", "workspace-write"}),
         approved_image_id=FAKE_IMAGE_ID,
     )
@@ -83,18 +84,16 @@ def fake_request(request_spec):
 
 def test_r02_fake_plugin_substitution(registry, fake_request):
     assert registry.plan(fake_request).command == (
-        "fake-exec", "fixture-model", "medium"
+        "fake-exec",
+        "fixture-model",
+        "medium",
     )
     assert registry.approved_image_id(fake_request) == FAKE_IMAGE_ID
-    result = registry.result(
-        fake_request, b"fixture", observed_image_id=FAKE_IMAGE_ID
-    )
+    result = registry.result(fake_request, b"fixture", observed_image_id=FAKE_IMAGE_ID)
     assert result == WorkerResult(
         fake_request, "fixture-1", observed_image_id=FAKE_IMAGE_ID
     )
-    registry.validate_result(
-        fake_request, result, observed_image_id=FAKE_IMAGE_ID
-    )
+    registry.validate_result(fake_request, result, observed_image_id=FAKE_IMAGE_ID)
     with pytest.raises(WorkflowError, match="differs from approved pin"):
         registry.validate_result(fake_request, result)
 
@@ -133,7 +132,9 @@ def test_r05_role_and_phase_preserved(registry, request_spec, role, phase):
 )
 def test_r06_no_silent_fallback(registry, request_spec, field, value):
     request = replace(request_spec, spec=replace(request_spec.spec, **{field: value}))
-    with pytest.raises(WorkflowError, match="unsupported runtime provider, model or effort"):
+    with pytest.raises(
+        WorkflowError, match="unsupported runtime provider, model or effort"
+    ):
         registry.plan(request)
 
 
@@ -145,7 +146,9 @@ def test_r06_individually_known_values_do_not_approve_a_tuple(
     registry, fake_request, field, value
 ):
     request = replace(fake_request, spec=replace(fake_request.spec, **{field: value}))
-    with pytest.raises(WorkflowError, match="unsupported runtime provider, model or effort"):
+    with pytest.raises(
+        WorkflowError, match="unsupported runtime provider, model or effort"
+    ):
         registry.plan(request)
 
 
@@ -206,7 +209,9 @@ def test_r08_output_cannot_attest_model_or_effort(registry, request_spec):
 def test_r08_adapter_cannot_attest_model_or_effort(fake_request, telemetry):
     class UntrustedTelemetryPlugin(FakePlugin):
         def result(self, request: RuntimeRequest, output: bytes) -> WorkerResult:
-            return WorkerResult(request, self.manifest.declared_runtime_version, **telemetry)
+            return WorkerResult(
+                request, self.manifest.declared_runtime_version, **telemetry
+            )
 
     registry = RuntimeRegistry((UntrustedTelemetryPlugin(),))
     with pytest.raises(WorkflowError, match="unverified model or effort telemetry"):
@@ -244,7 +249,9 @@ def test_reject_missing_or_mismatched_launch_evidence(registry, fake_request, ob
 def test_reject_adapter_claim_of_launch_evidence(fake_request):
     class SpoofingPlugin(FakePlugin):
         def result(self, request: RuntimeRequest, output: bytes) -> WorkerResult:
-            return replace(super().result(request, output), observed_image_id=FAKE_IMAGE_ID)
+            return replace(
+                super().result(request, output), observed_image_id=FAKE_IMAGE_ID
+            )
 
     registry = RuntimeRegistry((SpoofingPlugin(),))
     with pytest.raises(WorkflowError, match="adapter cannot attest the launch image"):
@@ -279,7 +286,6 @@ def test_invalid_runtime_plan_rejected(command, env):
         RuntimePlan(command, env)
 
 
-
 def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
     class EnvPlugin(FakePlugin):
         def plan(self, request):
@@ -290,12 +296,15 @@ def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
         other.plan(fake_request)
 
 
-@pytest.mark.parametrize("value", [
-    "Bearer synthetic-canary",
-    "https://fixture:synthetic-canary@proxy.invalid",
-    "access_token=synthetic-canary",
-    "ghp_synthetic123456789",
-])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Bearer synthetic-canary",
+        "https://fixture:synthetic-canary@proxy.invalid",
+        "access_token=synthetic-canary",
+        "ghp_synthetic123456789",
+    ],
+)
 def test_approved_env_key_cannot_carry_credential_canary(value):
     with pytest.raises(WorkflowError, match="invalid runtime environment"):
         RuntimePlan(("fake-exec",), (("WFC_PLUGIN_OPTION", value),))

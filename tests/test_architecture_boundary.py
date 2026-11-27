@@ -17,7 +17,7 @@ from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPas
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners import coder_runtime, sandbox
 from agent_workflow.runners.coder_runtime import CoderRuntime
 from agent_workflow.runners.sandbox import SandboxRunResult

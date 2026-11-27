@@ -449,7 +449,6 @@ src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agen
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|agent_workflow.interfaces.mcp.auth0_oauth.load_auth0_config|1
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|mcp.server.auth.settings.AuthSettings|1
 src/agent_workflow/interfaces/mcp/server.py|inline-import|create_mcp_server|pydantic.AnyHttpUrl|1
-src/agent_workflow/runners/coder_runtime.py|inline-import|CoderRuntime._validated_result|agent_workflow.integrations.github.validate_sha|1
 src/agent_workflow/runners/sandbox.py|inline-import|SandboxManager.run|agent_workflow.runners.coder_runtime.run_container|1
 src/agent_workflow/runners/sandbox.py|inline-import|_docker|agent_workflow.runners.coder_runtime.docker_command|1
 src/agent_workflow/runners/sandbox.py|inline-import|_workspace_bind|agent_workflow.runners.coder_runtime.is_linked|1

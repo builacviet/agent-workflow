@@ -7,15 +7,19 @@ Never receives credentials or untrusted prompt content. Fail closed on engine dr
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from pathlib import Path
 
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.runners.sandbox import (
-    SandboxManager, _assert_daemon, _bind_host, _dispatch_prefix, _sync_directory,
+    SandboxManager,
+    _assert_daemon,
+    _bind_host,
+    _dispatch_prefix,
+    _sync_directory,
 )
 
 
@@ -27,7 +31,9 @@ def enforce(scope: Path, dispatch_id: str) -> None:
         _enforce_bound(manager, scope, dispatch_id, record)
 
 
-def _enforce_bound(manager: SandboxManager, scope: Path, dispatch_id: str, record: dict) -> None:
+def _enforce_bound(
+    manager: SandboxManager, scope: Path, dispatch_id: str, record: dict
+) -> None:
     ready = scope.with_name(scope.name + ".ready")
     with ready.open("x", encoding="ascii") as handle:
         handle.write("watchdog-ready")

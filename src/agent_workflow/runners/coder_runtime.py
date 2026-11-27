@@ -26,10 +26,11 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
 )
 from agent_workflow.budget import check_deadline, cleanup_budget, operation_timeout
 from agent_workflow.domain.task.handoff import HandoffRequest
-from agent_workflow.integrations.github import (
+from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
     WorkflowError,
     canonical_repository,
+    validate_sha,
 )
 from agent_workflow.interfaces.review_assignment_response import (
     coder_assignment_response,
@@ -700,8 +701,6 @@ class CoderRuntime:
             result["pr_url"],
         ):
             raise WorkflowError("worker PR reference differs from repository")
-        from agent_workflow.integrations.github import validate_sha
-
         validate_sha(result["head_sha"])
         for field in ("task_id", "repository", "branch", "base_sha"):
             if result[field] != context[field]:

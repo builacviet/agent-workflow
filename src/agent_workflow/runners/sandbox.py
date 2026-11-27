@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass
 import json
 import math
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
 from agent_workflow.budget import cleanup_budget, dispatch_budget, operation_timeout
-from agent_workflow.integrations.github import WorkflowError
-from agent_workflow.runners.runtime_plugins import credential_env_name, nonsecret_env_value
+from agent_workflow.domain.workflow_identity import WorkflowError
+from agent_workflow.runners.runtime_plugins import (
+    credential_env_name,
+    nonsecret_env_value,
+)
 
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
@@ -29,12 +32,28 @@ _DAEMON_ID = re.compile(r"[A-Za-z0-9:._-]{8,180}")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*")
 _PHASE = re.compile(r"[a-z][a-z0-9-]{0,19}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_SAFE_IMAGE_ENV = frozenset({
-    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TMPDIR",
-    "PYTHON_VERSION", "PYTHON_SHA256", "PYTHON_PIP_VERSION", "PYTHON_SETUPTOOLS_VERSION",
-    "PYTHON_GET_PIP_URL", "PYTHON_GET_PIP_SHA256", "PYTHONUNBUFFERED",
-    "PYTHONDONTWRITEBYTECODE", "PYTHONPATH", "GPG_KEY",
-})
+_SAFE_IMAGE_ENV = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TZ",
+        "TMPDIR",
+        "PYTHON_VERSION",
+        "PYTHON_SHA256",
+        "PYTHON_PIP_VERSION",
+        "PYTHON_SETUPTOOLS_VERSION",
+        "PYTHON_GET_PIP_URL",
+        "PYTHON_GET_PIP_SHA256",
+        "PYTHONUNBUFFERED",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPATH",
+        "GPG_KEY",
+    }
+)
 _PROXY_NAMES = tuple(
     variant
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "FTP_PROXY")
@@ -62,8 +81,17 @@ def _selected_host() -> str:
     else:
         try:
             host = subprocess.run(
-                ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
-                check=True, capture_output=True, text=True, timeout=operation_timeout(5),
+                [
+                    "docker",
+                    "context",
+                    "inspect",
+                    "--format",
+                    "{{.Endpoints.docker.Host}}",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=operation_timeout(5),
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             raise WorkflowError("cannot resolve the local Docker endpoint") from None
@@ -90,11 +118,17 @@ def _docker_invocation(args: list[str]) -> tuple[list[str], dict[str, str] | Non
         return args, None
     # DOCKER_CONTEXT can otherwise take precedence over endpoint selection.
     excluded = {
-        "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS", "DOCKER_TLS_VERIFY",
-        "DOCKER_CERT_PATH", "DOCKER_CUSTOM_HEADERS",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_TLS",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "DOCKER_CUSTOM_HEADERS",
         *(name.upper() for name in _PROXY_NAMES),
     }
-    env = {key: value for key, value in os.environ.items() if key.upper() not in excluded}
+    env = {
+        key: value for key, value in os.environ.items() if key.upper() not in excluded
+    }
     return [args[0], "--host", host, *args[1:]], env
 
 
@@ -165,14 +199,22 @@ def _docker(args: list[str]) -> bytes:
 
 
 def _require_engine() -> str:
-    raw = _docker([
-        "info",
-        "--format",
-        '{{json .ID}} {{json .OSType}} {{json .MemoryLimit}} {{json .CPUCfsQuota}} '
-        '{{json .PidsLimit}} {{json .SwapLimit}} {{json .SecurityOptions}}',
-    ]).decode("utf-8", errors="replace").split(maxsplit=6)
+    raw = (
+        _docker(
+            [
+                "info",
+                "--format",
+                "{{json .ID}} {{json .OSType}} {{json .MemoryLimit}} {{json .CPUCfsQuota}} "
+                "{{json .PidsLimit}} {{json .SwapLimit}} {{json .SecurityOptions}}",
+            ]
+        )
+        .decode("utf-8", errors="replace")
+        .split(maxsplit=6)
+    )
     try:
-        daemon, os_type, memory, cpu, pids, swap, security = (json.loads(item) for item in raw)
+        daemon, os_type, memory, cpu, pids, swap, security = (
+            json.loads(item) for item in raw
+        )
     except (TypeError, ValueError):
         raise WorkflowError("invalid Docker capability response") from None
     if (
@@ -183,14 +225,16 @@ def _require_engine() -> str:
         or not isinstance(security, list)
         or "name=seccomp,profile=builtin" not in security
     ):
-        raise WorkflowError("Docker cannot enforce sandbox resource and security policy")
+        raise WorkflowError(
+            "Docker cannot enforce sandbox resource and security policy"
+        )
     return daemon
 
 
 def _local_image(image: str) -> str:
     try:
         result = json.loads(_docker(["image", "inspect", image]))
-        metadata, = result
+        (metadata,) = result
         identifier = metadata["Id"]
         environment = metadata["Config"].get("Env") or []
         if (
@@ -222,7 +266,7 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
             or workspace.resolve(strict=True) != workspace
             or is_linked(workspace)
             or not workspace.is_dir()
-            or any(character in str(workspace) for character in ',\"\r\n')
+            or any(character in str(workspace) for character in ',"\r\n')
             or workspace.parent == workspace
         ):
             raise WorkflowError("sandbox requires a canonical workspace directory")
@@ -235,7 +279,9 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
                     not stat.S_ISDIR(info.st_mode)
                     and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
                 ):
-                    raise WorkflowError("sandbox workspace contains a link or special file")
+                    raise WorkflowError(
+                        "sandbox workspace contains a link or special file"
+                    )
     except OSError:
         raise WorkflowError("sandbox workspace unavailable") from None
     mount = f"type=bind,src={workspace},dst=/workspace,bind-recursive=disabled"
@@ -382,7 +428,9 @@ class SandboxManager:
                 self._update_scope(scope, "CREATED")
                 self._clear_create(fence)
                 if observed_image_id != approved_image_id:
-                    raise WorkflowError("sandbox container image differs from approved pin")
+                    raise WorkflowError(
+                        "sandbox container image differs from approved pin"
+                    )
                 # Independent trusted host watchdog must acknowledge readiness
                 # before the untrusted workload is allowed to start.
                 self._start_watchdog(scope, dispatch_id)
@@ -414,7 +462,9 @@ class SandboxManager:
         scope = self._scope_path(dispatch_id)
         if scope is None or not scope.exists():
             if fence is not None and fence.exists():
-                raise WorkflowError("sandbox create lacks daemon identity; dispatch stays blocked")
+                raise WorkflowError(
+                    "sandbox create lacks daemon identity; dispatch stays blocked"
+                )
             if _DOCKER_HOST.get() is not None:
                 with cleanup_budget():
                     self._cleanup(dispatch_id, pattern)
@@ -444,12 +494,18 @@ class SandboxManager:
         if not path.exists():
             scope = self._scope_path(dispatch_id)
             if scope is None or not scope.exists():
-                raise WorkflowError("dispatch lacks its original Docker endpoint; stays blocked")
+                raise WorkflowError(
+                    "dispatch lacks its original Docker endpoint; stays blocked"
+                )
             record = self._scope_data(scope)
         else:
             record = self._read_record(path)
         host, daemon_id = record.get("host"), record.get("daemon_id")
-        if not _valid_host(host) or not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
+        if (
+            not _valid_host(host)
+            or not isinstance(daemon_id, str)
+            or not _DAEMON_ID.fullmatch(daemon_id)
+        ):
             raise WorkflowError("invalid durable Docker endpoint")
         return host, daemon_id
 
@@ -503,7 +559,8 @@ class SandboxManager:
             or not _DISPATCH_ID.fullmatch(record["dispatch_id"])
             or not isinstance(record.get("daemon_id"), str)
             or not _DAEMON_ID.fullmatch(record["daemon_id"])
-            or record.get("state") not in {"PREPARED", "SUBMITTED", "CREATED", "REJECTED"}
+            or record.get("state")
+            not in {"PREPARED", "SUBMITTED", "CREATED", "REJECTED"}
             or not isinstance(record.get("name"), str)
             or not isinstance(record.get("deadline"), (int, float))
             or not isinstance(record.get("monotonic_deadline"), (int, float))
@@ -520,23 +577,37 @@ class SandboxManager:
                 handle.flush()
                 os.fsync(handle.fileno())
         except FileExistsError:
-            raise WorkflowError("existing sandbox execution requires reconciliation") from None
+            raise WorkflowError(
+                "existing sandbox execution requires reconciliation"
+            ) from None
         _sync_directory(path.parent)
         _sync_directory(path.parent.parent)
 
     @classmethod
     def _record_scope(
-        cls, scope: Path, dispatch_id: str, name: str, daemon_id: str,
-        deadline: float, host: str,
+        cls,
+        scope: Path,
+        dispatch_id: str,
+        name: str,
+        daemon_id: str,
+        deadline: float,
+        host: str,
     ) -> None:
         if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
             raise WorkflowError("Docker daemon has no trustworthy identity")
-        cls._write_record(scope, {
-            "dispatch_id": dispatch_id, "name": name, "host": host,
-            "daemon_id": daemon_id, "deadline": deadline,
-            "monotonic_deadline": time.monotonic() + max(0., deadline - time.time()),
-            "state": "PREPARED",
-        })
+        cls._write_record(
+            scope,
+            {
+                "dispatch_id": dispatch_id,
+                "name": name,
+                "host": host,
+                "daemon_id": daemon_id,
+                "deadline": deadline,
+                "monotonic_deadline": time.monotonic()
+                + max(0.0, deadline - time.time()),
+                "state": "PREPARED",
+            },
+        )
 
     @classmethod
     def _update_scope(cls, scope: Path, state: str) -> None:
@@ -575,18 +646,38 @@ class SandboxManager:
         """
         ready = scope.with_name(scope.name + ".ready")
         command = [
-            sys.executable, "-m", "agent_workflow.runners.sandbox_watchdog",
-            str(scope), dispatch_id,
+            sys.executable,
+            "-m",
+            "agent_workflow.runners.sandbox_watchdog",
+            str(scope),
+            dispatch_id,
         ]
         # Keep only host process bootstrap and local Docker configuration.
         allowed_env = {
-            "PATH", "PYTHONPATH", "PYTHONHOME", "HOME", "USERPROFILE", "SYSTEMROOT",
-            "WINDIR", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR", "DOCKER_CONFIG",
+            "PATH",
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "HOME",
+            "USERPROFILE",
+            "SYSTEMROOT",
+            "WINDIR",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "DOCKER_CONFIG",
         }
         options = {
-            "env": {key: value for key, value in os.environ.items() if key.upper() in allowed_env},
-            "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL, "close_fds": True,
+            "env": {
+                key: value
+                for key, value in os.environ.items()
+                if key.upper() in allowed_env
+            },
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
         }
         if os.name == "nt":
             options["creationflags"] = (
@@ -605,7 +696,9 @@ class SandboxManager:
             if watchdog.poll() is not None:
                 raise WorkflowError("independent sandbox watchdog terminated")
             time.sleep(0.05)
-        raise WorkflowError("independent sandbox watchdog did not acknowledge readiness")
+        raise WorkflowError(
+            "independent sandbox watchdog did not acknowledge readiness"
+        )
 
     @staticmethod
     def _record_create(fence: Path, name: str) -> None:
@@ -626,8 +719,11 @@ class SandboxManager:
         _sync_directory(fence.parent)
 
     def _settle_create(
-        self, dispatch_id: str, fence: Path | None,
-        name_pattern: str, scope: Path | None = None,
+        self,
+        dispatch_id: str,
+        fence: Path | None,
+        name_pattern: str,
+        scope: Path | None = None,
     ) -> None:
         if fence is None:
             return
@@ -641,7 +737,8 @@ class SandboxManager:
             owned = self._owned(dispatch_id, re.escape(name))
             if len(owned) != 1:
                 if (
-                    not owned and scope is not None
+                    not owned
+                    and scope is not None
                     and self._scope_data(scope)["state"] in {"PREPARED", "REJECTED"}
                 ):
                     self._clear_create(fence)
@@ -655,12 +752,16 @@ class SandboxManager:
 
     @staticmethod
     def _inspect_image(identifier: str, name: str, dispatch_id: str) -> str:
-        raw = _docker([
-            "container", "inspect", "--format",
-            '{{json .Id}} {{json .Name}} {{json .Image}} '
-            '{{json (index .Config.Labels "' + _DISPATCH_LABEL + '")}}',
-            identifier,
-        ])
+        raw = _docker(
+            [
+                "container",
+                "inspect",
+                "--format",
+                "{{json .Id}} {{json .Name}} {{json .Image}} "
+                '{{json (index .Config.Labels "' + _DISPATCH_LABEL + '")}}',
+                identifier,
+            ]
+        )
         try:
             container_id, container_name, image_id, label = (
                 json.loads(value) for value in raw.split(maxsplit=3)
@@ -701,18 +802,20 @@ class SandboxManager:
             return False
 
     def _owned(self, dispatch_id: str, name_pattern: str) -> list[str]:
-        raw = _docker([
-            "container",
-            "ls",
-            "-a",
-            "--no-trunc",
-            "--filter",
-            f"name=^/{name_pattern}$",
-            "--filter",
-            f"label={_DISPATCH_LABEL}={dispatch_id}",
-            "--format",
-            "{{json .}}",
-        ])
+        raw = _docker(
+            [
+                "container",
+                "ls",
+                "-a",
+                "--no-trunc",
+                "--filter",
+                f"name=^/{name_pattern}$",
+                "--filter",
+                f"label={_DISPATCH_LABEL}={dispatch_id}",
+                "--format",
+                "{{json .}}",
+            ]
+        )
         identifiers = []
         try:
             for line in raw.splitlines():
@@ -720,7 +823,8 @@ class SandboxManager:
                 if (
                     not re.fullmatch(name_pattern, row["Names"])
                     or not _CONTAINER_ID.fullmatch(row["ID"])
-                    or f"{_DISPATCH_LABEL}={dispatch_id}" not in row["Labels"].split(",")
+                    or f"{_DISPATCH_LABEL}={dispatch_id}"
+                    not in row["Labels"].split(",")
                 ):
                     raise ValueError("container ownership mismatch")
                 identifiers.append(row["ID"])

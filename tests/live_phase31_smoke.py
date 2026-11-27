@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agent_workflow.application.task.use_cases.register_task_handoff import (  # noqa: E402
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.integrations.github import WorkflowError  # noqa: E402
+from agent_workflow.domain.workflow_identity import WorkflowError  # noqa: E402
 from agent_workflow.runners.coder_runtime import (  # noqa: E402
     CoderRuntime,
     safe_path,

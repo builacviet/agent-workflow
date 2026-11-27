@@ -6,7 +6,7 @@ import pytest
 from starlette.requests import Request
 
 from agent_workflow.application.review.dtos import ReviewQueueItem
-from agent_workflow.integrations.github import WorkflowError
+from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.cli.admin import BASE, REPO
 from agent_workflow.interfaces.mcp.security import authorize_request
 from agent_workflow.workers.trusted_git.github import GitHubVerifier

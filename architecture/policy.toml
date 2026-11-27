@@ -1,6 +1,7 @@
 # Agent Workflow architecture import policy. Reviewed modifications require Owner/Tech Lead approval.
 # Exact legacy edges are quarantined; never add wildcard exemptions.
 version = 1
+legacy_imports = []
 
 [forbidden_imports]
 domain = ["agent_workflow.application", "agent_workflow.storage", "agent_workflow.integrations", "agent_workflow.runners", "agent_workflow.mcp", "agent_workflow.orchestration", "agent_workflow.infrastructure", "agent_workflow.interfaces", "agent_workflow.bootstrap", "agent_workflow.composition", "agent_workflow.paths", "agent_workflow.workers.trusted_git"]
@@ -32,33 +33,3 @@ composition = ["agent_workflow.interfaces"]
 # The single accepted runner cycle is retired during R2; any additional cycle fails CI.
 [cycles]
 legacy = [["agent_workflow.runners.coder_runtime", "agent_workflow.runners.sandbox"]]
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/coder_runtime.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/runtime_plugins.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/sandbox.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/runners/sandbox_watchdog.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/workers/trusted_git/app_auth.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"
-
-[[legacy_imports]]
-path = "src/agent_workflow/workers/trusted_git/github.py"
-module = "agent_workflow.integrations.github"
-reason = "Existing main@81f9bf10 dependency; remove during scoped R2 refactor"

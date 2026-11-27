@@ -4,7 +4,7 @@ import json
 import subprocess
 from urllib.parse import quote
 
-from agent_workflow.integrations.github import (
+from agent_workflow.domain.workflow_identity import (
     WorkflowError,
     canonical_repository,
     validate_sha,
