@@ -9,19 +9,19 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.domain.workflow_identity import REPOSITORY
-from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
-from agent_workflow.interfaces.mcp.review_request import Submission
-from agent_workflow.runners.runtime_plugins import (
-    CodexCLIPlugin,
+from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
-    RuntimeRegistry,
     RuntimeRequest,
     RuntimeSpec,
     WorkerResult,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.workflow_identity import REPOSITORY
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.interfaces.cli.task_spec import ProvisionTaskSpec
+from agent_workflow.interfaces.mcp.review_request import Submission
 
 BASE, HEAD = "a" * 40, "b" * 40
 IMAGE_ID = "sha256:" + "d" * 64

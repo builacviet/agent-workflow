@@ -4,16 +4,16 @@ from dataclasses import replace
 
 import pytest
 
-from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.runners.runtime_plugins import (
-    CodexCLIPlugin,
+from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
-    RuntimeRegistry,
     RuntimeRequest,
     RuntimeSpec,
     WorkerResult,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
+from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 
 FAKE_IMAGE_ID = "sha256:" + "b" * 64
 

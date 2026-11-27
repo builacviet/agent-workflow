@@ -13,12 +13,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 
-from agent_workflow.budget import check_deadline
-from agent_workflow.runners.runtime_plugins import (
+from agent_workflow.application.runtime.dtos import (
     RuntimePlan,
     RuntimeRequest,
     WorkerResult,
 )
+from agent_workflow.budget import check_deadline
 
 
 class DispatchEvidence(Protocol):
