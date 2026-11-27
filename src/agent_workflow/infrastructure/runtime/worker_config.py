@@ -1,6 +1,7 @@
 """Layer: Infrastructure
 Responsibility: Validate local Worker configuration, paths and credential separation.
-Dependencies: Domain rules and local Worker, runtime and GitHub adapters.
+Dependencies: Application request and runtime contracts, Domain workflow identity,
+local Worker, runtime and GitHub adapters.
 """
 
 import hashlib
@@ -13,7 +14,6 @@ from agent_workflow.application.exceptions import (
     InvalidApplicationRequestError,
     RuntimeAdmissionError,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.github.app_token import ControllerAppToken
 from agent_workflow.infrastructure.github.client import GitHubClient
@@ -46,7 +46,7 @@ def safe_path(value: str) -> str:
         )
         or path.suffix.lower() in {".pem", ".key"}
     ):
-        raise BusinessRuleError("unsafe coder path")
+        raise InvalidApplicationRequestError("unsafe coder path")
     return value
 
 
@@ -59,52 +59,62 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
     for candidate in (path, path.resolve()):
         directories = candidate.parts if directory else candidate.parts[:-1]
         if any(part.casefold().startswith(forbidden) for part in directories):
-            raise BusinessRuleError("v2 paths are forbidden")
+            raise InvalidApplicationRequestError("v2 paths are forbidden")
 
 
 def validate_config(config: dict, *, require_database: bool = True) -> None:
     if config.get("repository") != REPOSITORY or not config.get("tasks"):
-        raise BusinessRuleError("explicit repository and task allowlist required")
+        raise InvalidApplicationRequestError(
+            "explicit repository and task allowlist required"
+        )
     for key in (
         ("database", "pem", "scratch") if require_database else ("pem", "scratch")
     ):
         path = Path(config[key])
         if not path.is_absolute():
-            raise BusinessRuleError("absolute operator paths required")
+            raise InvalidApplicationRequestError("absolute operator paths required")
         independent_path(path, directory=key == "scratch")
     if config.get("runtime", "codex") == "codex":
         profile = Path(config["seccomp_profile"])
         if not profile.is_absolute() or not profile.is_file() or profile.is_symlink():
-            raise BusinessRuleError("absolute independent seccomp profile required")
+            raise InvalidApplicationRequestError(
+                "absolute independent seccomp profile required"
+            )
         independent_path(profile)
         if hashlib.sha256(profile.read_bytes()).hexdigest() != config["seccomp_sha256"]:
-            raise BusinessRuleError("seccomp profile digest mismatch")
+            raise InvalidApplicationRequestError("seccomp profile digest mismatch")
         if config.get("codex_auth_volume") != "techlead-review-poc_codex_auth":
-            raise BusinessRuleError("dedicated POC Codex auth volume required")
+            raise InvalidApplicationRequestError(
+                "dedicated POC Codex auth volume required"
+            )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/@:-]*", config["image"]):
-        raise BusinessRuleError("invalid runtime image")
+        raise InvalidApplicationRequestError("invalid runtime image")
     if not isinstance(config.get("model"), str) or not config["model"].strip():
-        raise BusinessRuleError("operator-selected model required")
+        raise InvalidApplicationRequestError("operator-selected model required")
     roots = set()
     for task in config["tasks"].values():
         root = Path(task["worktree"])
         if not root.is_absolute() or is_linked(root) or not root.is_dir():
-            raise BusinessRuleError("dedicated canonical worktree required")
+            raise InvalidApplicationRequestError(
+                "dedicated canonical worktree required"
+            )
         if str(root.resolve()) != str(root) or root.resolve() in roots:
-            raise BusinessRuleError("duplicate or noncanonical worktree")
+            raise InvalidApplicationRequestError("duplicate or noncanonical worktree")
         if not (root / ".git").is_file():
-            raise BusinessRuleError("task requires linked Git worktree")
+            raise InvalidApplicationRequestError("task requires linked Git worktree")
         independent_path(root, directory=True)
         roots.add(root.resolve())
         if not task.get("write_paths"):
-            raise BusinessRuleError("explicit write path allowlist required")
+            raise InvalidApplicationRequestError(
+                "explicit write path allowlist required"
+            )
         for prefix in task["write_paths"]:
             safe_path(prefix)
     if (
         type(config.get("timeout_seconds", 1800)) is not int
         or not 60 <= config.get("timeout_seconds", 1800) <= 3600
     ):
-        raise BusinessRuleError("invalid timeout")
+        raise InvalidApplicationRequestError("invalid timeout")
 
 
 class _WorkerAppIdentity(Protocol):
@@ -146,7 +156,7 @@ def validate_dispatch_worker_config(
             or worker.app_id == controller.app_id
             or worker.installation_id == controller.installation_id
         ):
-            raise BusinessRuleError(
+            raise InvalidApplicationRequestError(
                 "separate Controller and Worker credentials required"
             )
         roots = [Path(config["scratch"]).resolve()] + [
@@ -157,8 +167,17 @@ def validate_dispatch_worker_config(
             for pem in (worker.pem, controller_pem)
             for root in roots
         ):
-            raise BusinessRuleError("App credentials must remain outside Worker paths")
-    except (KeyError, TypeError, ValueError, OSError, RuntimeAdmissionError):
+            raise InvalidApplicationRequestError(
+                "App credentials must remain outside Worker paths"
+            )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        OSError,
+        RuntimeAdmissionError,
+        InvalidApplicationRequestError,
+    ):
         raise InvalidApplicationRequestError(
             "invalid PostgreSQL dispatch Worker configuration"
         ) from None
