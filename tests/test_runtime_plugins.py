@@ -15,7 +15,6 @@ from agent_workflow.runners.runtime_plugins import (
     WorkerResult,
 )
 
-
 FAKE_IMAGE_ID = "sha256:" + "b" * 64
 
 

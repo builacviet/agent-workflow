@@ -1,11 +1,10 @@
 """Trusted host contracts for selecting and running V1 agent CLI plugins."""
 
-from dataclasses import dataclass, replace
 import re
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
-
 
 _CREDENTIAL_VALUE = re.compile(
     r"(?i)(?:[a-z][a-z0-9+.-]*://[^/\s]*@|"
