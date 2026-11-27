@@ -11,14 +11,14 @@ from agent_workflow.application.runtime.dtos import (
     RuntimeRequest,
     WorkerResult,
 )
-from agent_workflow.application.runtime.ports import AgentRuntimePlugin
+from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 
 
 class RuntimeRegistry:
-    def __init__(self, plugins: tuple[AgentRuntimePlugin, ...]) -> None:
-        self._plugins: dict[str, tuple[RuntimeManifest, AgentRuntimePlugin]] = {}
+    def __init__(self, plugins: tuple[IAgentRuntimePlugin, ...]) -> None:
+        self._plugins: dict[str, tuple[RuntimeManifest, IAgentRuntimePlugin]] = {}
         for plugin in plugins:
             manifest = getattr(plugin, "manifest", None)
             if not isinstance(manifest, RuntimeManifest) or manifest.api_version != 1:
@@ -36,7 +36,7 @@ class RuntimeRegistry:
 
     def _resolve(
         self, request: RuntimeRequest
-    ) -> tuple[RuntimeManifest, AgentRuntimePlugin]:
+    ) -> tuple[RuntimeManifest, IAgentRuntimePlugin]:
         if not isinstance(request, RuntimeRequest):
             raise BusinessRuleError("invalid runtime request")
         if (request.role, request.phase) != ("dev", "code"):

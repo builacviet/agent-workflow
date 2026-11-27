@@ -23,7 +23,7 @@ from agent_workflow.application.runtime.dtos import (
     RuntimeRequest,
     RuntimeSpec,
 )
-from agent_workflow.application.runtime.ports import AgentRuntimePlugin
+from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
@@ -319,7 +319,7 @@ class CoderRuntime:
         dispatch: DispatchEvidence,
         ci: CiTracking,
         leadership_guard: Callable[[], bool],
-        plugins: Iterable[AgentRuntimePlugin] = (),
+        plugins: Iterable[IAgentRuntimePlugin] = (),
     ) -> None:
         if (
             not callable(handoff_provider)
@@ -347,7 +347,7 @@ class CoderRuntime:
         self,
         config: dict,
         handoff_provider: HandoffUseCaseProvider,
-        plugins: Iterable[AgentRuntimePlugin],
+        plugins: Iterable[IAgentRuntimePlugin],
         app_config: AppConfig,
         dispatch: DispatchEvidence,
         ci: CiTracking,

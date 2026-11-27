@@ -13,7 +13,7 @@ from agent_workflow.application.runtime.dtos import (
 )
 
 
-class AgentRuntimePlugin(Protocol):
+class IAgentRuntimePlugin(Protocol):
     """V1 entry point for a trusted runtime adapter."""
 
     @property
