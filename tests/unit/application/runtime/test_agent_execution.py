@@ -8,6 +8,10 @@ import pytest
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.review.dtos import ReviewTask
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextOutput,
+)
 from agent_workflow.application.runtime.dtos import RuntimePlan, RuntimeSpec
 from agent_workflow.application.runtime.ports import (
     ICiTracking,
@@ -25,11 +29,36 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
     CoderAssignmentOutput,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.states import WorkflowStatus
+from agent_workflow.domain.workflow_identity import REPOSITORY
 
 CLAIM = DispatchClaim("a" * 32, "TASK", "b" * 40, 9_999_999_999.0, 0)
 CONTEXT = {"task_id": "TASK"}
+TASK = ReviewTask(
+    task_id=CLAIM.task_id,
+    repository=REPOSITORY,
+    branch="codex/test",
+    base_sha=CLAIM.input_sha,
+    current_head_sha=None,
+    requested_effort="medium",
+    require_verified_effort=0,
+    max_review_rounds=2,
+    completed_review_rounds=CLAIM.round_number,
+    status=WorkflowStatus.AWAITING_HANDOFF,
+    created_at=0,
+    updated_at=0,
+    context_paths=(),
+    spec_json="{}",
+)
+DETAILS = CoderAssignmentOutput(
+    GetReviewContextOutput(TASK, 1, 2, None, None, (), ()), ()
+)
 ASSIGNMENT = CONTEXT | {
-    "details": CoderAssignmentOutput(Mock(task=Mock(task_id="TASK")), ())
+    "status": TASK.status,
+    "completed_review_rounds": TASK.completed_review_rounds,
+    "base_sha": TASK.base_sha,
+    "current_head_sha": TASK.current_head_sha,
+    "details": DETAILS,
 }
 
 
@@ -65,7 +94,19 @@ def dependencies():
         {"assignment": CONTEXT},
         {
             "assignment": ASSIGNMENT
-            | {"details": CoderAssignmentOutput(Mock(task=Mock(task_id="OTHER")), ())}
+            | {
+                "details": replace(
+                    DETAILS,
+                    context=replace(
+                        DETAILS.context, task=replace(TASK, task_id="OTHER")
+                    ),
+                )
+            }
+        },
+        {"assignment": ASSIGNMENT | {"details": replace(DETAILS, context=None)}},
+        {
+            "assignment": ASSIGNMENT
+            | {"details": replace(DETAILS, context=replace(DETAILS.context, task=None))}
         },
     ],
 )
@@ -76,6 +117,40 @@ def test_invalid_execution_input_precedes_port_effects(dependencies, changes):
     with pytest.raises(InvalidApplicationRequestError, match="invalid agent execution"):
         service.execute(**(args | changes))
     assert all(not port.mock_calls for port in dependencies.values())
+    guard.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", WorkflowStatus.IN_REVIEW),
+        ("completed_review_rounds", 1),
+        ("base_sha", "c" * 40),
+        ("current_head_sha", "c" * 40),
+    ],
+)
+@pytest.mark.parametrize("omit_outer", [False, True])
+def test_assignment_facts_must_match_before_effects(
+    dependencies, field, value, omit_outer
+):
+    assignment = ASSIGNMENT.copy()
+    if omit_outer:
+        del assignment[field]
+    else:
+        assignment["details"] = replace(
+            DETAILS,
+            context=replace(DETAILS.context, task=replace(TASK, **{field: value})),
+        )
+    guard = Mock()
+    adapters = dependencies["adapter_factory"].return_value
+    service = AgentExecutionService(**dependencies, require_ci_tracking=True)
+
+    with pytest.raises(InvalidApplicationRequestError, match="invalid agent execution"):
+        service.execute(CLAIM, assignment, guard)
+
+    assert all(not port.mock_calls for port in dependencies.values())
+    assert not adapters.engine.mock_calls
+    assert not adapters.workspace.mock_calls
     guard.assert_not_called()
 
 

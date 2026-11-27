@@ -10,6 +10,10 @@ from dataclasses import dataclass
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.review.dtos import ReviewTask
+from agent_workflow.application.review.use_cases.get_review_context import (
+    GetReviewContextOutput,
+)
 from agent_workflow.application.runtime.dtos import (
     RuntimePlan,
     RuntimeRequest,
@@ -104,7 +108,17 @@ class AgentExecutionService:
             and claim.task_id == claim.task_id.strip()
             and claim.task_id == assignment.get("task_id")
             and isinstance(details := assignment.get("details"), CoderAssignmentOutput)
-            and claim.task_id == details.context.task.task_id
+            and isinstance(details.context, GetReviewContextOutput)
+            and isinstance(task := details.context.task, ReviewTask)
+            and claim.task_id == task.task_id
+            and "status" in assignment
+            and assignment["status"] == task.status
+            and "completed_review_rounds" in assignment
+            and assignment["completed_review_rounds"] == task.completed_review_rounds
+            and "base_sha" in assignment
+            and assignment["base_sha"] == task.base_sha
+            and "current_head_sha" in assignment
+            and assignment["current_head_sha"] == task.current_head_sha
             and callable(guard)
         ):
             raise InvalidApplicationRequestError("invalid agent execution input")
