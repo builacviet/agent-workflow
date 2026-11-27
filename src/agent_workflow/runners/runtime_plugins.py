@@ -25,16 +25,15 @@ def credential_env_name(name: str) -> bool:
 
 def nonsecret_env_value(value: object) -> bool:
     return (
-        isinstance(value, str) and len(value) <= 4096
+        isinstance(value, str)
+        and len(value) <= 4096
         and (not value or value.isprintable())
         and _CREDENTIAL_VALUE.search(value) is None
     )
 
 
 def _identifier(value: str) -> bool:
-    return isinstance(value, str) and bool(
-        re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value)
-    )
+    return isinstance(value, str) and bool(re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value))
 
 
 def _text(value: str) -> bool:
@@ -120,9 +119,12 @@ class RuntimeManifest:
             )
             and isinstance(self.approved_plan_values, frozenset)
             and all(
-                isinstance(pair, tuple) and len(pair) == 2
-                and isinstance(pair[0], str) and pair[0] in self.approved_plan_env
-                and _text(pair[1]) and nonsecret_env_value(pair[1])
+                isinstance(pair, tuple)
+                and len(pair) == 2
+                and isinstance(pair[0], str)
+                and pair[0] in self.approved_plan_env
+                and _text(pair[1])
+                and nonsecret_env_value(pair[1])
                 for pair in self.approved_plan_values
             )
             and type(self.api_version) is int
@@ -160,7 +162,8 @@ class RuntimePlan:
                 and isinstance(pair[0], str)
                 and re.fullmatch(r"WFC_(CODEX_MODEL|PLUGIN_[A-Z][A-Z0-9_]*)", pair[0])
                 and not credential_env_name(pair[0])
-                and _text(pair[1]) and nonsecret_env_value(pair[1])
+                and _text(pair[1])
+                and nonsecret_env_value(pair[1])
                 and pair[0] not in names
             ):
                 raise WorkflowError("invalid runtime environment")
@@ -221,7 +224,11 @@ class RuntimeRegistry:
             raise WorkflowError("unsupported runtime")
         manifest, _ = registration
         spec = request.spec
-        if (spec.provider, spec.model, spec.effort) not in manifest.supported_combinations:
+        if (
+            spec.provider,
+            spec.model,
+            spec.effort,
+        ) not in manifest.supported_combinations:
             raise WorkflowError("unsupported runtime provider, model or effort")
         if not request.required_capabilities <= manifest.capabilities:
             raise WorkflowError("unsupported runtime capability")
