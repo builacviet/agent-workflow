@@ -29,7 +29,7 @@ from agent_workflow.application.task.use_cases.get_coder_assignment import (
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
-from agent_workflow.composition import ci_deps, dispatch_deps
+from agent_workflow.composition import ci_deps, dispatch_deps, worker_deps
 from agent_workflow.composition.postgres_controller import compose_postgres_controller
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
@@ -211,7 +211,7 @@ def test_missing_or_invalid_dsn_before_resources(config, monkeypatch, tmp_path, 
     monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", forbidden)
     monkeypatch.setattr(dispatch_deps, "compose_postgres_worker", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
-    monkeypatch.setattr(coder_runtime, "SandboxManager", forbidden)
+    monkeypatch.setattr(worker_deps, "SandboxManager", forbidden)
     sqlite_path = tmp_path / "misleading.sqlite"
     app = AppConfig()
     # Bypass model validation to ensure the entrypoint itself rejects it.
@@ -275,7 +275,21 @@ def test_unsafe_config_before_resources(config, monkeypatch, unsafe):
     elif unsafe == "effort":
         config["effort"] = "medium"
     with pytest.raises(InvalidApplicationRequestError):
-        run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
+        run_dispatch(
+            config,
+            AppConfig(
+                pg_runtime_dsn=DSN,
+                sandbox_state_dir=Path(config["scratch"]).with_name("fences"),
+            ),
+        )
+
+
+def test_invalid_explicit_sandbox_path_fails_before_resources(config, monkeypatch):
+    monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", forbidden)
+    monkeypatch.setattr(worker_deps, "SandboxManager", forbidden)
+    app = AppConfig(pg_runtime_dsn=DSN, sandbox_state_dir=Path("relative"))
+    with pytest.raises(ValueError, match="safe, durable local directory"):
+        run_dispatch(config, app)
 
 
 def test_pg_validation_never_inspects_sqlite_database(config):
@@ -300,7 +314,13 @@ def test_entrypoint_rejects_uncomposed_handoff_provider_before_leadership(
     dependencies = replace(dependencies, handoff_provider=object())
 
     with pytest.raises(TypeError, match="composed PostgreSQL handoff provider"):
-        run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
+        run_dispatch(
+            config,
+            AppConfig(
+                pg_runtime_dsn=DSN,
+                sandbox_state_dir=Path(config["scratch"]).with_name("fences"),
+            ),
+        )
 
     acquire.assert_not_called()
     claim.assert_not_called()
@@ -384,7 +404,15 @@ def test_single_factory_lazy_worker_and_terminal_order(
     preflight = Mock(wraps=dispatch_deps._validate_worker_config)
     monkeypatch.setattr(dispatch_deps, "_validate_worker_config", preflight)
 
-    def compose(cfg, service, borrowed, *, leadership_guard, registry):
+    app = AppConfig(
+        pg_runtime_dsn=DSN,
+        sandbox_state_dir=Path(config["scratch"]).with_name("fences"),
+    )
+    monkeypatch.setattr(AppConfig, "from_env", forbidden)
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", "relative-ambient")
+
+    def compose(cfg, service, borrowed, *, leadership_guard, registry, app_config):
+        assert app_config is app
         assert registry is preflight.call_args.args[1]
         assert borrowed is deps and service is deps.handoff_provider
         assert cfg is config
@@ -413,7 +441,7 @@ def test_single_factory_lazy_worker_and_terminal_order(
     monkeypatch.setattr(PostgresFactory, "__init__", forbidden)
     if outcome == "leadership_lost_after_assignment":
         with pytest.raises(PermissionError, match="reconcile in-flight work"):
-            run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
+            run_dispatch(config, app)
     elif outcome in {
         "wrong_head",
         "wrong_task",
@@ -422,12 +450,10 @@ def test_single_factory_lazy_worker_and_terminal_order(
         "cleanup_error",
     }:
         with pytest.raises((BusinessRuleError, RuntimeError)):
-            run_dispatch(config, AppConfig(pg_runtime_dsn=DSN))
+            run_dispatch(config, app)
     else:
-        assert run_dispatch(config, AppConfig(pg_runtime_dsn=DSN)) == (
-            outcome == "success"
-        )
-    opened.assert_called_once()
+        assert run_dispatch(config, app) == (outcome == "success")
+    opened.assert_called_once_with(app)
     assert factory._closed
     factory._engine.dispose.assert_called_once()
     assert events[-1] == "release"
@@ -750,7 +776,7 @@ def test_pg_once_runs_native_dev_stages(
 
     monkeypatch.setattr(sandbox, "docker_command", fake_docker_command)
     monkeypatch.setattr(sandbox, "run_container", run_stage)
-    app_config = AppConfig(pg_runtime_dsn=DSN)
+    app_config = AppConfig(pg_runtime_dsn=DSN, sandbox_state_dir=tmp_path / "fences")
     if error:
         with pytest.raises(BusinessRuleError, match=error):
             run_dispatch(config, app_config)

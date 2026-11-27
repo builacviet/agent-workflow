@@ -16,12 +16,14 @@ from unittest.mock import Mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from agent_workflow.app_config import AppConfig  # noqa: E402
 from agent_workflow.application.task.use_cases.register_task_handoff import (  # noqa: E402
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError  # noqa: E402
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin  # noqa: E402
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry  # noqa: E402
+from agent_workflow.infrastructure.runtime.sandbox import SandboxManager  # noqa: E402
 from agent_workflow.runners.coder_runtime import (  # noqa: E402
     CoderRuntime,
     safe_path,
@@ -77,6 +79,7 @@ def main() -> None:
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
+        sandbox=SandboxManager(AppConfig.from_env().sandbox_state_dir),
     )
     claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 120}
     try:

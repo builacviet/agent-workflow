@@ -26,9 +26,9 @@ from agent_workflow.runners import coder_runtime
 from agent_workflow.runners.coder_runtime import CoderRuntime
 
 
-@pytest.fixture(autouse=True)
-def isolated_sandbox_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
+@pytest.fixture
+def isolated_sandbox_state(tmp_path):
+    return sandbox.SandboxManager(tmp_path / "sandbox-fences")
 
 
 def test_dispatch_and_runtime_do_not_own_worker_publication():
@@ -115,7 +115,7 @@ class BoundaryLedger:
         self.pre_launch = False
 
 
-def injected_runtime(config, state, ledger, *, plugins=()):
+def injected_runtime(config, state, ledger, sandbox_manager, *, plugins=()):
     handoff = Mock(spec=RegisterTaskHandoffUseCase)
 
     def register(request):
@@ -131,6 +131,7 @@ def injected_runtime(config, state, ledger, *, plugins=()):
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(), *plugins)),
+        sandbox=sandbox_manager,
     )
 
 
@@ -149,7 +150,7 @@ def injected_runtime(config, state, ledger, *, plugins=()):
     ],
 )
 def test_dispatch_pass_only_launches_phases_and_receives_result(
-    tmp_path, monkeypatch, failure, runtime_name
+    tmp_path, monkeypatch, failure, runtime_name, isolated_sandbox_state
 ):
     service = BoundaryState()
     service.provision_task(spec())
@@ -178,6 +179,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
         },
         service,
         ledger,
+        isolated_sandbox_state,
         plugins=(FakePlugin(),),
     )
     if runtime_name == "codex":
@@ -296,7 +298,7 @@ def _dispatch_pass(service, ledger, execute, on_finished=None):
 
 @pytest.mark.parametrize("failure", ["invalid-model", "docker-unavailable"])
 def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
-    recovery_dispatch, monkeypatch, failure
+    recovery_dispatch, monkeypatch, failure, isolated_sandbox_state
 ):
     config, service, ledger = recovery_dispatch
 
@@ -319,7 +321,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
 
         monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
 
-    runtime = injected_runtime(config, service, ledger)
+    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
     with pytest.raises(
         BusinessRuleError, match="unsupported runtime|synthetic Docker outage"
     ):
@@ -336,10 +338,10 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
 
 @pytest.mark.parametrize("pin_written", [False, True])
 def test_missing_pin_after_pre_launch_retirement_holds_slot(
-    recovery_dispatch, monkeypatch, pin_written
+    recovery_dispatch, monkeypatch, pin_written, isolated_sandbox_state
 ):
     config, service, ledger = recovery_dispatch
-    runtime = injected_runtime(config, service, ledger)
+    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
     monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
     original = sandbox.SandboxManager.record_engine
@@ -367,9 +369,11 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     assert ledger.claim({"NEXT"}, 60) is None
 
 
-def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
+def test_missing_pre_launch_marker_and_pin_holds_slot(
+    recovery_dispatch, isolated_sandbox_state
+):
     config, service, ledger = recovery_dispatch
-    runtime = injected_runtime(config, service, ledger)
+    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim.dispatch_id
     ledger.block(dispatch_id)
@@ -380,12 +384,12 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(recovery_dispatch):
 
 @pytest.mark.parametrize("suffix", [".engine", ".scope", ""])
 def test_pre_launch_marker_cannot_override_existing_launch_records(
-    recovery_dispatch, suffix
+    recovery_dispatch, suffix, isolated_sandbox_state
 ):
     config, service, ledger = recovery_dispatch
     dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True).dispatch_id
     ledger.block(dispatch_id)
-    runtime = injected_runtime(config, service, ledger)
+    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
     path.parent.mkdir()
     path.touch()
@@ -398,7 +402,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
 
 @pytest.mark.parametrize("definitive", [False, True])
 def test_global_slot_release_requires_affirmative_create_settlement(
-    tmp_path, monkeypatch, definitive
+    tmp_path, monkeypatch, definitive, isolated_sandbox_state
 ):
     database = tmp_path / "state.db"
     config = {"database": str(database)}
@@ -406,7 +410,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     ledger = BoundaryLedger(service)
-    runtime = injected_runtime(config, service, ledger)
+    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
     dispatch_id = None
     name = None
     visible = False
@@ -653,10 +657,14 @@ def test_controller_compose_parses_without_starting_services():
     )
 
 
-def test_network_disabled_test_launch_overrides_proxy_defaults(tmp_path, monkeypatch):
+def test_network_disabled_test_launch_overrides_proxy_defaults(
+    tmp_path, monkeypatch, isolated_sandbox_state
+):
     service = BoundaryState()
     ledger = BoundaryLedger(service)
-    runtime = injected_runtime({"image": "fixture"}, service, ledger)
+    runtime = injected_runtime(
+        {"image": "fixture"}, service, ledger, isolated_sandbox_state
+    )
     dispatch = "a" * 32
     host = "unix:///fixture.sock"
     monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)

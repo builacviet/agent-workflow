@@ -30,6 +30,7 @@ from agent_workflow.infrastructure.runtime.registry import (
     runtime_spec_from_config,
 )
 from agent_workflow.runners.coder_runtime import validate_config
+from agent_workflow.sandbox_state_paths import validate_sandbox_state_dir
 from agent_workflow.workers.trusted_git.app_auth import GitHubApp
 
 
@@ -38,14 +39,23 @@ def compose_dispatch_execution(
     config: dict, app_config: AppConfig
 ) -> Iterator[RunDispatchPassUseCase]:
     """Preflight the trusted adapters and lend one factory to the use case."""
+    if type(app_config) is not AppConfig:
+        raise TypeError("Dispatch requires explicit AppConfig")
+    validate_sandbox_state_dir(app_config.sandbox_state_dir)
     registry = RuntimeRegistry((CodexCLIPlugin(),))
     _validate_worker_config(config, registry)
     with PostgresFactory.open(app_config) as factory:
-        yield create_dispatch_use_case(config, factory, registry=registry)
+        yield create_dispatch_use_case(
+            config, factory, registry=registry, app_config=app_config
+        )
 
 
 def create_dispatch_use_case(
-    config: dict, factory: PostgresFactory, *, registry: RuntimeRegistry
+    config: dict,
+    factory: PostgresFactory,
+    *,
+    registry: RuntimeRegistry,
+    app_config: AppConfig,
 ) -> RunDispatchPassUseCase:
     dependencies = compose_postgres_controller(factory)
     handoff_provider = dependencies.handoff_provider
@@ -72,6 +82,7 @@ def create_dispatch_use_case(
             dependencies,
             leadership_guard=guard,
             registry=registry,
+            app_config=app_config,
         )
         guard()
         return runtime.execute_assignment(claim, cast(DispatchAssignment, context))
