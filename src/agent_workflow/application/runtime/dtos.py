@@ -7,7 +7,11 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
+from agent_workflow.domain.exceptions import DomainError
 from agent_workflow.domain.workflow_identity import validate_sha
 
 _CREDENTIAL_VALUE = re.compile(
@@ -69,7 +73,7 @@ class RuntimeSpec:
             _identifier(self.runtime)
             and _combination((self.provider, self.model, self.effort))
         ):
-            raise BusinessRuleError("invalid runtime, provider, model or effort")
+            raise RuntimeAdmissionError("invalid runtime, provider, model or effort")
 
 
 @dataclass(frozen=True)
@@ -90,8 +94,11 @@ class RuntimeRequest:
             and re.fullmatch(r"[a-f0-9]{32}", self.dispatch_id)
             and _identifiers(self.required_capabilities)
         ):
-            raise BusinessRuleError("invalid runtime request")
-        validate_sha(self.input_sha)
+            raise RuntimeAdmissionError("invalid runtime request")
+        try:
+            validate_sha(self.input_sha)
+        except DomainError as error:
+            raise RuntimeAdmissionError(str(error)) from None
 
 
 @dataclass(frozen=True)
@@ -132,12 +139,12 @@ class RuntimeManifest:
             )
             and type(self.api_version) is int
         ):
-            raise BusinessRuleError("invalid runtime manifest")
+            raise RuntimeAdmissionError("invalid runtime manifest")
         if self.approved_image_id is not None and not (
             isinstance(self.approved_image_id, str)
             and re.fullmatch(r"sha256:[0-9a-f]{64}", self.approved_image_id)
         ):
-            raise BusinessRuleError("invalid approved runtime image ID")
+            raise RuntimeAdmissionError("invalid approved runtime image ID")
 
 
 @dataclass(frozen=True)
@@ -154,9 +161,9 @@ class RuntimePlan:
             and all(map(_text, self.command))
             and self.command[0] not in {"prepare", "publish", "test", "probe"}
         ):
-            raise BusinessRuleError("invalid runtime command")
+            raise RuntimeContractError("invalid runtime command")
         if not isinstance(self.env, tuple):
-            raise BusinessRuleError("invalid runtime environment")
+            raise RuntimeContractError("invalid runtime environment")
         names = set()
         for pair in self.env:
             if not (
@@ -169,7 +176,7 @@ class RuntimePlan:
                 and nonsecret_env_value(pair[1])
                 and pair[0] not in names
             ):
-                raise BusinessRuleError("invalid runtime environment")
+                raise RuntimeContractError("invalid runtime environment")
             names.add(pair[0])
 
 

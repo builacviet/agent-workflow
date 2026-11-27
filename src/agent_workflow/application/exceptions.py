@@ -5,6 +5,14 @@ class ApplicationError(RuntimeError):
     """A failure at the application boundary."""
 
 
+class RuntimeAdmissionError(ApplicationError):
+    """A runtime request or selection is not admitted."""
+
+
+class RuntimeContractError(ApplicationError):
+    """A runtime plan, result or evidence violates its contract."""
+
+
 class InvalidApplicationRequestError(ApplicationError):
     """Invalid caller input or application configuration."""
 

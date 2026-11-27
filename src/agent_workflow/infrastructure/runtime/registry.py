@@ -5,6 +5,10 @@ Dependencies: Application runtime contracts, Domain errors and the built-in Code
 
 from dataclasses import replace
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
 from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
@@ -13,7 +17,6 @@ from agent_workflow.application.runtime.dtos import (
     WorkerResult,
 )
 from agent_workflow.application.runtime.ports import IAgentRuntimePlugin
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 
 
@@ -32,23 +35,23 @@ class RuntimeRegistry:
         for plugin in plugins:
             manifest = getattr(plugin, "manifest", None)
             if not isinstance(manifest, RuntimeManifest) or manifest.api_version != 1:
-                raise BusinessRuleError("unsupported runtime plugin interface")
+                raise RuntimeAdmissionError("unsupported runtime plugin interface")
             if manifest.runtime in self._plugins:
-                raise BusinessRuleError("duplicate runtime registration")
+                raise RuntimeAdmissionError("duplicate runtime registration")
             legacy_codex = (
                 manifest.runtime == "codex" and type(plugin) is CodexCLIPlugin
             )
             if manifest.runtime == "codex" and not legacy_codex:
-                raise BusinessRuleError("reserved legacy Codex runtime")
+                raise RuntimeAdmissionError("reserved legacy Codex runtime")
             if not legacy_codex and manifest.approved_image_id is None:
-                raise BusinessRuleError("approved runtime image ID required")
+                raise RuntimeAdmissionError("approved runtime image ID required")
             self._plugins[manifest.runtime] = (manifest, plugin)
 
     def _resolve(
         self, request: RuntimeRequest
     ) -> tuple[RuntimeManifest, IAgentRuntimePlugin]:
         if not isinstance(request, RuntimeRequest):
-            raise BusinessRuleError("invalid runtime request")
+            raise RuntimeAdmissionError("invalid runtime request")
         return self._resolve_selection(
             request.spec,
             role=request.role,
@@ -78,21 +81,21 @@ class RuntimeRegistry:
         required_capabilities: frozenset[str],
     ) -> tuple[RuntimeManifest, IAgentRuntimePlugin]:
         if not isinstance(spec, RuntimeSpec):
-            raise BusinessRuleError("invalid runtime selection")
+            raise RuntimeAdmissionError("invalid runtime selection")
         if (role, phase) != ("dev", "code"):
-            raise BusinessRuleError("runtime plugins require the Dev code phase")
+            raise RuntimeAdmissionError("runtime plugins require the Dev code phase")
         registration = self._plugins.get(spec.runtime)
         if registration is None:
-            raise BusinessRuleError("unsupported runtime")
+            raise RuntimeAdmissionError("unsupported runtime")
         manifest, _ = registration
         if (
             spec.provider,
             spec.model,
             spec.effort,
         ) not in manifest.supported_combinations:
-            raise BusinessRuleError("unsupported runtime provider, model or effort")
+            raise RuntimeAdmissionError("unsupported runtime provider, model or effort")
         if not required_capabilities <= manifest.capabilities:
-            raise BusinessRuleError("unsupported runtime capability")
+            raise RuntimeAdmissionError("unsupported runtime capability")
         return registration
 
     def approved_image_id(self, request: RuntimeRequest) -> str | None:
@@ -103,16 +106,16 @@ class RuntimeRegistry:
         manifest, plugin = self._resolve(request)
         plan = plugin.plan(request)
         if not isinstance(plan, RuntimePlan):
-            raise BusinessRuleError("invalid runtime plan")
+            raise RuntimeContractError("invalid runtime plan")
         if any(key not in manifest.approved_plan_env for key, _ in plan.env):
-            raise BusinessRuleError("runtime environment is not explicitly approved")
+            raise RuntimeContractError("runtime environment is not explicitly approved")
         # Custom adapters may supply only explicitly approved nonsecret literals.
         if type(plugin) is CodexCLIPlugin:
             approved = {("WFC_CODEX_MODEL", request.spec.model)}
         else:
             approved = manifest.approved_plan_values
         if any(pair not in approved for pair in plan.env):
-            raise BusinessRuleError(
+            raise RuntimeContractError(
                 "runtime environment value is not explicitly approved"
             )
         return plan
@@ -127,12 +130,12 @@ class RuntimeRegistry:
         """Bind launch evidence from the trusted runner after a zero exit code."""
         _, plugin = self._resolve(request)
         if not isinstance(output, bytes):
-            raise BusinessRuleError("invalid runtime output")
+            raise RuntimeContractError("invalid runtime output")
         result = plugin.result(request, output)
         if type(result) is not WorkerResult:
-            raise BusinessRuleError("invalid runtime result or provenance")
+            raise RuntimeContractError("invalid runtime result or provenance")
         if result.observed_image_id is not None:
-            raise BusinessRuleError("runtime adapter cannot attest the launch image")
+            raise RuntimeContractError("runtime adapter cannot attest the launch image")
         result = replace(result, observed_image_id=observed_image_id)
         self.validate_result(request, result, observed_image_id=observed_image_id)
         return result
@@ -146,7 +149,7 @@ class RuntimeRegistry:
     ) -> None:
         manifest, _ = self._resolve(request)
         if observed_image_id != manifest.approved_image_id:
-            raise BusinessRuleError(
+            raise RuntimeContractError(
                 "observed runtime image ID differs from approved pin"
             )
         if not (
@@ -157,11 +160,11 @@ class RuntimeRegistry:
             and type(result.exit_code) is int
             and result.exit_code == 0
         ):
-            raise BusinessRuleError("invalid runtime result or provenance")
+            raise RuntimeContractError("invalid runtime result or provenance")
         # This interface has no trusted evidence source for model/effort.
         if (
             result.telemetry != "UNVERIFIED"
             or result.observed_model is not None
             or result.observed_effort is not None
         ):
-            raise BusinessRuleError("unverified model or effort telemetry")
+            raise RuntimeContractError("unverified model or effort telemetry")
