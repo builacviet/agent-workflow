@@ -14,6 +14,7 @@ from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 from agent_workflow.application.dispatch import run_dispatch_pass
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.exceptions import RuntimeAdmissionError
 from agent_workflow.application.runtime.ports import RuntimeAdapters
 from agent_workflow.application.runtime.services.agent_execution import (
     AgentExecutionService,
@@ -266,7 +267,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
             if runtime_name == "unregistered"
             else "unsupported runtime provider, model or effort"
         )
-        with pytest.raises(BusinessRuleError, match=message):
+        with pytest.raises(RuntimeAdmissionError, match=message):
             dispatch.execute({"TEST"})
         assert ledger.claim({"TEST"}, 60) is None
         assert calls == []
@@ -346,9 +347,15 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
     runtime, execution = injected_runtime(
         config, service, ledger, isolated_sandbox_state
     )
-    with pytest.raises(
-        BusinessRuleError, match="unsupported runtime|synthetic Docker outage"
-    ):
+    expected_error = (
+        RuntimeAdmissionError if failure == "invalid-model" else BusinessRuleError
+    )
+    expected_message = (
+        "unsupported runtime"
+        if failure == "invalid-model"
+        else "synthetic Docker outage"
+    )
+    with pytest.raises(expected_error, match=expected_message):
         _dispatch_pass(service, ledger, execution).execute({"TEST"})
     dispatch_id = _blocked_dispatch(ledger)
     assert ledger.is_pre_launch(dispatch_id)
