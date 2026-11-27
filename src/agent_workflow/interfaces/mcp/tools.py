@@ -11,6 +11,7 @@ from mcp.server.fastmcp import Context
 from mcp.types import CallToolResult, TextContent
 from pydantic import StrictInt
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
@@ -21,7 +22,6 @@ from agent_workflow.application.review.use_cases.write_contracts import ClaimRev
 from agent_workflow.application.techlead.ports import ITechLeadGitHub, ITechLeadNotion
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.handoff import HandoffRequest
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.interfaces.mcp.review_request import Submission
 from agent_workflow.interfaces.mcp.security import (
     TECHLEAD_SCOPE,
@@ -37,7 +37,7 @@ from agent_workflow.interfaces.review_assignment_response import (
 
 def _review_request(task_id: str) -> GetReviewContextInput:
     if not task_id.strip():
-        raise WorkflowError("unknown authorized task")
+        raise InvalidApplicationRequestError("unknown authorized task")
     return GetReviewContextInput(task_id)
 
 

@@ -9,8 +9,8 @@ from agent_workflow.application.review.use_cases.get_review_context import (
 from agent_workflow.application.review.use_cases.get_review_result import (
     GetReviewResultUseCase,
 )
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @pytest.mark.parametrize(
@@ -40,8 +40,8 @@ def test_result_derives_fields_from_one_context(status, expected_reason):
 
 def test_result_preserves_unknown_authorized_task_error():
     context_use_case = Mock(spec=GetReviewContextUseCase)
-    context_use_case.execute.side_effect = WorkflowError("unknown authorized task")
-    with pytest.raises(WorkflowError, match="^unknown authorized task$"):
+    context_use_case.execute.side_effect = BusinessRuleError("unknown authorized task")
+    with pytest.raises(BusinessRuleError, match="^unknown authorized task$"):
         GetReviewResultUseCase(context_use_case).execute(
             GetReviewContextInput("missing")
         )

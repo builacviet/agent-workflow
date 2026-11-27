@@ -6,6 +6,7 @@ Dependencies: Unit of work, review write port and Domain policy.
 from collections.abc import Callable
 from dataclasses import replace
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.use_cases.write_contracts import (
     ClaimReviewInput,
     ClaimReviewOutput,
@@ -13,9 +14,10 @@ from agent_workflow.application.review.use_cases.write_contracts import (
     ci_allows,
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.review.policy import ClaimFacts, claim_allowed
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
+from agent_workflow.domain.workflow_identity import validate_sha
 
 
 class ClaimReviewUseCase:
@@ -36,15 +38,15 @@ class ClaimReviewUseCase:
 
     def execute(self, request: ClaimReviewInput) -> ClaimReviewOutput:
         if not isinstance(request.task_id, str) or not request.task_id.strip():
-            raise WorkflowError("unknown authorized task")
+            raise InvalidApplicationRequestError("unknown authorized task")
         if not isinstance(request.reviewer, str) or not request.reviewer.strip():
-            raise WorkflowError("invalid reviewer")
+            raise InvalidApplicationRequestError("invalid reviewer")
         validate_sha(request.expected_head_sha)
         repo = self.repository
         with self.uow:
             task = repo.lock_task(request.task_id)
             if task is None:
-                raise WorkflowError("unknown authorized task")
+                raise BusinessRuleError("unknown authorized task")
             active = repo.active_claim(task.task_id)
             now = self.clock()
             if active and active.expires_at <= now:

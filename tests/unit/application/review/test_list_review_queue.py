@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, Mock, call
 
 import pytest
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import (
     ActiveReviewClaim,
     ClaimedReviewTask,
@@ -17,7 +18,6 @@ from agent_workflow.application.review.use_cases.list_review_queue import (
 )
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 HEAD = "a" * 40
 ITEM = ReviewQueueItem("T", "Task", "owner/repo", "branch", HEAD, "high", 1)
@@ -150,7 +150,9 @@ def test_invalid_effort_type_does_not_open_uow(review_queue):
     use_case = ListReviewQueueUseCase(
         calls.uow, calls.leases, calls.reader, require_ci=True, clock=clock
     )
-    with pytest.raises(WorkflowError, match="requested_effort must be a string"):
+    with pytest.raises(
+        InvalidApplicationRequestError, match="requested_effort must be a string"
+    ):
         use_case.execute(1)
     assert calls.mock_calls == []
     clock.assert_not_called()

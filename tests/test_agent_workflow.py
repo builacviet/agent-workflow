@@ -183,6 +183,14 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
         provider,
     )
 
+    reads_provider = Mock(
+        side_effect=AssertionError("invalid review read opened PostgreSQL")
+    )
+    monkeypatch.setattr(
+        "agent_workflow.composition.postgres_mcp.postgres_mcp_review_reads",
+        reads_provider,
+    )
+
     def list_queue(requested_effort):
         assert requested_effort == "medium"
         return (
@@ -275,6 +283,29 @@ def test_http_mcp_boundary_and_complete_tool_contract(monkeypatch):
                         "register_task_handoff",
                         "get_coder_assignment",
                     }
+                    for name in ("get_review_context", "get_review_result"):
+                        invalid = await session.call_tool(name, {"task_id": " \t"})
+                        assert invalid.isError
+                        assert invalid.content[0].text == (
+                            f"Error executing tool {name}: unknown authorized task"
+                        )
+                    reads_provider.assert_not_called()
+                    invalid = await session.call_tool(
+                        "submit_review",
+                        {
+                            "submission": {
+                                **mutation_args["submit_review"]["submission"],
+                                "claim_token": " ",
+                            }
+                        },
+                    )
+                    assert invalid.isError
+                    assert invalid.content[0].text == (
+                        "Error executing tool submit_review: "
+                        "unknown claim or claim owner mismatch"
+                    )
+                    provider.assert_not_called()
+                    submit_operation.execute.assert_not_called()
                     queue = await session.call_tool(
                         "list_review_queue", {"requested_effort": "medium"}
                     )

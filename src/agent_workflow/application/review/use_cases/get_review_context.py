@@ -5,14 +5,15 @@ Dependencies: Application review ports and Domain workflow types.
 
 from dataclasses import dataclass
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import (
     PreviousReview,
     ReviewEvent,
     ReviewTask,
 )
 from agent_workflow.application.review.ports import IReviewContextReader
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 @dataclass(frozen=True)
@@ -21,9 +22,9 @@ class GetReviewContextInput:
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str):
-            raise WorkflowError("task_id must be a string")
+            raise InvalidApplicationRequestError("task_id must be a string")
         if not self.task_id.strip():
-            raise WorkflowError("task_id must not be blank")
+            raise InvalidApplicationRequestError("task_id must not be blank")
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class GetReviewContextUseCase:
     def execute(self, request: GetReviewContextInput) -> GetReviewContextOutput:
         snapshot = self._reader.read(request.task_id)
         if snapshot is None:
-            raise WorkflowError("unknown authorized task")
+            raise BusinessRuleError("unknown authorized task")
 
         task = snapshot.task
         previous = snapshot.previous_reviews[-1] if snapshot.previous_reviews else None

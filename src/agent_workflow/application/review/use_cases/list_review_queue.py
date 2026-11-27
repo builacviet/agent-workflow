@@ -5,6 +5,7 @@ Dependencies: Review DTOs, persistence ports, unit of work and Domain workflow p
 
 from collections.abc import Callable
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.dtos import (
     ReviewLeaseTransition,
     ReviewQueueItem,
@@ -17,7 +18,6 @@ from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.domain.review.events import ReviewEventAction
 from agent_workflow.domain.review.policy import require_ci
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import WorkflowError
 
 
 class ListReviewQueueUseCase:
@@ -40,7 +40,7 @@ class ListReviewQueueUseCase:
         self, requested_effort: str | None = None
     ) -> tuple[ReviewQueueItem, ...]:
         if requested_effort is not None and not isinstance(requested_effort, str):
-            raise WorkflowError("requested_effort must be a string")
+            raise InvalidApplicationRequestError("requested_effort must be a string")
         with self._uow:
             recovered = self._recover_expired_claims()
             items = tuple(
