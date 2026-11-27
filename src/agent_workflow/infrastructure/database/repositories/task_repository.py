@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import canonical_repository
 from agent_workflow.infrastructure.database.models import Task
 
 _CONTEXT_PATHS = TypeAdapter(tuple[str, ...])
@@ -37,7 +36,7 @@ class SqlAlchemyTaskRepository:
 
         return ReviewTask(
             task_id=row.task_id,
-            repository=canonical_repository(row.repository),
+            repository=row.repository,
             branch=row.branch,
             base_sha=row.base_sha,
             current_head_sha=row.current_head_sha,

@@ -4,16 +4,12 @@ import json
 import subprocess
 from urllib.parse import quote
 
-from agent_workflow.domain.workflow_identity import (
-    WorkflowError,
-    canonical_repository,
-    validate_sha,
-)
+from agent_workflow.domain.workflow_identity import WorkflowError, validate_sha
 
 
 class GitHubVerifier:
     def __init__(self, allowed_repositories: set[str]):
-        self.allowed = {canonical_repository(name) for name in allowed_repositories}
+        self.allowed = set(allowed_repositories)
 
     def _get(self, endpoint: str):
         try:
@@ -30,7 +26,6 @@ class GitHubVerifier:
             raise WorkflowError("GitHub verification unavailable") from None
 
     def __call__(self, repository: str, branch: str, base: str, head: str) -> None:
-        repository = canonical_repository(repository)
         if repository not in self.allowed:
             raise WorkflowError("repository is not authorized")
         validate_sha(base)

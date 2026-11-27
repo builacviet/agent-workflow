@@ -13,7 +13,6 @@ from agent_workflow.application.exceptions import CorruptedPersistenceDataError
 from agent_workflow.application.review.dtos import ReviewQueueItem
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.task.handoff import TaskEventAction
-from agent_workflow.domain.workflow_identity import canonical_repository
 from agent_workflow.infrastructure.database.models import CITask, Task, TaskEvent
 
 
@@ -29,7 +28,7 @@ def _queue_item(task: Task) -> ReviewQueueItem:
     return ReviewQueueItem(
         task_id=task.task_id,
         title=title,
-        repository=canonical_repository(task.repository),
+        repository=task.repository,
         branch=task.branch,
         head_sha=task.current_head_sha,
         requested_effort=task.requested_effort,

@@ -70,18 +70,26 @@ def test_first_handoff_records_atomic_transition():
 
 
 @pytest.mark.parametrize(
-    "invalid_request",
+    ("task_repository", "invalid_request"),
     [
-        replace(REQUEST, new_head_sha="bad"),
-        replace(REQUEST, test_summary=" "),
-        replace(REQUEST, repository="other/repo"),
-        replace(REQUEST, handoff_file_path="other"),
-        replace(REQUEST, branch="other"),
-        replace(REQUEST, base_sha=NEW),
+        (REQUEST.repository, replace(REQUEST, new_head_sha="bad")),
+        (REQUEST.repository, replace(REQUEST, test_summary=" ")),
+        (REQUEST.repository, replace(REQUEST, repository="other/repo")),
+        (
+            REQUEST.repository,
+            replace(REQUEST, repository="builacviet/techlead-review-poc"),
+        ),
+        (
+            "builacviet/techlead-review-poc",
+            replace(REQUEST, repository="builacviet/techlead-review-poc"),
+        ),
+        (REQUEST.repository, replace(REQUEST, handoff_file_path="other")),
+        (REQUEST.repository, replace(REQUEST, branch="other")),
+        (REQUEST.repository, replace(REQUEST, base_sha=NEW)),
     ],
 )
-def test_invalid_request_never_records(invalid_request):
-    use, repo, uow = setup()
+def test_invalid_request_never_records(task_repository, invalid_request):
+    use, repo, uow = setup(replace(TASK, repository=task_repository))
     with pytest.raises(BusinessRuleError):
         use.execute(invalid_request)
     repo.record.assert_not_called()

@@ -9,11 +9,7 @@ from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import (
-    LEGACY_REPOSITORY,
-    REPOSITORY,
-    WorkflowError,
-)
+from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
 
 
 @pytest.fixture
@@ -24,7 +20,7 @@ def spec() -> TaskAuthorizationSpec:
         description="Beschreibung",
         acceptance_criteria=("", "second"),
         definition_of_done="Observed and documented",
-        repository=LEGACY_REPOSITORY,
+        repository=REPOSITORY,
         branch="codex/example",
         base_sha="a" * 40,
         requested_effort="high",
@@ -34,7 +30,7 @@ def spec() -> TaskAuthorizationSpec:
 
 
 @pytest.mark.parametrize("effort", ["instant", "medium", "high"])
-def test_canonical_alias_defaults_and_exact_spec_semantics(spec, effort):
+def test_defaults_and_exact_spec_semantics(spec, effort):
     spec = replace(spec, requested_effort=effort)
     assert spec.repository == REPOSITORY
     assert spec.title == "  Preserve original whitespace  "
@@ -55,6 +51,7 @@ def test_canonical_alias_defaults_and_exact_spec_semantics(spec, effort):
         ("definition_of_done", "", "definition_of_done must be nonempty"),
         ("branch", "", "branch must be nonempty"),
         ("repository", "other/repository", "unauthorized repository"),
+        ("repository", "builacviet/techlead-review-poc", "unauthorized repository"),
         ("repository", " " + REPOSITORY, "unauthorized repository"),
         ("requested_effort", "low", "unsupported effort"),
         ("requested_effort", "high ", "unsupported effort"),

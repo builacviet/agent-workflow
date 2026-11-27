@@ -29,7 +29,6 @@ from agent_workflow.domain.task.handoff import HandoffRequest
 from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
     WorkflowError,
-    canonical_repository,
     validate_sha,
 )
 from agent_workflow.interfaces.review_assignment_response import (
@@ -124,9 +123,7 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
 
 
 def validate_config(config: dict, *, require_database: bool = True) -> None:
-    if canonical_repository(
-        config.get("repository", "")
-    ) != REPOSITORY or not config.get("tasks"):
+    if config.get("repository") != REPOSITORY or not config.get("tasks"):
         raise WorkflowError("explicit repository and task allowlist required")
     for key in (
         ("database", "pem", "scratch") if require_database else ("pem", "scratch")

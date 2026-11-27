@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
-from agent_workflow.domain.workflow_identity import canonical_repository, validate_sha
+from agent_workflow.domain.workflow_identity import REPOSITORY, validate_sha
 
 
 class TaskEventAction(StrEnum):
@@ -69,11 +69,11 @@ class HandoffTask:
 
 
 def validate_handoff(task: HandoffTask, request: HandoffRequest) -> None:
-    if (canonical_repository(request.repository), request.branch, request.base_sha) != (
-        canonical_repository(task.repository),
-        task.branch,
-        task.base_sha,
-    ):
+    if task.repository != REPOSITORY or (
+        request.repository,
+        request.branch,
+        request.base_sha,
+    ) != (task.repository, task.branch, task.base_sha):
         raise BusinessRuleError("handoff differs from authorized task")
     if request.handoff_file_path not in task.context_paths:
         raise BusinessRuleError("handoff path is not authorized")

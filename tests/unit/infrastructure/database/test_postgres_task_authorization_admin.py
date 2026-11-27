@@ -16,7 +16,7 @@ from agent_workflow.application.exceptions import (
 )
 from agent_workflow.composition import task_deps
 from agent_workflow.domain.exceptions import DomainError
-from agent_workflow.domain.workflow_identity import LEGACY_REPOSITORY, REPOSITORY
+from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.interfaces.cli import admin
 from agent_workflow.interfaces.cli.task_spec import (
     ProvisionTaskSpec,
@@ -43,7 +43,7 @@ def spec_file(tmp_path):
         "description": "Example",
         "acceptance_criteria": ["One task", "One event"],
         "definition_of_done": "Observed",
-        "repository": LEGACY_REPOSITORY,
+        "repository": REPOSITORY,
         "branch": "codex/example",
         "base_sha": "a" * 40,
         "requested_effort": "high",
@@ -177,6 +177,7 @@ def test_libpq_host_overrides_are_rejected(entrypoint, monkeypatch, capsys, over
         ({"synthetic": SECRET}, "synthetic: expected a boolean"),
         ({SECRET: SECRET}, "TaskSpec: unexpected field"),
         ({"repository": SECRET}, "unauthorized repository"),
+        ({"repository": "builacviet/techlead-review-poc"}, "unauthorized repository"),
         ({"task_id": SECRET + "\0"}, "task_id: contains unsupported text"),
         (
             {"context_paths": ["good.md", {"password": SECRET}]},
