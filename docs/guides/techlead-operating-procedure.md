@@ -50,6 +50,8 @@ Write the approved contract **once in Notion**. The following are the **10 core 
 | **Execution** | Responsible Coder/TL, assigned branch/worktree, permitted local execution and reasoning effort (normally Medium; High when warranted by risk). |
 | **Handoff** | Draft PR with task URL, base/tested/HEAD SHA, changed paths, AC mapping, actual test commands/results/skips, CI and risks. |
 
+**Design preflight before task approval:** Apply the [five reuse and simplicity checks](../templates/tl-review-checklist.md#reuse-and-simplicity-preflight-design-and-review) to the merged implementation and bounded callers. Record any needed exception in existing Goal/Scope/Constraints rather than inventing another gate, abstraction or checklist. Reapply the same checks during exact-HEAD PR review.
+
 **Additional mandatory authorizations:** identify the **actual authenticated actor**, whether Coder may commit/push/open Draft PR, any protected-path or external-effect Owner decision, and current Notion Owner Gate. Code-write, publish and merge are **separate** rights. A task's missing fields or conflicting rules do not give Coder implied permission.
 
 A short assignment prompt should contain the **Notion task link + ID**, base/branch, `AGENTS.md` reminder and critical guardrails. Let Coder read the authoritative task; do not duplicate its whole AC, evidence template or historical documentation in the prompt.
