@@ -985,8 +985,8 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     first_manager = SandboxManager(state)
     first = CoderRuntime(
         {},
-        sandbox=first_manager,
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=first_manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
@@ -1000,8 +1000,8 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     second_manager = SandboxManager(state)
     second = CoderRuntime(
         {"database": dsn},
-        sandbox=second_manager,
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=second_manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
@@ -1023,8 +1023,8 @@ def test_explicit_default_state_uses_stable_config_path(monkeypatch):
     manager = SandboxManager(AppConfig.from_env({}).sandbox_state_dir)
     runtime = CoderRuntime(
         {},
-        sandbox=manager,
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
