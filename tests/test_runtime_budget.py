@@ -47,3 +47,51 @@ def test_wall_clock_rollback_does_not_extend_budget(monkeypatch):
         monotonic[0] = 511
         with pytest.raises(TimeoutError):
             budget.check_deadline()
+
+
+def test_docker_runtime_missing_image_is_an_admission_error(tmp_path):
+    from unittest.mock import Mock
+
+    from agent_workflow.application.exceptions import RuntimeAdmissionError
+    from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
+    from agent_workflow.infrastructure.runtime.sandbox import SandboxManager
+
+    runtime = DockerRuntime(
+        {},
+        dispatch=Mock(),
+        leadership_guard=lambda: True,
+        sandbox=SandboxManager(tmp_path / "sandbox-fences"),
+    )
+    with pytest.raises(
+        RuntimeAdmissionError,
+        match="explicit sandbox image required for runtime plugin",
+    ):
+        runtime.validate_image("sha256:" + "a" * 64)
+
+
+def test_docker_runtime_deadline_expires_before_timeout_calculation(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent_workflow.infrastructure.runtime import docker_runtime as runtime
+
+    monkeypatch.setattr(runtime.time, "time", lambda: 100)
+    with pytest.raises(TimeoutError, match="^dispatch deadline exceeded$"):
+        runtime.DockerRuntime._remaining_seconds(SimpleNamespace(deadline=99))
+
+
+def test_docker_runtime_deadline_expires_during_timeout_calculation(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent_workflow.infrastructure.runtime import docker_runtime as runtime
+
+    monkeypatch.setattr(runtime.time, "time", lambda: 100)
+    received = []
+
+    def timeout_after_budget(limit):
+        received.append(limit)
+        return 0
+
+    monkeypatch.setattr(runtime, "operation_timeout", timeout_after_budget)
+    with pytest.raises(TimeoutError, match="^dispatch deadline exceeded$"):
+        runtime.DockerRuntime._remaining_seconds(SimpleNamespace(deadline=101))
+    assert received == [1]

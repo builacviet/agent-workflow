@@ -90,7 +90,7 @@ def main() -> None:
     try:
         try:
             runtime.docker(claim, timeout_stage, "test")
-        except BusinessRuleError:
+        except (BusinessRuleError, TimeoutError):
             pass
         else:
             raise AssertionError("timeout probe unexpectedly completed")

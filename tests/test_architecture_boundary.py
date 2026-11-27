@@ -437,7 +437,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     path.parent.mkdir()
     path.touch()
     with pytest.raises(
-        BusinessRuleError, match="pre-launch evidence conflicts with Docker records"
+        RuntimeContractError, match="pre-launch evidence conflicts with Docker records"
     ):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
