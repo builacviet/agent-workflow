@@ -7,10 +7,10 @@ import pytest
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.exceptions import DispatchCleanupUnconfirmedError
 from agent_workflow.composition.postgres_controller import (
     ControllerDependencies,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 
 SHA = "a" * 40
 CLAIM = DispatchClaim(
@@ -211,7 +211,7 @@ def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure)
     )
     if failure:
         expected = {
-            "cleanup": BusinessRuleError,
+            "cleanup": DispatchCleanupUnconfirmedError,
             "finish": RuntimeError,
             "lost": PermissionError,
         }[failure]

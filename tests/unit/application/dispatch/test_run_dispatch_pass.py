@@ -7,6 +7,7 @@ import pytest
 from agent_workflow import budget
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.exceptions import DispatchCleanupUnconfirmedError
 from agent_workflow.budget import operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
 
@@ -250,7 +251,7 @@ def test_cleanup_fence_never_rewrites_committed_finish(ports, lost_before_cleanu
         ports.leadership.is_held.side_effect = [True, not lost_before_cleanup, False]
 
     ports.dispatch.finish.side_effect = finish
-    with pytest.raises(BusinessRuleError, match="reconcile engine pin"):
+    with pytest.raises(DispatchCleanupUnconfirmedError, match="reconcile engine pin"):
         use_case(ports).execute({"T"})
 
     ports.dispatch.finish.assert_called_once_with("pass", HEAD)
