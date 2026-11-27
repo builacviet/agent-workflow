@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import (
     REPOSITORY,
-    WorkflowError,
     validate_sha,
 )
 
@@ -42,10 +42,10 @@ class TaskAuthorizationSpec:
             "risk_level",
         ):
             if type(getattr(self, name)) is not str:
-                raise WorkflowError(f"{name} must be a string")
+                raise BusinessRuleError(f"{name} must be a string")
         for name in ("task_id", "title", "description", "definition_of_done", "branch"):
             if not getattr(self, name):
-                raise WorkflowError(f"{name} must be nonempty")
+                raise BusinessRuleError(f"{name} must be nonempty")
         for name in ("acceptance_criteria", "context_paths"):
             values = getattr(self, name)
             if (
@@ -53,16 +53,16 @@ class TaskAuthorizationSpec:
                 or not values
                 or any(type(value) is not str for value in values)
             ):
-                raise WorkflowError(f"{name} must be a nonempty tuple of strings")
+                raise BusinessRuleError(f"{name} must be a nonempty tuple of strings")
         if (
             type(self.require_verified_effort) is not bool
             or type(self.synthetic) is not bool
         ):
-            raise WorkflowError(
+            raise BusinessRuleError(
                 "require_verified_effort and synthetic must be booleans"
             )
         if self.repository != REPOSITORY or self.requested_effort not in _LOCAL_EFFORTS:
-            raise WorkflowError("unauthorized repository or unsupported effort")
+            raise BusinessRuleError("unauthorized repository or unsupported effort")
         validate_sha(self.base_sha)
         if any(
             not path
@@ -71,11 +71,11 @@ class TaskAuthorizationSpec:
             or ":" in path
             for path in self.context_paths
         ):
-            raise WorkflowError("context paths must be repository-relative")
+            raise BusinessRuleError("context paths must be repository-relative")
 
     def match_existing(self, existing: "TaskAuthorizationSpec") -> None:
         if self != existing:
-            raise WorkflowError("task authorization conflicts with stored metadata")
+            raise BusinessRuleError("task authorization conflicts with stored metadata")
 
 
 @dataclass(frozen=True)

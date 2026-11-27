@@ -4,12 +4,13 @@ from dataclasses import replace
 
 import pytest
 
+from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.task.authorization import (
     TaskAuthorization,
     TaskAuthorizationSpec,
 )
-from agent_workflow.domain.workflow_identity import REPOSITORY, WorkflowError
+from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
 @pytest.fixture
@@ -72,5 +73,5 @@ def test_defaults_and_exact_spec_semantics(spec, effort):
     ],
 )
 def test_rejects_invalid_task_specs(spec, field, value, message):
-    with pytest.raises(WorkflowError, match=message):
+    with pytest.raises(BusinessRuleError, match=message):
         replace(spec, **{field: value})
