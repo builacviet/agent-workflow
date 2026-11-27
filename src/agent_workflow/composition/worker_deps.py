@@ -5,6 +5,7 @@ Dependencies: Application operations and PostgreSQL adapters.
 
 from collections.abc import Callable
 
+from agent_workflow.app_config import AppConfig
 from agent_workflow.application.ci.use_cases.track_ci_task import TrackCiTaskUseCase
 from agent_workflow.composition.ci_deps import PostgresCiWriteScope
 from agent_workflow.composition.postgres_controller import ControllerDependencies
@@ -18,7 +19,9 @@ from agent_workflow.infrastructure.postgres_leadership import (
     PostgresLeadershipLock,
 )
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.sandbox import SandboxManager
 from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.sandbox_state_paths import validate_sandbox_state_dir
 
 
 def compose_postgres_worker(
@@ -28,6 +31,7 @@ def compose_postgres_worker(
     *,
     leadership_guard: Callable[[], None],
     registry: RuntimeRegistry,
+    app_config: AppConfig,
 ) -> CoderRuntime:
     """Borrow the Controller's adapters and its raising guard for this claim.
 
@@ -83,10 +87,16 @@ def compose_postgres_worker(
             and leadership.is_held() is True
         )
 
+    if type(app_config) is not AppConfig:
+        raise TypeError("Worker requires explicit AppConfig")
+    sandbox = SandboxManager(
+        fence_dir=validate_sandbox_state_dir(app_config.sandbox_state_dir)
+    )
     return CoderRuntime(
         config,
         handoff_provider,
         registry=registry,
+        sandbox=sandbox,
         dispatch=dispatch,
         ci=ci_tracking,
         leadership_guard=guard,

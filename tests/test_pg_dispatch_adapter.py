@@ -646,7 +646,9 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
 
     _, observer, task_id = setup
     monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "fences"))
-    app = AppConfig(pg_runtime_dsn=os.environ["PG_TEST_DSN"])
+    app = AppConfig(
+        pg_runtime_dsn=os.environ["PG_TEST_DSN"], sandbox_state_dir=tmp_path / "fences"
+    )
     # Admission settings are covered offline with inert credential fixtures.
     # This PG test targets the real factory/guard/adapters and fake Worker seam.
     monkeypatch.setattr(dispatch_deps, "_validate_worker_config", lambda *_: None)
@@ -673,11 +675,20 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
             )
         return dependencies
 
-    def compose_worker(config, service, deps, *, leadership_guard, registry):
+    def compose_worker(
+        config, service, deps, *, leadership_guard, registry, app_config
+    ):
+        assert app_config is app
         runtime = original_compose(
-            config, service, deps, leadership_guard=leadership_guard, registry=registry
+            config,
+            service,
+            deps,
+            leadership_guard=leadership_guard,
+            registry=registry,
+            app_config=app_config,
         )
         assert runtime.registry is registry
+        assert runtime.sandbox._fence_dir == app.sandbox_state_dir
         assert service is deps.handoff_provider
         assert runtime.agent_runtime.dispatch is deps.dispatch
         assert runtime.agent_runtime.ci is deps.ci_tracking

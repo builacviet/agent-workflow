@@ -29,7 +29,6 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
     from agent_workflow.infrastructure.runtime import sandbox
     from agent_workflow.runners import coder_runtime as module
 
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
     pem = tmp_path / "app.pem"
@@ -61,6 +60,7 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
+        sandbox=sandbox.SandboxManager(tmp_path / "sandbox-fences"),
     )
     claim = {
         "dispatch_id": "a" * 32,

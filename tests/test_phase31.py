@@ -375,7 +375,6 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
     import agent_workflow.budget as budget
     import agent_workflow.runners.coder_runtime as runtime
 
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "sandbox-fences"))
     now = [1000]
     monkeypatch.setattr(budget.time, "time", lambda: now[0])
 
@@ -400,6 +399,7 @@ def test_cleanup_remains_available_after_deadline(monkeypatch, tmp_path):
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
+        sandbox=sandbox.SandboxManager(tmp_path / "sandbox-fences"),
     )
     controller_runtime.sandbox.record_engine(
         "a" * 32, "unix:///fixture.sock", "fixture-daemon-a"

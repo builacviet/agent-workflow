@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 
 from agent_workflow import budget
+from agent_workflow.app_config import AppConfig
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
@@ -980,27 +981,34 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     monkeypatch, tmp_path
 ):
     state = tmp_path / "sandbox-state"
-    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(state))
+    monkeypatch.setenv("WFC_SANDBOX_STATE_DIR", str(tmp_path / "ignored"))
+    first_manager = SandboxManager(state)
     first = CoderRuntime(
         {},
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=first_manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
+    assert first.sandbox is first_manager
     assert first.sandbox._fence_dir == state
     dispatch = "a" * 32
     first.sandbox.record_engine(dispatch, "unix:///fixture.sock", "fixture-daemon-a")
     dsn = "postgresql://user:secret-password@localhost/database"
+    second_manager = SandboxManager(state)
     second = CoderRuntime(
         {"database": dsn},
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=second_manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
+    assert second.sandbox is second_manager
+    assert second.sandbox is not first.sandbox
     assert second.sandbox._fence_dir == state
     assert second.sandbox.has_launch_records(dispatch)
     assert second.sandbox.recovery_engine(dispatch) == (
@@ -1010,16 +1018,19 @@ def test_runtime_state_is_independent_of_database_and_survives_restart(
     assert "secret-password" not in str(second.sandbox._fence_dir)
 
 
-def test_runtime_without_state_override_uses_stable_default(monkeypatch, tmp_path):
+def test_explicit_default_state_uses_stable_config_path(monkeypatch):
     monkeypatch.delenv("WFC_SANDBOX_STATE_DIR", raising=False)
+    manager = SandboxManager(AppConfig.from_env({}).sandbox_state_dir)
     runtime = CoderRuntime(
         {},
         Mock(spec=RegisterTaskHandoffUseCase),
+        sandbox=manager,
         dispatch=Mock(),
         ci=Mock(),
         leadership_guard=lambda: True,
         registry=RuntimeRegistry((CodexCLIPlugin(),)),
     )
+    assert runtime.sandbox is manager
     assert (
         runtime.sandbox._fence_dir == Path.home() / ".agent-workflow" / "sandbox-fences"
     )

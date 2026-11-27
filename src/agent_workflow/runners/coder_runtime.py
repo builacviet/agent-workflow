@@ -14,7 +14,6 @@ import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
-from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.runtime.dtos import RuntimePlan, RuntimeRequest
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
@@ -53,6 +52,7 @@ from agent_workflow.runners.agent_runtime import (
     CiTracking,
     DispatchEvidence,
 )
+from agent_workflow.sandbox_state_paths import validate_sandbox_state_dir
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -212,6 +212,7 @@ class CoderRuntime:
         ci: CiTracking,
         leadership_guard: Callable[[], bool],
         registry: RuntimeRegistry,
+        sandbox: SandboxManager,
     ) -> None:
         if (
             not callable(handoff_provider)
@@ -221,34 +222,18 @@ class CoderRuntime:
             or not callable(getattr(ci, "execute", None))
             or not callable(leadership_guard)
             or type(registry) is not RuntimeRegistry
+            or type(sandbox) is not SandboxManager
+            or not isinstance(sandbox._fence_dir, Path)
+            or not sandbox._fence_dir.is_absolute()
         ):
             raise TypeError(
                 "Worker requires injected workflow, dispatch evidence, CI tracking, "
-                "leadership and runtime registry"
+                "leadership, runtime registry and durable sandbox"
             )
-        self._initialize(
-            config,
-            handoff_provider,
-            registry,
-            AppConfig.from_env(),
-            dispatch,
-            ci,
-            leadership_guard,
-        )
-
-    def _initialize(
-        self,
-        config: dict,
-        handoff_provider: HandoffUseCaseProvider,
-        registry: RuntimeRegistry,
-        app_config: AppConfig,
-        dispatch: DispatchEvidence,
-        ci: CiTracking,
-        leadership_guard: Callable[[], bool] | None,
-    ) -> None:
+        validate_sandbox_state_dir(sandbox._fence_dir)
         self.config, self.handoff_provider = config, handoff_provider
         self.registry = registry
-        self.sandbox = SandboxManager(fence_dir=app_config.sandbox_state_dir)
+        self.sandbox = sandbox
         self.agent_runtime = AgentRuntime(
             self,
             dispatch,
