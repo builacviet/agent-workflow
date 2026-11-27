@@ -5,13 +5,13 @@ from unittest.mock import MagicMock, Mock, call
 import pytest
 from sqlalchemy.engine import Connection
 
+from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
 from agent_workflow.application.shared.errors import PersistenceUnavailableError
 from agent_workflow.application.shared.unit_of_work import IUnitOfWork
 from agent_workflow.composition import review_deps
-from agent_workflow.domain.workflow_identity import WorkflowError
 from agent_workflow.infrastructure.database import transaction_options, unit_of_work
 from agent_workflow.infrastructure.database.session_factory import (
     PostgresFactory,
@@ -193,7 +193,9 @@ def test_composition_injects_one_session_and_blank_input_never_opens_scope(
     monkeypatch.setattr(review_deps, "SqlAlchemyReviewRepository", reviews)
     use_case = review_deps.create_get_review_context_use_case(factory)
 
-    with pytest.raises(WorkflowError, match="task_id must not be blank"):
+    with pytest.raises(
+        InvalidApplicationRequestError, match="task_id must not be blank"
+    ):
         use_case.execute(GetReviewContextInput(" \t\n"))
 
     factory.connect_session.assert_not_called()
