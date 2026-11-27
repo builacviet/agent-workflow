@@ -1,4 +1,6 @@
-"""Bounded HTTPS POST transport for trusted OpenAI-compatible providers.
+"""Layer: Infrastructure
+Responsibility: Bounded HTTPS POST transport for trusted OpenAI-compatible providers.
+Dependencies: Python standard library and injected secret resolver/connection factory.
 
 This module deliberately does not select providers, resolve ambient credentials,
 follow redirects, inherit proxy configuration, or execute provider tool calls.

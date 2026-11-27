@@ -10,7 +10,7 @@ a Controller, service, container, or provider call.
 
 The trusted host first loads an operator-approved V1-02C `RoleProfiles` value
 and an approved task context, then calls V1-02D `encode_request`. The resulting
-`ProtocolRequest` is passed to `integrations.provider_http.post_json` with:
+`ProtocolRequest` is passed to `infrastructure.providers.provider_http.post_json` with:
 
 - the selected provider's exact approved HTTPS base URL;
 - the request's fixed `/chat/completions` or `/responses` path and JSON body;
