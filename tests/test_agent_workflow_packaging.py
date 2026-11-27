@@ -30,6 +30,7 @@ def test_retired_packages_and_entrypoints_are_absent():
     assert not (source / "order_service").exists()
     assert not (source / "agent_workflow" / "mcp").exists()
     assert not (source / "agent_workflow" / "bootstrap").exists()
+    assert not (source / "agent_workflow" / "integrations").exists()
     for module in (
         "agent_workflow.mcp",
         "agent_workflow.auth0_oauth",
@@ -39,13 +40,16 @@ def test_retired_packages_and_entrypoints_are_absent():
         "agent_workflow.bootstrap",
         "agent_workflow.controller",
         "agent_workflow.github",
-        "agent_workflow.integrations.github",
+        "agent_workflow.integrations",
         "agent_workflow.composition.postgres_ci_entrypoint",
         "agent_workflow.composition.postgres_dispatch_entrypoint",
         "agent_workflow.composition.postgres_dispatch_deps",
     ):
         assert importlib.util.find_spec(module) is None
     assert importlib.util.find_spec("agent_workflow.interfaces.cli.controller")
+    assert importlib.util.find_spec(
+        "agent_workflow.infrastructure.providers.provider_http"
+    )
 
 
 def test_trusted_worker_imports_from_agent_workflow_package():

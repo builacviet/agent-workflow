@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from agent_workflow.integrations.provider_http import (
+from agent_workflow.infrastructure.providers.provider_http import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     ProviderTransportError,
@@ -237,7 +237,7 @@ def test_valid_post_is_direct_single_attempt_with_auth_and_explicit_timeouts() -
 def test_default_https_connection_does_not_inherit_proxy_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_workflow.integrations import provider_http
+    from agent_workflow.infrastructure.providers import provider_http
 
     harness = Harness(FakeResponse(body=b'{"ok":true}'))
     seen: list[tuple[str, int, float, bool]] = []
