@@ -17,17 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from agent_workflow.app_config import AppConfig  # noqa: E402
-from agent_workflow.application.task.use_cases.register_task_handoff import (  # noqa: E402
-    RegisterTaskHandoffUseCase,
-)
+from agent_workflow.application.dispatch.ports import DispatchClaim  # noqa: E402
 from agent_workflow.domain.exceptions import BusinessRuleError  # noqa: E402
-from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin  # noqa: E402
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry  # noqa: E402
+from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime  # noqa: E402
 from agent_workflow.infrastructure.runtime.sandbox import SandboxManager  # noqa: E402
-from agent_workflow.runners.coder_runtime import (  # noqa: E402
-    CoderRuntime,
-    safe_path,
-)
+from agent_workflow.infrastructure.runtime.worker_config import safe_path  # noqa: E402
 from agent_workflow.workers.trusted_git.repository import git  # noqa: E402
 
 
@@ -68,33 +62,30 @@ def main() -> None:
     profile = ROOT / "docker/coder-seccomp.json"
     dispatch = Mock()
     dispatch.is_pre_launch.return_value = False
-    runtime = CoderRuntime(
+    runtime = DockerRuntime(
         {
             "image": args.image,
             "seccomp_profile": str(profile),
             "seccomp_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
         },
-        Mock(spec=RegisterTaskHandoffUseCase),
         dispatch=dispatch,
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
         sandbox=SandboxManager(AppConfig.from_env().sandbox_state_dir),
     )
-    claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 120}
+    claim = DispatchClaim(uuid.uuid4().hex, "SMOKE", "0" * 40, time.time() + 120, 0)
     try:
         print(runtime.docker(claim, stage, "probe").decode(), flush=True)
-        runtime.stop(claim["dispatch_id"])
+        runtime.stop(claim.dispatch_id)
         print(runtime.docker(claim, stage, "test").decode(), flush=True)
     finally:
-        runtime.stop(claim["dispatch_id"])
+        runtime.stop(claim.dispatch_id)
     timeout_stage = scratch / "timeout"
     timeout_stage.mkdir()
     timeout_stage.chmod(0o777)
     (timeout_stage / "test_timeout.py").write_text(
         "def test_sleep():\n    import time\n    time.sleep(30)\n"
     )
-    claim = {"dispatch_id": uuid.uuid4().hex, "deadline": time.time() + 3}
+    claim = DispatchClaim(uuid.uuid4().hex, "SMOKE", "0" * 40, time.time() + 3, 0)
     started = time.monotonic()
     try:
         try:
@@ -104,7 +95,7 @@ def main() -> None:
         else:
             raise AssertionError("timeout probe unexpectedly completed")
     finally:
-        runtime.stop(claim["dispatch_id"])
+        runtime.stop(claim.dispatch_id)
     print(f"TIMEOUT_STOP_CONFIRMED ({time.monotonic() - started:.2f}s)")
 
 

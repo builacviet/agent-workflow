@@ -3,9 +3,8 @@ Responsibility: Define contracts for a leadership-gated dispatch pass.
 Dependencies: Python standard library only.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, TypeVar
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +26,7 @@ class CoderAssignment(TypedDict):
     base_sha: str
 
 
-DispatchExecution = Callable[[DispatchClaim, CoderAssignment, Callable[[], None]], str]
+_Assignment = TypeVar("_Assignment", bound=CoderAssignment, covariant=True)
 
 
 class IDispatchLeadership(Protocol):
@@ -48,5 +47,5 @@ class IDispatchRepository(Protocol):
     def block(self, dispatch_id: str) -> None: ...
 
 
-class ICoderAssignmentReader(Protocol):
-    def get_coder_assignment(self, task_id: str) -> CoderAssignment: ...
+class ICoderAssignmentReader(Protocol[_Assignment]):
+    def get_coder_assignment(self, task_id: str) -> _Assignment: ...

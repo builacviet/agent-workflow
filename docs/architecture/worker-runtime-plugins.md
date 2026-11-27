@@ -1,8 +1,34 @@
-# Worker Runtime Adapter — CURRENT and TARGET contract
+# Worker Runtime Adapter â€” CURRENT and TARGET contract
 
-**CURRENT:** `src/agent_workflow/application/runtime/dtos.py` defines RuntimeRequest/Spec, RuntimeManifest, RuntimePlan and WorkerResult; `application/runtime/ports.py` defines IAgentRuntimePlugin (manifest, plan, result). `infrastructure/runtime/registry.py` defines RuntimeRegistry, and `infrastructure/runtime/codex_plugin.py` implements CodexCLIPlugin. Composition constructs the trusted Codex-only registry once per dispatch scope, validates selection before database acquisition, and injects the same registry into the Worker when a claim is eligible. The host accepts an approved image and capability-matched request. RuntimeRegistry._resolve currently supports **only role=dev and phase=code**. CodexCLIPlugin is a built-in legacy adapter with special approved auth behavior.
+## Current dispatch path
 
-The concrete offline Docker backend, its transport helpers and detached watchdog live in `infrastructure/runtime/sandbox.py` and `infrastructure/runtime/sandbox_watchdog.py`. The watchdog launches via `agent_workflow.infrastructure.runtime.sandbox_watchdog`. Host link detection lives in `infrastructure/runtime/workspace.py`. Composition creates a claim-scoped SandboxManager with the validated state directory from the entrypoint's AppConfig and injects that exact instance into the legacy CoderRuntime. CoderRuntime neither reads the environment nor constructs a default backend. `application/runtime/services/agent_execution.py` owns the existing Prepare/Code/Test/Publish sequencing, leadership checks, cleanup, runtime evidence, handoff and CI tracking via typed operation ports and an explicit CI policy. The legacy CoderRuntime remains its temporary host adapter; direct Service injection into Dispatch and removal of that host are subsequent cutover steps. This ownership change is not evidence of real Docker conformance; authorized live checks remain NOT VERIFIED until run.
+CLI Presentation invokes `RunDispatchPassUseCase`. Dispatch Composition preflights
+the local settings, constructs one approved registry per scope, and injects
+`AgentExecutionService` directly. Dispatch checks Domain eligibility, exact task
+identity and the allowlist before the Service is called. The per-claim factory
+creates a `SandboxManager`, the Docker adapter and the workspace adapter only
+after the claim and leadership checks. The sandbox uses the state directory from
+the entrypoint's validated `AppConfig`.
+
+The Application Service builds the typed request, obtains the runtime plan and
+coordinates Prepare → Code → Test → Publish. It records runtime evidence, submits
+the handoff and tracks CI for the exact published HEAD. Dispatch commits finish,
+clears the terminal engine pin through the same adapter, then releases leadership.
+A phase or publication failure can leave the pin and ledger available for
+reconciliation.
+
+The Application runtime DTOs and `IAgentRuntimePlugin` contract remain unchanged.
+`RuntimeRegistry` validates role, phase, capabilities, plan and image approval.
+Dispatch supports Dev Code with the built-in Codex CLI plugin and its existing
+device-login profile. Docker stage execution and engine recovery live in
+`infrastructure/runtime/docker_runtime.py`. Snapshot and result checks live in
+`workspace.py`, local preflight in `worker_config.py`, and the outbound Worker
+assignment payload in `worker_payload.py`. The trusted Git worker owns Prepare
+and Publish credentials. The sandbox transport and detached watchdog remain in
+`sandbox.py` and `sandbox_watchdog.py`.
+
+The legacy runners package and root compatibility import have been removed.
+Live Docker conformance remains unverified.
 
 **NOT CURRENT:** generic Planner/QC/Reviewer adapter role routing, a public plugin installation/SDK marketplace, a Docker/Podman interchangeable ExecutionBackend port, trusted model/effort attestation or automatic provider credentials. Do not report these as implemented.
 

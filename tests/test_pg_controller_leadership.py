@@ -1,5 +1,6 @@
 """Deterministic guarded PostgreSQL Controller lifecycle tests."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -53,7 +54,7 @@ def fixture(acquired=True):
     dispatch.claim.return_value = CLAIM
     assignment = Mock()
     assignment.get_coder_assignment.return_value = ASSIGNMENT.copy()
-    execute = Mock(return_value=SHA)
+    execute = Mock(return_value=SimpleNamespace(head_sha=SHA))
     deps = ControllerDependencies(
         handoff_provider=Mock(),
         dispatch=dispatch,
@@ -68,7 +69,7 @@ def fixture(acquired=True):
 def test_denied_and_acquisition_error_do_no_work_and_release():
     deps, assignment, execute = fixture(False)
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     assert not dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_not_called()
@@ -79,7 +80,7 @@ def test_denied_and_acquisition_error_do_no_work_and_release():
     deps, assignment, execute = fixture()
     deps.leadership.try_acquire = Mock(side_effect=RuntimeError("database unavailable"))
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     with pytest.raises(RuntimeError):
         dispatch_pass.execute({"T"})
@@ -91,7 +92,7 @@ def test_denied_and_acquisition_error_do_no_work_and_release():
 def test_positive_iteration_and_retired_instance_cannot_retry():
     deps, assignment, execute = fixture()
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     assert dispatch_pass.execute({"T"})
     deps.dispatch.claim.assert_called_once_with({"T"}, 1800, track_pre_launch=True)
@@ -120,7 +121,7 @@ def test_loss_at_material_boundary_preserves_uncertain_slot(lost_at):
 
     operation.side_effect = lose
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     with pytest.raises(PermissionError, match="leadership lost"):
         dispatch_pass.execute({"T"})
@@ -142,10 +143,10 @@ def test_callback_guard_stops_internal_effect_and_exception_blocks_only_while_ow
         deps.leadership.held = False
         guard()
         publish()
-        return SHA
+        return SimpleNamespace(head_sha=SHA)
 
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     with pytest.raises(PermissionError):
         dispatch_pass.execute({"T"})
@@ -155,7 +156,7 @@ def test_callback_guard_stops_internal_effect_and_exception_blocks_only_while_ow
     deps, assignment, execute = fixture()
     execute.side_effect = RuntimeError("worker failed")
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     with pytest.raises(RuntimeError, match="worker failed"):
         dispatch_pass.execute({"T"})
@@ -172,7 +173,7 @@ def test_cancellation_releases_session_and_retains_slot_on_loss():
 
     execute.side_effect = cancelled
     dispatch_pass = RunDispatchPassUseCase(
-        deps.leadership, deps.dispatch, assignment, execute
+        deps.leadership, deps.dispatch, assignment, Mock(execute=execute)
     )
     with pytest.raises(KeyboardInterrupt):
         dispatch_pass.execute({"T"})
@@ -192,10 +193,11 @@ def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure)
         if failure == "lost":
             deps.leadership.held = False
 
-    def cleanup(dispatch_id):
+    def cleanup(dispatch_id, result):
         assert deps.leadership.is_held()
         assert deps.leadership.release_calls == 0
         assert dispatch_id == "dispatch"
+        assert result is execute.return_value
         events.append("cleanup")
         if failure == "cleanup":
             raise RuntimeError("pin retained")
@@ -205,8 +207,7 @@ def test_post_finish_cleanup_is_owned_and_cannot_rewrite_terminal_state(failure)
         deps.leadership,
         deps.dispatch,
         assignment,
-        execute,
-        on_finished=cleanup,
+        Mock(execute=execute, release_engine=cleanup),
     )
     if failure:
         expected = {

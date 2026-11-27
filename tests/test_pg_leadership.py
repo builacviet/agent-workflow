@@ -236,7 +236,7 @@ def _controller_process(mode, channel):
                 assignment = Mock()
                 execute = Mock()
                 acquired = RunDispatchPassUseCase(
-                    lock, dispatch, assignment, execute
+                    lock, dispatch, assignment, Mock(execute=execute)
                 ).execute({"PG03-C-test"})
                 channel.send(
                     (acquired, backend, dispatch.claim.call_count, execute.call_count)

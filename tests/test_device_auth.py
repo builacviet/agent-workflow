@@ -10,12 +10,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from agent_workflow.application.task.use_cases.register_task_handoff import (
-    RegisterTaskHandoffUseCase,
-)
+from agent_workflow.application.dispatch.ports import DispatchClaim
+from agent_workflow.application.runtime.dtos import RuntimeRequest
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
+from agent_workflow.infrastructure.runtime.registry import (
+    RuntimeRegistry,
+    runtime_spec_from_config,
+)
 
 
 def test_worker_entrypoint_uses_trusted_git_module():
@@ -26,8 +28,8 @@ def test_worker_entrypoint_uses_trusted_git_module():
 
 @pytest.mark.parametrize("mode", ["code", "test", "prepare", "publish", "probe"])
 def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
+    from agent_workflow.infrastructure.runtime import docker_runtime as module
     from agent_workflow.infrastructure.runtime import sandbox
-    from agent_workflow.runners import coder_runtime as module
 
     profile = tmp_path / "profile.json"
     profile.write_text("{}")
@@ -53,24 +55,26 @@ def test_only_code_gets_device_auth_mount(tmp_path, monkeypatch, mode):
         "run_container",
         lambda args, *rest: calls.append(args) or b"ok",
     )
-    runtime = CoderRuntime(
+    runtime = DockerRuntime(
         config,
-        Mock(spec=RegisterTaskHandoffUseCase),
         dispatch=Mock(),
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(),)),
         sandbox=sandbox.SandboxManager(tmp_path / "sandbox-fences"),
     )
-    claim = {
-        "dispatch_id": "a" * 32,
-        "input_sha": "b" * 40,
-        "deadline": time.time() + 60,
-    }
-    code_plan = (
-        runtime.registry.plan(runtime._code_request(claim)) if mode == "code" else None
-    )
-    runtime.docker(claim, tmp_path, mode, code_plan=code_plan)
+    claim = DispatchClaim("a" * 32, "TASK", "b" * 40, time.time() + 60, 0)
+    if mode == "code":
+        registry = RuntimeRegistry((CodexCLIPlugin(),))
+        request = RuntimeRequest(
+            runtime_spec_from_config(config),
+            "dev",
+            "code",
+            claim.dispatch_id,
+            claim.input_sha,
+            frozenset({"workspace-write"}),
+        )
+        runtime.run_code(claim, tmp_path, registry.plan(request), "", None)
+    else:
+        runtime.docker(claim, tmp_path, mode)
     text = " ".join(calls[0])
     assert ("src=techlead-review-poc_codex_auth" in text) == (mode == "code")
     assert bool(commands) == (mode == "code")

@@ -4,26 +4,36 @@ import inspect
 import json
 import subprocess
 from contextlib import nullcontext
-from dataclasses import asdict
 from unittest.mock import Mock
 
 import pytest
+from test_agent_runtime import assignment_for
 from test_agent_workflow import spec
 from test_runtime_plugins import FAKE_IMAGE_ID, FakePlugin
 
 from agent_workflow.application.dispatch import run_dispatch_pass
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
+from agent_workflow.application.runtime.ports import RuntimeAdapters
+from agent_workflow.application.runtime.services.agent_execution import (
+    AgentExecutionService,
+)
 from agent_workflow.application.task.use_cases.register_task_handoff import (
     RegisterTaskHandoffUseCase,
 )
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.infrastructure.runtime import sandbox
+from agent_workflow.infrastructure.runtime import docker_runtime, sandbox
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
-from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
+from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
+from agent_workflow.infrastructure.runtime.registry import (
+    RuntimeRegistry,
+    runtime_spec_from_config,
+)
 from agent_workflow.infrastructure.runtime.sandbox import SandboxRunResult
-from agent_workflow.runners import coder_runtime
-from agent_workflow.runners.coder_runtime import CoderRuntime
+from agent_workflow.infrastructure.runtime.worker_payload import (
+    worker_assignment_payload,
+)
+from agent_workflow.infrastructure.runtime.workspace import RuntimeWorkspace
 
 
 @pytest.fixture
@@ -33,7 +43,8 @@ def isolated_sandbox_state(tmp_path):
 
 def test_dispatch_and_runtime_do_not_own_worker_publication():
     assert "GitHubApp" not in inspect.getsource(run_dispatch_pass)
-    assert not hasattr(CoderRuntime, "publish")
+    assert not hasattr(DockerRuntime, "publish")
+    assert not hasattr(AgentExecutionService, "publish")
 
 
 class BoundaryState:
@@ -48,7 +59,7 @@ class BoundaryState:
         }
 
     def get_coder_assignment(self, task_id):
-        return dict(self.tasks[task_id])
+        return assignment_for(self.tasks[task_id])
 
     def get_review_context(self, task_id):
         return dict(self.tasks[task_id])
@@ -124,15 +135,25 @@ def injected_runtime(config, state, ledger, sandbox_manager, *, plugins=()):
         )
 
     handoff.execute.side_effect = register
-    return CoderRuntime(
+    runtime = DockerRuntime(
         config,
-        lambda: nullcontext(handoff),
         dispatch=ledger,
-        ci=Mock(),
         leadership_guard=lambda: True,
-        registry=RuntimeRegistry((CodexCLIPlugin(), *plugins)),
         sandbox=sandbox_manager,
     )
+    execution = AgentExecutionService(
+        adapter_factory=lambda _guard: RuntimeAdapters(
+            runtime, RuntimeWorkspace(config)
+        ),
+        runtime_spec=lambda: runtime_spec_from_config(config),
+        registry=RuntimeRegistry((CodexCLIPlugin(), *plugins)),
+        assignment_payload=worker_assignment_payload,
+        dispatch=ledger,
+        ci=Mock(),
+        handoff_provider=lambda: nullcontext(handoff),
+        require_ci_tracking=True,
+    )
+    return runtime, execution
 
 
 @pytest.mark.parametrize(
@@ -166,7 +187,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
         "medium" if runtime_name == "fake" or failure == "unsupported effort" else None
     )
     ledger = BoundaryLedger(service)
-    runtime = injected_runtime(
+    runtime, execution = injected_runtime(
         {
             "tasks": {"TEST": task},
             "app_id": 1,
@@ -187,9 +208,11 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
         runtime.config.pop("runtime")
         runtime.config.pop("provider")
     calls = []
-    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
+    monkeypatch.setattr(
+        docker_runtime, "_selected_host", lambda: "unix:///fixture.sock"
+    )
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
-    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(docker_runtime, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(runtime, "stop", lambda *args: calls.append("stop"))
 
     def docker(claim, stage, mode, prompt="", *, code_plan=None):
@@ -236,7 +259,7 @@ def test_dispatch_pass_only_launches_phases_and_receives_result(
 
     monkeypatch.setattr(runtime, "docker", docker)
     monkeypatch.setattr(runtime.sandbox, "run", sandbox_run)
-    dispatch = _dispatch_pass(service, ledger, runtime.execute, runtime.release_engine)
+    dispatch = _dispatch_pass(service, ledger, execution)
     if failure and failure.startswith("unsupported"):
         message = (
             "unsupported runtime$"
@@ -283,7 +306,7 @@ def _blocked_dispatch(ledger):
     return ledger.slot[0]
 
 
-def _dispatch_pass(service, ledger, execute, on_finished=None):
+def _dispatch_pass(service, ledger, execution):
     leadership = Mock()
     leadership.try_acquire.return_value = True
     leadership.is_held.return_value = True
@@ -291,8 +314,7 @@ def _dispatch_pass(service, ledger, execute, on_finished=None):
         leadership,
         ledger,
         service,
-        lambda claim, context, _guard: execute(asdict(claim), context),
-        on_finished=on_finished,
+        execution,
     )
 
 
@@ -310,22 +332,24 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
     monkeypatch.setattr(sandbox, "_require_engine", no_docker)
     if failure == "invalid-model":
         config["model"] = "unsupported"
-        monkeypatch.setattr(coder_runtime, "_selected_host", no_docker)
+        monkeypatch.setattr(docker_runtime, "_selected_host", no_docker)
     else:
         monkeypatch.setattr(
-            coder_runtime, "_selected_host", lambda: "unix:///fixture.sock"
+            docker_runtime, "_selected_host", lambda: "unix:///fixture.sock"
         )
 
         def unavailable():
             raise BusinessRuleError("synthetic Docker outage")
 
-        monkeypatch.setattr(coder_runtime, "_require_engine", unavailable)
+        monkeypatch.setattr(docker_runtime, "_require_engine", unavailable)
 
-    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
+    runtime, execution = injected_runtime(
+        config, service, ledger, isolated_sandbox_state
+    )
     with pytest.raises(
         BusinessRuleError, match="unsupported runtime|synthetic Docker outage"
     ):
-        _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
+        _dispatch_pass(service, ledger, execution).execute({"TEST"})
     dispatch_id = _blocked_dispatch(ledger)
     assert ledger.is_pre_launch(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
@@ -341,9 +365,13 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     recovery_dispatch, monkeypatch, pin_written, isolated_sandbox_state
 ):
     config, service, ledger = recovery_dispatch
-    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
-    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: "unix:///fixture.sock")
-    monkeypatch.setattr(coder_runtime, "_require_engine", lambda: "fixture-daemon-a")
+    runtime, execution = injected_runtime(
+        config, service, ledger, isolated_sandbox_state
+    )
+    monkeypatch.setattr(
+        docker_runtime, "_selected_host", lambda: "unix:///fixture.sock"
+    )
+    monkeypatch.setattr(docker_runtime, "_require_engine", lambda: "fixture-daemon-a")
     original = sandbox.SandboxManager.record_engine
 
     def record_pin(manager, dispatch_id, host, daemon_id):
@@ -357,9 +385,9 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
         raise BusinessRuleError("synthetic launch uncertainty")
 
     monkeypatch.setattr(sandbox.SandboxManager, "record_engine", record_pin)
-    monkeypatch.setattr(CoderRuntime, "_execute_bound", uncertain)
+    monkeypatch.setattr(execution, "_execute_phases", uncertain)
     with pytest.raises((OSError, BusinessRuleError), match="synthetic"):
-        _dispatch_pass(service, ledger, runtime.execute).execute({"TEST"})
+        _dispatch_pass(service, ledger, execution).execute({"TEST"})
     dispatch_id = _blocked_dispatch(ledger)
     if pin_written:
         runtime.sandbox._engine_path(dispatch_id).unlink()
@@ -373,7 +401,7 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(
     recovery_dispatch, isolated_sandbox_state
 ):
     config, service, ledger = recovery_dispatch
-    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
+    runtime, _ = injected_runtime(config, service, ledger, isolated_sandbox_state)
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim.dispatch_id
     ledger.block(dispatch_id)
@@ -389,7 +417,7 @@ def test_pre_launch_marker_cannot_override_existing_launch_records(
     config, service, ledger = recovery_dispatch
     dispatch_id = ledger.claim({"TEST"}, 60, track_pre_launch=True).dispatch_id
     ledger.block(dispatch_id)
-    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
+    runtime, _ = injected_runtime(config, service, ledger, isolated_sandbox_state)
     path = runtime.sandbox._engine_path(dispatch_id).with_suffix(suffix)
     path.parent.mkdir()
     path.touch()
@@ -410,7 +438,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     service.provision_task(spec())
     service.provision_task(spec("NEXT"))
     ledger = BoundaryLedger(service)
-    runtime = injected_runtime(config, service, ledger, isolated_sandbox_state)
+    runtime, _ = injected_runtime(config, service, ledger, isolated_sandbox_state)
     dispatch_id = None
     name = None
     visible = False
@@ -448,9 +476,9 @@ def test_global_slot_release_requires_affirmative_create_settlement(
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(sandbox, "docker_command", lambda args: b"")
 
-    def execute(claim, _context):
+    def execute(claim, _context, _guard):
         nonlocal dispatch_id
-        dispatch_id = claim["dispatch_id"]
+        dispatch_id = claim.dispatch_id
         ledger.retire_pre_launch(dispatch_id)
         runtime.sandbox.record_engine(
             dispatch_id, "unix:///fixture.sock", "fixture-daemon-a"
@@ -466,7 +494,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         pytest.fail("an uncertain create must never start a workload")
 
     with pytest.raises(BusinessRuleError):
-        _dispatch_pass(service, ledger, execute).execute({"TEST"})
+        _dispatch_pass(service, ledger, Mock(execute=execute)).execute({"TEST"})
     assert name is not None
     assert ledger.claim({"NEXT"}, 60) is None
     if not definitive:
@@ -619,7 +647,7 @@ def test_worker_real_git_push_to_disposable_bare_remote(tmp_path, monkeypatch, i
 
 
 def test_source_digest_frames_paths_and_contents(tmp_path):
-    from agent_workflow.runners.coder_runtime import source_digest
+    from agent_workflow.infrastructure.runtime.workspace import source_digest
 
     left, right = tmp_path / "left", tmp_path / "right"
     left.mkdir()
@@ -662,12 +690,12 @@ def test_network_disabled_test_launch_overrides_proxy_defaults(
 ):
     service = BoundaryState()
     ledger = BoundaryLedger(service)
-    runtime = injected_runtime(
+    runtime, _ = injected_runtime(
         {"image": "fixture"}, service, ledger, isolated_sandbox_state
     )
     dispatch = "a" * 32
     host = "unix:///fixture.sock"
-    monkeypatch.setattr(coder_runtime, "_selected_host", lambda: host)
+    monkeypatch.setattr(docker_runtime, "_selected_host", lambda: host)
     monkeypatch.setattr(sandbox, "_selected_host", lambda: host)
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setenv("HTTPS_PROXY", "http://fixture:synthetic-canary@proxy.invalid")
@@ -688,7 +716,9 @@ def test_network_disabled_test_launch_overrides_proxy_defaults(
     monkeypatch.setattr(sandbox, "run_container", run)
     assert (
         runtime.docker(
-            {"dispatch_id": dispatch, "deadline": coder_runtime.time.time() + 30},
+            DispatchClaim(
+                dispatch, "TEST", "a" * 40, docker_runtime.time.time() + 30, 0
+            ),
             tmp_path,
             "test",
         )

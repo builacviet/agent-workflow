@@ -163,13 +163,13 @@ def test_trickle_timeout_runs_cleanup_and_blocks_dispatch(loopback):
             guard()
             app_auth.request_json("GET", "/trickle", "synthetic-only")
             effects.extend(["ref", "pr", "handoff"])
-            return "b" * 40
+            return SimpleNamespace(head_sha="b" * 40)
         finally:
             with cleanup_budget():
                 effects.append("cleanup")
 
     dispatch = RunDispatchPassUseCase(
-        ports.leadership, ports.ledger, ports.assignment, execute
+        ports.leadership, ports.ledger, ports.assignment, Mock(execute=execute)
     )
     started = time.monotonic()
     with pytest.raises(BusinessRuleError):

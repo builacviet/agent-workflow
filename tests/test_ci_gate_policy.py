@@ -87,7 +87,7 @@ def test_controller_injects_same_policy_without_docker_launch(
     open_database = Mock(return_value=nullcontext(factory))
     monkeypatch.setattr(PostgresFactory, "open", open_database)
     preflight = Mock()
-    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", preflight)
+    monkeypatch.setattr(dispatch_deps, "validate_dispatch_worker_config", preflight)
 
     with dispatch_deps.compose_dispatch_execution({}, AppConfig.from_env()):
         pass

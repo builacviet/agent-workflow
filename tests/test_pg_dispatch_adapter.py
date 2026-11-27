@@ -4,6 +4,8 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,11 +28,7 @@ from agent_workflow.application.exceptions import (
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextInput,
 )
-from agent_workflow.application.runtime.dtos import (
-    RuntimePlan,
-    RuntimeRequest,
-    RuntimeSpec,
-)
+from agent_workflow.application.runtime.ports import PublishedResult, RuntimeAdapters
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     GetCoderAssignmentUseCase,
 )
@@ -200,7 +198,7 @@ def test_ambiguous_claim_reserves_slot_across_new_controller_owner(setup):
             leadership,
             successor,
             GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
-            simulated_publish,
+            Mock(execute=simulated_publish),
         ).execute({task_id})
 
     assert not next_owner_attempt()
@@ -258,15 +256,14 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
             "time",
             SimpleNamespace(time=lambda: claim.deadline + 1, monotonic=time.monotonic),
         )
-        return HEAD
+        return SimpleNamespace(head_sha=HEAD)
 
     worker = Mock(side_effect=execute)
     dispatch = RunDispatchPassUseCase(
         leadership,
         ledger,
         GetCoderAssignmentUseCase(create_get_review_context_use_case(factory)),
-        worker,
-        on_finished=finish_cleanup,
+        Mock(execute=worker, release_engine=finish_cleanup),
     )
     if fault == "late-result":
         with pytest.raises(TimeoutError, match="dispatch deadline exceeded"):
@@ -282,8 +279,7 @@ def test_dispatch_failure_keeps_durable_slot_across_restart(setup, monkeypatch, 
             PostgresLeadershipLock(fresh, LeadershipDomain.CONTROLLER),
             PostgresDispatchLedger(fresh, role="dev", phase="code"),
             GetCoderAssignmentUseCase(create_get_review_context_use_case(fresh)),
-            worker,
-            on_finished=finish_cleanup,
+            Mock(execute=worker, release_engine=finish_cleanup),
         )
         with fresh.transaction() as connection:
             row = connection.execute(
@@ -641,7 +637,7 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     setup, monkeypatch, tmp_path, fault
 ):
     """Hosted PG16 module: real composition/state; synthetic external effects only."""
-    from test_agent_runtime import FakeHost
+    from test_agent_runtime import FakeRuntime
 
     from agent_workflow.composition import dispatch_deps
     from agent_workflow.infrastructure.runtime import sandbox
@@ -654,7 +650,9 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     )
     # Admission settings are covered offline with inert credential fixtures.
     # This PG test targets the real factory/guard/adapters and fake Worker seam.
-    monkeypatch.setattr(dispatch_deps, "_validate_worker_config", lambda *_: None)
+    monkeypatch.setattr(
+        dispatch_deps, "validate_dispatch_worker_config", lambda *_: None
+    )
     opened = []
     original_open = PostgresFactory.open
     original_compose = dispatch_deps.compose_postgres_worker
@@ -678,38 +676,22 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
             )
         return dependencies
 
-    def compose_worker(
-        config, service, deps, *, leadership_guard, registry, app_config
-    ):
+    def compose_worker(config, service, deps, leadership_guard, *, app_config):
         assert app_config is app
-        runtime = original_compose(
-            config,
-            service,
-            deps,
-            leadership_guard=leadership_guard,
-            registry=registry,
-            app_config=app_config,
+        adapters = original_compose(
+            config, service, deps, leadership_guard, app_config=app_config
         )
-        assert runtime.registry is registry
-        assert runtime.sandbox._fence_dir == app.sandbox_state_dir
+        assert adapters.engine.sandbox._fence_dir == app.sandbox_state_dir
         assert service is deps.handoff_provider
-        assert runtime.agent_runtime.dispatch is deps.dispatch
-        assert runtime.agent_runtime.ci is deps.ci_tracking
-        host = FakeHost(calls)
-        host._validated_result = lambda *_: {
-            "head_sha": HEAD,
-            "pr_url": "https://github.com/builacviet/agent-workflow/pull/7",
-        }
+        assert adapters.engine.dispatch is deps.dispatch
+        host = FakeRuntime(calls)
+        host.require_leadership = adapters.engine.require_leadership
+        host.validated_result = lambda *_: PublishedResult(
+            HEAD, "https://github.com/builacviet/agent-workflow/pull/7"
+        )
+        prepare_stage = host.prepare_stage
 
-        def handoff(context, result, summary):
-            leadership_guard()
-            calls.append("handoff")
-            runtime._register_handoff(context, result, summary)
-
-        host._register_handoff = handoff
-        runtime.agent_runtime.host = host
-
-        def execute(claim, context):
+        def prepare(claim, context):
             leadership_guard()
             with observer.transaction() as conn:
                 persisted = (
@@ -718,32 +700,26 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
                             "SELECT dispatch_id,task_id,input_sha,deadline,round_number "
                             "FROM agent_dispatches WHERE dispatch_id=:id"
                         ),
-                        {"id": claim["dispatch_id"]},
+                        {"id": claim.dispatch_id},
                     )
                     .mappings()
                     .one()
                 )
-            assert claim == dict(persisted)
-            dispatch_ids.append(claim["dispatch_id"])
-            assert claim["task_id"] == task_id
-            assert deps.dispatch.is_pre_launch(claim["dispatch_id"])
-            deps.dispatch.retire_pre_launch(claim["dispatch_id"])
-            assert not deps.dispatch.is_pre_launch(claim["dispatch_id"])
-            pins.add(claim["dispatch_id"])
-            request = RuntimeRequest(
-                spec=RuntimeSpec("fake", "fixture", "model"),
-                role="dev",
-                phase="code",
-                dispatch_id=claim["dispatch_id"],
-                input_sha=claim["input_sha"],
-            )
-            result = runtime.agent_runtime.execute(
-                claim, context, request, RuntimePlan(("agent",)), None
-            )
+            assert asdict(claim) == dict(persisted)
+            dispatch_ids.append(claim.dispatch_id)
+            assert claim.task_id == task_id
+            assert deps.dispatch.is_pre_launch(claim.dispatch_id)
+            deps.dispatch.retire_pre_launch(claim.dispatch_id)
+            assert not deps.dispatch.is_pre_launch(claim.dispatch_id)
+            pins.add(claim.dispatch_id)
+            return prepare_stage(claim, context)
+
+        @contextmanager
+        def bind_engine(_dispatch_id):
+            yield
             if fault == "ownership":
                 # Simulate abrupt session loss after evidence/handoff/CI commit.
                 deps.leadership.release()
-            return result
 
         def clear(dispatch_id):
             leadership_guard()
@@ -762,9 +738,10 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
                 raise RuntimeError("uncertain cleanup")
             pins.remove(dispatch_id)
 
-        monkeypatch.setattr(runtime, "execute", execute)
-        monkeypatch.setattr(runtime, "release_engine", clear)
-        return runtime
+        host.prepare_stage = prepare
+        host.bind_engine = bind_engine
+        host.release_engine = clear
+        return RuntimeAdapters(host, host)
 
     monkeypatch.setattr(dispatch_deps.PostgresFactory, "open", open_factory)
     monkeypatch.setattr(
@@ -777,7 +754,10 @@ def test_controller_entrypoint_fake_worker_pg_lifecycle(
     monkeypatch.setattr(
         sandbox, "run_container", lambda *_: pytest.fail("real Worker forbidden")
     )
-    config = {"tasks": {task_id: {"handoff_path": "docs/handoff.md"}}}
+    config = {
+        "model": "gpt-6-luna",
+        "tasks": {task_id: {"handoff_path": "docs/handoff.md"}},
+    }
 
     def run_dispatch():
         return dispatch_cli.run_dispatch_pass(

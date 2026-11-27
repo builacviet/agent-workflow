@@ -3,18 +3,27 @@ Responsibility: Run one dispatch under the Controller leadership fence.
 Dependencies: Dispatch ports, execution budget, and Domain rules.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
-from typing import ParamSpec, TypeVar
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from agent_workflow.application.dispatch.ports import (
-    DispatchExecution,
     ICoderAssignmentReader,
     IDispatchLeadership,
     IDispatchRepository,
 )
+from agent_workflow.application.task.use_cases.get_coder_assignment import (
+    DispatchAssignment,
+)
 from agent_workflow.budget import dispatch_budget
+from agent_workflow.domain.dispatch.policy import validate_dispatch_eligibility
 from agent_workflow.domain.exceptions import BusinessRuleError
-from agent_workflow.domain.states import WorkflowStatus
+
+if TYPE_CHECKING:
+    from agent_workflow.application.runtime.services.agent_execution import (
+        AgentExecutionService,
+    )
 
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
@@ -38,16 +47,13 @@ class RunDispatchPassUseCase:
         self,
         leadership: IDispatchLeadership,
         dispatch: IDispatchRepository,
-        assignment: ICoderAssignmentReader,
-        execute_worker: DispatchExecution,
-        *,
-        on_finished: Callable[[str], None] | None = None,
+        assignment: ICoderAssignmentReader[DispatchAssignment],
+        agent_execution: AgentExecutionService,
     ) -> None:
         self._leadership = leadership
         self._dispatch = dispatch
         self._assignment = assignment
-        self._execute_worker = execute_worker
-        self._on_finished = on_finished
+        self._agent_execution = agent_execution
 
     def execute(self, task_ids: set[str], timeout: int = 1800) -> bool:
         """Attempt one claim and give the Worker a guard for its own effects."""
@@ -72,24 +78,28 @@ class RunDispatchPassUseCase:
                     context = _fenced(
                         guard, self._assignment.get_coder_assignment, claim.task_id
                     )
-                    if (
-                        context["completed_review_rounds"] != claim.round_number
-                        or context["status"]
-                        not in {
-                            WorkflowStatus.AWAITING_HANDOFF,
-                            WorkflowStatus.CHANGES_REQUESTED,
-                        }
-                        or (context["current_head_sha"] or context["base_sha"])
-                        != claim.input_sha
-                    ):
-                        raise BusinessRuleError("assignment changed after dispatch")
+                    validate_dispatch_eligibility(
+                        completed_review_rounds=context["completed_review_rounds"],
+                        claimed_round=claim.round_number,
+                        status=context["status"],
+                        current_head_sha=context["current_head_sha"],
+                        base_sha=context["base_sha"],
+                        claimed_input_sha=claim.input_sha,
+                    )
                     if (
                         claim.task_id not in task_ids
                         or context.get("task_id") != claim.task_id
                     ):
                         raise BusinessRuleError("dispatch outside exact task allowlist")
-                    sha = _fenced(guard, self._execute_worker, claim, context, guard)
-                    _fenced(guard, self._dispatch.finish, claim.dispatch_id, sha)
+                    execution = _fenced(
+                        guard, self._agent_execution.execute, claim, context, guard
+                    )
+                    _fenced(
+                        guard,
+                        self._dispatch.finish,
+                        claim.dispatch_id,
+                        execution.head_sha,
+                    )
             except BaseException:
                 # A lost owner leaves the active slot for operator reconciliation.
                 if leadership.is_held() is True:
@@ -97,13 +107,17 @@ class RunDispatchPassUseCase:
                 raise
             # Finish has committed. Cleanup failure leaves it terminal and the
             # engine pin available for explicit operator recovery.
-            if self._on_finished is not None:
-                try:
-                    _fenced(guard, self._on_finished, claim.dispatch_id)
-                except Exception:
-                    raise BusinessRuleError(
-                        "terminal dispatch cleanup unconfirmed; reconcile engine pin"
-                    ) from None
+            try:
+                _fenced(
+                    guard,
+                    self._agent_execution.release_engine,
+                    claim.dispatch_id,
+                    execution,
+                )
+            except Exception:
+                raise BusinessRuleError(
+                    "terminal dispatch cleanup unconfirmed; reconcile engine pin"
+                ) from None
             return True
         finally:
             leadership.release()
