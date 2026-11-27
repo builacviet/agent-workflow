@@ -9,6 +9,10 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
 from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
@@ -16,7 +20,6 @@ from agent_workflow.application.runtime.dtos import (
     RuntimeSpec,
     WorkerResult,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
@@ -80,11 +83,11 @@ def test_runtime_adapter_contract_is_replaceable_without_provider_fallback():
     result = registry.result(request, b"synthetic-result", observed_image_id=IMAGE_ID)
     assert result.observed_image_id == IMAGE_ID
     assert result.telemetry == "UNVERIFIED"
-    with pytest.raises(BusinessRuleError, match="Dev code phase"):
+    with pytest.raises(RuntimeAdmissionError, match="Dev code phase"):
         registry.plan(replace(request, role="qc", phase="test"))
-    with pytest.raises(BusinessRuleError, match="unsupported runtime capability"):
+    with pytest.raises(RuntimeAdmissionError, match="unsupported runtime capability"):
         registry.plan(replace(request, required_capabilities=frozenset({"host-shell"})))
-    with pytest.raises(BusinessRuleError, match="differs from approved pin"):
+    with pytest.raises(RuntimeContractError, match="differs from approved pin"):
         registry.result(
             request, b"synthetic-result", observed_image_id="sha256:" + "e" * 64
         )

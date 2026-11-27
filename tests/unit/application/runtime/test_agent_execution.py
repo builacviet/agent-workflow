@@ -7,7 +7,10 @@ from unittest.mock import Mock
 import pytest
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    RuntimeAdmissionError,
+)
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextOutput,
@@ -161,9 +164,12 @@ def test_assignment_facts_must_match_before_effects(
 def test_invalid_runtime_identity_precedes_adapter_construction(dependencies, claim):
     service = AgentExecutionService(**dependencies, require_ci_tracking=True)
     with pytest.raises(
-        BusinessRuleError, match="invalid runtime request|40-character commit SHA"
-    ):
+        RuntimeAdmissionError, match="invalid runtime request|40-character commit SHA"
+    ) as error:
         service.execute(claim, ASSIGNMENT, Mock())
+    if claim.input_sha == "invalid":
+        assert error.value.__cause__ is None
+        assert error.value.__suppress_context__
     dependencies["adapter_factory"].assert_not_called()
     dependencies["registry"].plan.assert_not_called()
 

@@ -9,7 +9,10 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    RuntimeAdmissionError,
+)
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.github.app_token import ControllerAppToken
@@ -155,7 +158,7 @@ def validate_dispatch_worker_config(
             for root in roots
         ):
             raise BusinessRuleError("App credentials must remain outside Worker paths")
-    except (KeyError, TypeError, ValueError, OSError):
+    except (KeyError, TypeError, ValueError, OSError, RuntimeAdmissionError):
         raise InvalidApplicationRequestError(
             "invalid PostgreSQL dispatch Worker configuration"
         ) from None

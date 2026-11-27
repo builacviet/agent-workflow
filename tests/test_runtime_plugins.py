@@ -4,6 +4,12 @@ from dataclasses import replace
 
 import pytest
 
+from agent_workflow.application.exceptions import (
+    ApplicationError,
+    InvalidApplicationRequestError,
+    RuntimeAdmissionError,
+    RuntimeContractError,
+)
 from agent_workflow.application.runtime.dtos import (
     RuntimeManifest,
     RuntimePlan,
@@ -11,11 +17,18 @@ from agent_workflow.application.runtime.dtos import (
     RuntimeSpec,
     WorkerResult,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.domain.exceptions import BusinessRuleError, DomainError
 from agent_workflow.infrastructure.runtime.codex_plugin import CodexCLIPlugin
 from agent_workflow.infrastructure.runtime.registry import RuntimeRegistry
 
 FAKE_IMAGE_ID = "sha256:" + "b" * 64
+
+
+def test_runtime_error_ownership_is_application_only():
+    for error_type in (RuntimeAdmissionError, RuntimeContractError):
+        assert issubclass(error_type, ApplicationError)
+        assert not issubclass(error_type, DomainError)
+        assert not issubclass(error_type, InvalidApplicationRequestError)
 
 
 class FakePlugin:
@@ -108,15 +121,15 @@ def test_r02_fake_plugin_substitution(registry, fake_request):
         fake_request, "fixture-1", observed_image_id=FAKE_IMAGE_ID
     )
     registry.validate_result(fake_request, result, observed_image_id=FAKE_IMAGE_ID)
-    with pytest.raises(BusinessRuleError, match="differs from approved pin"):
+    with pytest.raises(RuntimeContractError, match="differs from approved pin"):
         registry.validate_result(fake_request, result)
 
 
 def test_r03_unsupported_runtime(registry, request_spec):
     request = replace(request_spec, spec=replace(request_spec.spec, runtime="other"))
-    with pytest.raises(BusinessRuleError, match="unsupported runtime$"):
+    with pytest.raises(RuntimeAdmissionError, match="unsupported runtime$"):
         registry.plan(request)
-    with pytest.raises(BusinessRuleError, match="unsupported runtime$"):
+    with pytest.raises(RuntimeAdmissionError, match="unsupported runtime$"):
         registry.validate_selection(
             request.spec,
             role=request.role,
@@ -127,7 +140,7 @@ def test_r03_unsupported_runtime(registry, request_spec):
 
 def test_r04_unsupported_capability(registry, request_spec):
     request = replace(request_spec, required_capabilities=frozenset({"host-shell"}))
-    with pytest.raises(BusinessRuleError, match="unsupported runtime capability"):
+    with pytest.raises(RuntimeAdmissionError, match="unsupported runtime capability"):
         registry.plan(request)
 
 
@@ -143,7 +156,7 @@ def test_r04_unsupported_capability(registry, request_spec):
 )
 def test_r05_role_and_phase_preserved(registry, request_spec, role, phase):
     request = replace(request_spec, role=role, phase=phase)
-    with pytest.raises(BusinessRuleError, match="Dev code phase"):
+    with pytest.raises(RuntimeAdmissionError, match="Dev code phase"):
         registry.plan(request)
 
 
@@ -154,7 +167,7 @@ def test_r05_role_and_phase_preserved(registry, request_spec, role, phase):
 def test_r06_no_silent_fallback(registry, request_spec, field, value):
     request = replace(request_spec, spec=replace(request_spec.spec, **{field: value}))
     with pytest.raises(
-        BusinessRuleError, match="unsupported runtime provider, model or effort"
+        RuntimeAdmissionError, match="unsupported runtime provider, model or effort"
     ):
         registry.plan(request)
 
@@ -168,7 +181,7 @@ def test_r06_individually_known_values_do_not_approve_a_tuple(
 ):
     request = replace(fake_request, spec=replace(fake_request.spec, **{field: value}))
     with pytest.raises(
-        BusinessRuleError, match="unsupported runtime provider, model or effort"
+        RuntimeAdmissionError, match="unsupported runtime provider, model or effort"
     ):
         registry.plan(request)
 
@@ -195,20 +208,26 @@ def test_r06_adapter_failure_does_not_select_another_plugin(fake_request):
 def test_r07_wrong_provenance_rejected(registry, request_spec, field, value):
     wrong_request = replace(request_spec, **{field: value})
     result = WorkerResult(wrong_request, "0.161.0")
-    with pytest.raises(BusinessRuleError, match="invalid runtime result or provenance"):
+    with pytest.raises(
+        RuntimeContractError, match="invalid runtime result or provenance"
+    ):
         registry.validate_result(request_spec, result)
 
 
 @pytest.mark.parametrize("value", [False, 1, "0"])
 def test_r07_invalid_exit_rejected(registry, request_spec, value):
     result = WorkerResult(request_spec, "0.161.0", exit_code=value)
-    with pytest.raises(BusinessRuleError, match="invalid runtime result or provenance"):
+    with pytest.raises(
+        RuntimeContractError, match="invalid runtime result or provenance"
+    ):
         registry.validate_result(request_spec, result)
 
 
 def test_r07_wrong_adapter_version_rejected(registry, request_spec):
     result = WorkerResult(request_spec, "fixture-1")
-    with pytest.raises(BusinessRuleError, match="invalid runtime result or provenance"):
+    with pytest.raises(
+        RuntimeContractError, match="invalid runtime result or provenance"
+    ):
         registry.validate_result(request_spec, result)
 
 
@@ -235,13 +254,17 @@ def test_r08_adapter_cannot_attest_model_or_effort(fake_request, telemetry):
             )
 
     registry = RuntimeRegistry((UntrustedTelemetryPlugin(),))
-    with pytest.raises(BusinessRuleError, match="unverified model or effort telemetry"):
+    with pytest.raises(
+        RuntimeContractError, match="unverified model or effort telemetry"
+    ):
         registry.result(fake_request, b"fixture", observed_image_id=FAKE_IMAGE_ID)
 
 
 @pytest.mark.parametrize("pin", ["fixture:latest", "sha256:" + "B" * 64])
 def test_reject_mutable_or_invalid_approved_image_identity(pin):
-    with pytest.raises(BusinessRuleError, match="invalid approved runtime image ID"):
+    with pytest.raises(
+        RuntimeAdmissionError, match="invalid approved runtime image ID"
+    ):
         replace(FakePlugin.manifest, approved_image_id=pin)
 
 
@@ -249,7 +272,9 @@ def test_reject_new_plugin_without_pin():
     class UnpinnedPlugin(FakePlugin):
         manifest = replace(FakePlugin.manifest, approved_image_id=None)
 
-    with pytest.raises(BusinessRuleError, match="approved runtime image ID required"):
+    with pytest.raises(
+        RuntimeAdmissionError, match="approved runtime image ID required"
+    ):
         RuntimeRegistry((UnpinnedPlugin(),))
 
 
@@ -257,13 +282,13 @@ def test_legacy_exemption_is_reserved_for_builtin_adapter():
     class ImpersonatingPlugin(CodexCLIPlugin):
         manifest = replace(CodexCLIPlugin.manifest, approved_image_id=FAKE_IMAGE_ID)
 
-    with pytest.raises(BusinessRuleError, match="reserved legacy Codex runtime"):
+    with pytest.raises(RuntimeAdmissionError, match="reserved legacy Codex runtime"):
         RuntimeRegistry((ImpersonatingPlugin(),))
 
 
 @pytest.mark.parametrize("observed", [None, "sha256:" + "c" * 64])
 def test_reject_missing_or_mismatched_launch_evidence(registry, fake_request, observed):
-    with pytest.raises(BusinessRuleError, match="differs from approved pin"):
+    with pytest.raises(RuntimeContractError, match="differs from approved pin"):
         registry.result(fake_request, b"fixture", observed_image_id=observed)
 
 
@@ -276,19 +301,21 @@ def test_reject_adapter_claim_of_launch_evidence(fake_request):
 
     registry = RuntimeRegistry((SpoofingPlugin(),))
     with pytest.raises(
-        BusinessRuleError, match="adapter cannot attest the launch image"
+        RuntimeContractError, match="adapter cannot attest the launch image"
     ):
         registry.result(fake_request, b"fixture", observed_image_id=FAKE_IMAGE_ID)
 
 
 def test_reject_duplicate_and_unknown_interface_version():
-    with pytest.raises(BusinessRuleError, match="duplicate runtime registration"):
+    with pytest.raises(RuntimeAdmissionError, match="duplicate runtime registration"):
         RuntimeRegistry((CodexCLIPlugin(), CodexCLIPlugin()))
 
     class UnknownInterfacePlugin(CodexCLIPlugin):
         manifest = replace(CodexCLIPlugin.manifest, api_version=2)
 
-    with pytest.raises(BusinessRuleError, match="unsupported runtime plugin interface"):
+    with pytest.raises(
+        RuntimeAdmissionError, match="unsupported runtime plugin interface"
+    ):
         RuntimeRegistry((UnknownInterfacePlugin(),))
 
 
@@ -305,7 +332,7 @@ def test_reject_duplicate_and_unknown_interface_version():
     ],
 )
 def test_invalid_runtime_plan_rejected(command, env):
-    with pytest.raises(BusinessRuleError, match="invalid runtime"):
+    with pytest.raises(RuntimeContractError, match="invalid runtime"):
         RuntimePlan(command, env)
 
 
@@ -316,7 +343,7 @@ def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
 
     other = RuntimeRegistry((EnvPlugin(),))
     with pytest.raises(
-        BusinessRuleError, match="environment is not explicitly approved"
+        RuntimeContractError, match="environment is not explicitly approved"
     ):
         other.plan(fake_request)
 
@@ -331,7 +358,7 @@ def test_runtime_plan_env_requires_manifest_approval(registry, fake_request):
     ],
 )
 def test_approved_env_key_cannot_carry_credential_canary(value):
-    with pytest.raises(BusinessRuleError, match="invalid runtime environment"):
+    with pytest.raises(RuntimeContractError, match="invalid runtime environment"):
         RuntimePlan(("fake-exec",), (("WFC_PLUGIN_OPTION", value),))
 
 
@@ -349,7 +376,7 @@ def test_runtime_env_requires_an_exact_nonsecret_literal(fake_request):
     plugin = EnvPlugin()
     registry = RuntimeRegistry((plugin,))
     plugin.value = "opaque-canary"
-    with pytest.raises(BusinessRuleError, match="value is not explicitly approved"):
+    with pytest.raises(RuntimeContractError, match="value is not explicitly approved"):
         registry.plan(fake_request)
     plugin.value = "safe-fixture"
     assert registry.plan(fake_request).env == (("WFC_PLUGIN_OPTION", "safe-fixture"),)
