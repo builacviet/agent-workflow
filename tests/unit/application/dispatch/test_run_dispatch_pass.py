@@ -7,7 +7,10 @@ import pytest
 from agent_workflow import budget
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPassUseCase
-from agent_workflow.application.exceptions import DispatchCleanupUnconfirmedError
+from agent_workflow.application.exceptions import (
+    DispatchCleanupUnconfirmedError,
+    RuntimeContractError,
+)
 from agent_workflow.budget import operation_timeout
 from agent_workflow.domain.exceptions import BusinessRuleError
 
@@ -126,7 +129,7 @@ def test_ineligible_task_blocks_before_worker_callback(
         assignment["task_id"] = assignment_task_id
 
     with pytest.raises(
-        BusinessRuleError, match="dispatch outside exact task allowlist"
+        RuntimeContractError, match="dispatch outside exact task allowlist"
     ):
         use_case(ports).execute(task_ids)
 

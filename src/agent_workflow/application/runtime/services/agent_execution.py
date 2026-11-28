@@ -9,7 +9,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from agent_workflow.application.dispatch.ports import DispatchClaim
-from agent_workflow.application.exceptions import InvalidApplicationRequestError
+from agent_workflow.application.exceptions import (
+    InvalidApplicationRequestError,
+    RuntimeContractError,
+)
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
     GetReviewContextOutput,
@@ -35,7 +38,6 @@ from agent_workflow.application.task.use_cases.register_task_handoff import (
     HandoffUseCaseProvider,
 )
 from agent_workflow.budget import check_deadline
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.task.handoff import HandoffRequest
 
 
@@ -123,7 +125,7 @@ class AgentExecutionService:
         ):
             raise InvalidApplicationRequestError("invalid agent execution input")
         if self._require_ci_tracking and self._ci is None:
-            raise RuntimeError("CI tracking required but not configured")
+            raise RuntimeContractError("CI tracking required but not configured")
         guard()
         check_deadline()
         request = RuntimeRequest(
@@ -228,5 +230,5 @@ class AgentExecutionService:
     def release_engine(self, dispatch_id: str, execution: AgentExecutionResult) -> None:
         """Clear only the pin for this successful, now terminal dispatch."""
         if execution.dispatch_id != dispatch_id:
-            raise BusinessRuleError("terminal dispatch differs from admitted Worker")
+            raise RuntimeContractError("terminal dispatch differs from admitted Worker")
         execution.engine.release_engine(dispatch_id)

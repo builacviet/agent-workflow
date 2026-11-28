@@ -13,13 +13,15 @@ from agent_workflow.application.dispatch.ports import (
     IDispatchLeadership,
     IDispatchRepository,
 )
-from agent_workflow.application.exceptions import DispatchCleanupUnconfirmedError
+from agent_workflow.application.exceptions import (
+    DispatchCleanupUnconfirmedError,
+    RuntimeContractError,
+)
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     DispatchAssignment,
 )
 from agent_workflow.budget import dispatch_budget
 from agent_workflow.domain.dispatch.policy import validate_dispatch_eligibility
-from agent_workflow.domain.exceptions import BusinessRuleError
 
 if TYPE_CHECKING:
     from agent_workflow.application.runtime.services.agent_execution import (
@@ -91,7 +93,9 @@ class RunDispatchPassUseCase:
                         claim.task_id not in task_ids
                         or context.get("task_id") != claim.task_id
                     ):
-                        raise BusinessRuleError("dispatch outside exact task allowlist")
+                        raise RuntimeContractError(
+                            "dispatch outside exact task allowlist"
+                        )
                     execution = _fenced(
                         guard, self._agent_execution.execute, claim, context, guard
                     )
