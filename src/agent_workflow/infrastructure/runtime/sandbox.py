@@ -365,9 +365,15 @@ def _local_image(image: str) -> str:
             )
         ):
             return identifier
-    except (AttributeError, KeyError, TypeError, ValueError):
+    except (
+        AttributeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        RuntimeExecutionError,
+    ):
         pass
-    raise BusinessRuleError(
+    raise RuntimeAdmissionError(
         "sandbox requires a local Linux image without declared volumes"
     )
 
@@ -383,7 +389,9 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
             or any(character in str(workspace) for character in ',"\r\n')
             or workspace.parent == workspace
         ):
-            raise BusinessRuleError("sandbox requires a canonical workspace directory")
+            raise RuntimeAdmissionError(
+                "sandbox requires a canonical workspace directory"
+            )
         for root, dirs, files in os.walk(workspace, onerror=_walk_error):
             operation_timeout(float("inf"))
             for name in dirs + files:
@@ -393,11 +401,11 @@ def _workspace_bind(workspace: Path, writable: bool) -> str:
                     not stat.S_ISDIR(info.st_mode)
                     and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
                 ):
-                    raise BusinessRuleError(
+                    raise RuntimeAdmissionError(
                         "sandbox workspace contains a link or special file"
                     )
     except OSError:
-        raise BusinessRuleError("sandbox workspace unavailable") from None
+        raise RuntimeExecutionError("sandbox workspace unavailable") from None
     mount = f"type=bind,src={workspace},dst=/workspace,bind-recursive=disabled"
     return mount if writable else mount + ",readonly"
 
@@ -481,7 +489,9 @@ class SandboxManager:
         if not isinstance(approved_image_id, str) or not _IMAGE_ID.fullmatch(
             approved_image_id
         ):
-            raise BusinessRuleError("sandbox requires an approved immutable image ID")
+            raise RuntimeAdmissionError(
+                "sandbox requires an approved immutable image ID"
+            )
         fence = self._fence_path(dispatch_id)
         if fence is None:
             raise BusinessRuleError("sandbox requires a durable create fence")
@@ -501,7 +511,7 @@ class SandboxManager:
             mount = _workspace_bind(workspace, policy.workspace_writable)
             daemon_id = _require_engine()
             if _local_image(image) != approved_image_id:
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "sandbox image reference differs from approved pin"
                 )
             args = [
@@ -537,14 +547,14 @@ class SandboxManager:
                     self._update_scope(scope, "REJECTED")
                     raise
                 if not _CONTAINER_ID.fullmatch(identifier):
-                    raise BusinessRuleError(
+                    raise RuntimeContractError(
                         "Docker did not identify the sandbox container"
                     )
                 observed_image_id = self._inspect_image(identifier, name, dispatch_id)
                 self._update_scope(scope, "CREATED")
                 self._clear_create(fence)
                 if observed_image_id != approved_image_id:
-                    raise BusinessRuleError(
+                    raise RuntimeContractError(
                         "sandbox container image differs from approved pin"
                     )
                 # Independent trusted host watchdog must acknowledge readiness
@@ -897,7 +907,7 @@ class SandboxManager:
                 return image_id
         except (TypeError, ValueError):
             pass
-        raise BusinessRuleError("could not verify sandbox container identity")
+        raise RuntimeContractError("could not verify sandbox container identity")
 
     def _cleanup(self, dispatch_id: str, name_pattern: str) -> None:
         identifiers = self._owned(dispatch_id, name_pattern)
