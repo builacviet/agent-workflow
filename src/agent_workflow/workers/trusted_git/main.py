@@ -9,8 +9,12 @@ import sys
 from pathlib import Path
 from urllib.parse import urlencode
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.budget import check_deadline, dispatch_budget, operation_timeout
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import validate_sha
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
@@ -61,7 +65,7 @@ def git_auth(app: GitHubApp, repo: Path, *args: str) -> bytes:
         check_deadline()
         return result
     except (OSError, subprocess.SubprocessError):
-        raise BusinessRuleError("worker Git operation failed") from None
+        raise RuntimeExecutionError("worker Git operation failed") from None
 
 
 def prepare(data: dict, app: GitHubApp) -> None:
@@ -82,7 +86,7 @@ def prepare(data: dict, app: GitHubApp) -> None:
         "refs/heads/" + context["branch"],
     )
     if git(repo, "rev-parse", "FETCH_HEAD").decode().strip() != data["input_sha"]:
-        raise BusinessRuleError("remote moved during worker fetch")
+        raise RuntimeContractError("remote moved during worker fetch")
     git(repo, "checkout", "-b", context["branch"], "FETCH_HEAD")
     source = ROOT / "source"
     source.mkdir(mode=0o777)
@@ -102,7 +106,7 @@ def publish(data: dict, app: GitHubApp) -> None:
     if handoff not in context["context_paths"] or not writable(
         handoff, data["write_paths"]
     ):
-        raise BusinessRuleError("unauthorized handoff path")
+        raise RuntimeAdmissionError("unauthorized handoff path")
     entries = [entry for entry in entries if entry["path"] != handoff]
     entries.append(
         {
@@ -137,9 +141,11 @@ def publish(data: dict, app: GitHubApp) -> None:
     for entry in entries:
         if entry["content"] is None:
             if git(repo, "ls-files", "--", entry["path"]).strip():
-                raise BusinessRuleError("deleted path remains staged")
+                raise RuntimeContractError("deleted path remains staged")
         elif git(repo, "show", ":" + entry["path"]) != entry["content"]:
-            raise BusinessRuleError("staged content differs from tested source/handoff")
+            raise RuntimeContractError(
+                "staged content differs from tested source/handoff"
+            )
     git(
         repo,
         "-c",
@@ -173,7 +179,7 @@ def publish(data: dict, app: GitHubApp) -> None:
             or not existing[0]["draft"]
             or existing[0]["user"]["login"] != BOT
         ):
-            raise BusinessRuleError("unexpected existing PR")
+            raise RuntimeContractError("unexpected existing PR")
         pr = app.api("PATCH", prefix + "/" + str(existing[0]["number"]), {"body": body})
     else:
         pr = app.api(
@@ -188,7 +194,7 @@ def publish(data: dict, app: GitHubApp) -> None:
             },
         )
     if not pr["draft"] or pr["user"]["login"] != BOT:
-        raise BusinessRuleError("PR attribution mismatch")
+        raise RuntimeContractError("PR attribution mismatch")
     result = {
         key: context[key] for key in ("task_id", "repository", "branch", "base_sha")
     }
@@ -203,7 +209,7 @@ def main() -> None:
         "main",
         "master",
     }:
-        raise BusinessRuleError("unauthorized repository or branch")
+        raise RuntimeAdmissionError("unauthorized repository or branch")
     validate_sha(data["input_sha"])
     app = GitHubApp(
         data["app_id"],

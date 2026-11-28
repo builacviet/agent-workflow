@@ -21,6 +21,7 @@ from agent_workflow.app_config import AppConfig
 from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import (
     InvalidApplicationRequestError,
+    RuntimeAdmissionError,
     RuntimeContractError,
 )
 from agent_workflow.application.review.dtos import ReviewTask
@@ -800,7 +801,9 @@ def test_pg_once_runs_native_dev_stages(
     app_config = AppConfig(pg_runtime_dsn=DSN, sandbox_state_dir=tmp_path / "fences")
     if error:
         expected_error = (
-            RuntimeContractError
+            RuntimeAdmissionError
+            if fault == "outside_allowlist"
+            else RuntimeContractError
             if fault in {"mutated_test", "invalid_result_head"}
             else BusinessRuleError
         )
