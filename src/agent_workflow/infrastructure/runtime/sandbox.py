@@ -36,7 +36,6 @@ from agent_workflow.budget import (
     dispatch_budget,
     operation_timeout,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime.workspace import is_linked
 
 _DISPATCH_LABEL = "org.agent-workflow.sandbox.dispatch"
@@ -494,7 +493,7 @@ class SandboxManager:
             )
         fence = self._fence_path(dispatch_id)
         if fence is None:
-            raise BusinessRuleError("sandbox requires a durable create fence")
+            raise RuntimeAdmissionError("sandbox requires a durable create fence")
         if (
             not isinstance(command, tuple)
             or not command
@@ -588,7 +587,7 @@ class SandboxManager:
         scope = self._scope_path(dispatch_id)
         if scope is None or not scope.exists():
             if fence is not None and fence.exists():
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "sandbox create lacks daemon identity; dispatch stays blocked"
                 )
             if _DOCKER_HOST.get() is not None:
@@ -607,7 +606,9 @@ class SandboxManager:
         _dispatch_prefix(dispatch_id)
         fence = self._fence_path(dispatch_id)
         if fence is None:
-            raise BusinessRuleError("runtime requires durable Docker endpoint storage")
+            raise RuntimeAdmissionError(
+                "runtime requires durable Docker endpoint storage"
+            )
         return fence.with_name(fence.name + ".engine")
 
     def record_engine(self, dispatch_id: str, host: str, daemon_id: str) -> None:
@@ -620,7 +621,7 @@ class SandboxManager:
         if not path.exists():
             scope = self._scope_path(dispatch_id)
             if scope is None or not scope.exists():
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "dispatch lacks its original Docker endpoint; stays blocked"
                 )
             record = self._scope_data(scope)
@@ -632,7 +633,7 @@ class SandboxManager:
             or not isinstance(daemon_id, str)
             or not _DAEMON_ID.fullmatch(daemon_id)
         ):
-            raise BusinessRuleError("invalid durable Docker endpoint")
+            raise RuntimeContractError("invalid durable Docker endpoint")
         return host, daemon_id
 
     def has_launch_records(self, dispatch_id: str) -> bool:
@@ -671,11 +672,11 @@ class SandboxManager:
         try:
             record = json.loads(path.read_text(encoding="ascii"))
         except (OSError, ValueError):
-            raise BusinessRuleError(
+            raise RuntimeContractError(
                 "missing or invalid durable sandbox scope"
             ) from None
         if not isinstance(record, dict):
-            raise BusinessRuleError("invalid durable sandbox scope")
+            raise RuntimeContractError("invalid durable sandbox scope")
         return record
 
     @classmethod
@@ -693,7 +694,7 @@ class SandboxManager:
             or not isinstance(record.get("deadline"), (int, float))
             or not isinstance(record.get("monotonic_deadline"), (int, float))
         ):
-            raise BusinessRuleError("invalid durable sandbox scope")
+            raise RuntimeContractError("invalid durable sandbox scope")
         return record
 
     @staticmethod
@@ -705,7 +706,7 @@ class SandboxManager:
                 handle.flush()
                 os.fsync(handle.fileno())
         except FileExistsError:
-            raise BusinessRuleError(
+            raise RuntimeContractError(
                 "existing sandbox execution requires reconciliation"
             ) from None
         _sync_directory(path.parent)
@@ -722,7 +723,7 @@ class SandboxManager:
         host: str,
     ) -> None:
         if not isinstance(daemon_id, str) or not _DAEMON_ID.fullmatch(daemon_id):
-            raise BusinessRuleError("Docker daemon has no trustworthy identity")
+            raise RuntimeContractError("Docker daemon has no trustworthy identity")
         cls._write_record(
             scope,
             {
@@ -756,7 +757,7 @@ class SandboxManager:
     def _assert_scope(cls, scope: Path, dispatch_id: str) -> None:
         record = cls._scope_data(scope)
         if record["dispatch_id"] != dispatch_id or record["host"] != _DOCKER_HOST.get():
-            raise BusinessRuleError(
+            raise RuntimeContractError(
                 "Docker endpoint differs from durable sandbox scope"
             )
         _assert_daemon(record["daemon_id"])
@@ -818,7 +819,7 @@ class SandboxManager:
         try:
             watchdog = subprocess.Popen(command, **options)
         except OSError:
-            raise BusinessRuleError(
+            raise RuntimeExecutionError(
                 "cannot launch independent sandbox watchdog"
             ) from None
         start = time.monotonic()
@@ -826,9 +827,9 @@ class SandboxManager:
             if ready.exists():
                 return
             if watchdog.poll() is not None:
-                raise BusinessRuleError("independent sandbox watchdog terminated")
+                raise RuntimeExecutionError("independent sandbox watchdog terminated")
             time.sleep(0.05)
-        raise BusinessRuleError(
+        raise RuntimeExecutionError(
             "independent sandbox watchdog did not acknowledge readiness"
         )
 
@@ -841,7 +842,7 @@ class SandboxManager:
                 record.flush()
                 os.fsync(record.fileno())
         except FileExistsError:
-            raise BusinessRuleError("a sandbox create is already pending") from None
+            raise RuntimeContractError("a sandbox create is already pending") from None
         _sync_directory(fence.parent)
         _sync_directory(fence.parent.parent)
 
@@ -864,7 +865,7 @@ class SandboxManager:
         except FileNotFoundError:
             return
         if not re.fullmatch(name_pattern, name):
-            raise BusinessRuleError("invalid sandbox create fence")
+            raise RuntimeContractError("invalid sandbox create fence")
         with cleanup_budget():
             owned = self._owned(dispatch_id, re.escape(name))
             if len(owned) != 1:
@@ -875,7 +876,7 @@ class SandboxManager:
                 ):
                     self._clear_create(fence)
                     return
-                raise BusinessRuleError(
+                raise RuntimeContractError(
                     "sandbox Docker create remains uncertain; dispatch stays blocked"
                 )
         # The exact owned name is affirmative evidence this create settled.
@@ -914,12 +915,12 @@ class SandboxManager:
         for identifier in identifiers:
             try:
                 _docker(["rm", "-f", identifier])
-            except (BusinessRuleError, RuntimeExecutionError):
+            except RuntimeExecutionError:
                 # A concurrent removal can still be visible when rm fails.
                 if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
                     raise
         if self._owned(dispatch_id, name_pattern):
-            raise BusinessRuleError("sandbox termination not confirmed")
+            raise RuntimeContractError("sandbox termination not confirmed")
 
     def _wait_for_removal(
         self, dispatch_id: str, name_pattern: str, identifier: str
@@ -961,5 +962,5 @@ class SandboxManager:
                     raise ValueError("container ownership mismatch")
                 identifiers.append(row["ID"])
         except (AttributeError, KeyError, TypeError, ValueError):
-            raise BusinessRuleError("could not verify sandbox ownership") from None
+            raise RuntimeContractError("could not verify sandbox ownership") from None
         return identifiers

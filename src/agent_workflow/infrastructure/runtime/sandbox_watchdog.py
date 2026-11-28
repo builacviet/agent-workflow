@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Enforce strict offline sandbox deadlines in a detached host process.
-Dependencies: Sandbox backend, application errors, Domain errors and dispatch budgets.
+Dependencies: Sandbox backend, application runtime errors and dispatch budgets.
 
 Runs in a separate process/session, pinned to the original local Docker endpoint.
 Never receives credentials or untrusted prompt content. Fail closed on engine drift.
@@ -20,7 +20,6 @@ from agent_workflow.application.exceptions import (
     RuntimeExecutionError,
 )
 from agent_workflow.budget import dispatch_budget
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime.sandbox import (
     SandboxManager,
     _assert_daemon,
@@ -70,7 +69,6 @@ def _enforce_bound(
                 break
             except (
                 OSError,
-                BusinessRuleError,
                 RuntimeAdmissionError,
                 RuntimeContractError,
                 RuntimeExecutionError,

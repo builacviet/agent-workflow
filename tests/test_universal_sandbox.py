@@ -24,7 +24,6 @@ from agent_workflow.application.exceptions import (
     RuntimeContractError,
     RuntimeExecutionError,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime import sandbox, sandbox_watchdog
 from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
 from agent_workflow.infrastructure.runtime.sandbox import (
@@ -413,7 +412,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
         raise AssertionError(args)
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="create remains uncertain"):
+    with pytest.raises(RuntimeContractError, match="create remains uncertain"):
         SandboxManager(fences).run(
             SandboxPolicy(),
             dispatch_id=dispatch,
@@ -424,7 +423,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
         )
 
     fresh = SandboxManager(fences)
-    with pytest.raises(BusinessRuleError, match="create remains uncertain"):
+    with pytest.raises(RuntimeContractError, match="create remains uncertain"):
         fresh.stop(dispatch)
     assert (fences / dispatch).read_text() == requested_name
     assert not removed
@@ -461,9 +460,156 @@ def test_cleanup_rejects_unowned_id(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="verify sandbox ownership"):
+    with pytest.raises(RuntimeContractError, match="verify sandbox ownership"):
         manager.stop(dispatch)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type", "message"),
+    [
+        (
+            "missing-engine-store",
+            RuntimeAdmissionError,
+            "durable Docker endpoint storage",
+        ),
+        (
+            "missing-create-fence",
+            RuntimeAdmissionError,
+            "durable create fence",
+        ),
+        (
+            "fence-without-scope",
+            RuntimeContractError,
+            "sandbox create lacks daemon identity",
+        ),
+        (
+            "missing-engine-record",
+            RuntimeContractError,
+            "dispatch lacks its original Docker endpoint",
+        ),
+        (
+            "invalid-engine-record",
+            RuntimeContractError,
+            "invalid durable Docker endpoint",
+        ),
+        (
+            "missing-record-file",
+            RuntimeContractError,
+            "missing or invalid durable sandbox scope",
+        ),
+        ("non-object-record", RuntimeContractError, "invalid durable sandbox scope"),
+        ("invalid-scope-fields", RuntimeContractError, "invalid durable sandbox scope"),
+        (
+            "duplicate-record",
+            RuntimeContractError,
+            "existing sandbox execution requires reconciliation",
+        ),
+        (
+            "duplicate-create-fence",
+            RuntimeContractError,
+            "a sandbox create is already pending",
+        ),
+        ("invalid-create-fence", RuntimeContractError, "invalid sandbox create fence"),
+        (
+            "untrusted-daemon",
+            RuntimeContractError,
+            "Docker daemon has no trustworthy identity",
+        ),
+        (
+            "scope-host-mismatch",
+            RuntimeContractError,
+            "Docker endpoint differs from durable sandbox scope",
+        ),
+        (
+            "cleanup-unconfirmed",
+            RuntimeContractError,
+            "sandbox termination not confirmed",
+        ),
+    ],
+)
+def test_durable_sandbox_lifecycle_error_ownership(
+    monkeypatch, tmp_path, failure, error_type, message
+):
+    dispatch = "a" * 32
+    manager = SandboxManager(
+        None if failure == "missing-engine-store" else tmp_path / "fences"
+    )
+    fence = manager._fence_path(dispatch)
+    scope = manager._scope_path(dispatch)
+
+    def operation():
+        if failure == "missing-engine-store":
+            return manager._engine_path(dispatch)
+        if failure == "missing-create-fence":
+            monkeypatch.setattr(manager, "_fence_path", lambda _dispatch_id: None)
+            return manager.run(
+                SandboxPolicy(),
+                dispatch_id=dispatch,
+                workspace=tmp_path,
+                image="sandbox-fixture",
+                approved_image_id=_FIXTURE_PIN,
+                command=("code",),
+            )
+        if failure == "fence-without-scope":
+            fence.parent.mkdir(parents=True)
+            fence.touch()
+            return manager.stop(dispatch)
+        if failure == "missing-engine-record":
+            return manager.recovery_engine(dispatch)
+        if failure == "invalid-engine-record":
+            engine = manager._engine_path(dispatch)
+            engine.parent.mkdir(parents=True)
+            engine.write_text(
+                json.dumps({"host": "not-local", "daemon_id": "fixture-daemon-a"}),
+                encoding="ascii",
+            )
+            return manager.recovery_engine(dispatch)
+        if failure == "missing-record-file":
+            return SandboxManager._read_record(tmp_path / "missing-record")
+        if failure == "non-object-record":
+            record = tmp_path / "non-object-record"
+            record.write_text("[]", encoding="ascii")
+            return SandboxManager._read_record(record)
+        if failure == "invalid-scope-fields":
+            scope.parent.mkdir(parents=True)
+            scope.write_text("{}", encoding="ascii")
+            return SandboxManager._scope_data(scope)
+        if failure == "duplicate-record":
+            record = tmp_path / "duplicate-record"
+            SandboxManager._write_record(record, {})
+            return SandboxManager._write_record(record, {})
+        if failure == "duplicate-create-fence":
+            fence.parent.mkdir(parents=True)
+            manager._record_create(fence, "sandbox-name")
+            return manager._record_create(fence, "sandbox-name")
+        if failure == "invalid-create-fence":
+            fence.parent.mkdir(parents=True)
+            fence.write_text("bad-name", encoding="ascii")
+            return manager._settle_create(
+                dispatch, fence, manager._name_pattern("sandbox")
+            )
+        if failure == "untrusted-daemon":
+            return SandboxManager._record_scope(
+                scope, dispatch, "sandbox-name", "bad", time.time(), _FIXTURE_HOST
+            )
+        if failure == "scope-host-mismatch":
+            SandboxManager._record_scope(
+                scope,
+                dispatch,
+                "sandbox-name",
+                "fixture-daemon-a",
+                time.time(),
+                _FIXTURE_HOST,
+            )
+            with sandbox._bind_host(_OTHER_HOST):
+                return manager._assert_scope(scope, dispatch)
+        monkeypatch.setattr(manager, "_owned", lambda *_args: ["b" * 64])
+        monkeypatch.setattr(sandbox, "_docker", lambda _args: b"")
+        return manager._cleanup(dispatch, manager._name_pattern("sandbox"))
+
+    with pytest.raises(error_type, match=message):
+        operation()
 
 
 @pytest.fixture
@@ -948,7 +1094,56 @@ def test_container_identity_verification_failure_is_a_contract_error(monkeypatch
         SandboxManager._inspect_image("a" * 64, "sandbox-name", "b" * 32)
 
 
-@pytest.mark.parametrize("failure", ["info", "inventory", "persistent"])
+@pytest.mark.parametrize("failure", ["launch", "exited", "readiness"])
+def test_watchdog_startup_failures_are_runtime_execution_errors(
+    monkeypatch, tmp_path, failure
+):
+    scope = tmp_path / "dispatch.scope"
+    ready = scope.with_name(scope.name + ".ready")
+    original_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: False if path == ready else original_exists(path),
+    )
+    monkeypatch.setattr(sandbox, "operation_timeout", lambda _seconds: 3)
+    calls = []
+
+    class Watchdog:
+        def poll(self):
+            return 1 if failure == "exited" else None
+
+    def launch(command, **options):
+        calls.append((command, options))
+        assert "WFC_SYNTHETIC_CREDENTIAL" not in options["env"]
+        assert "HTTPS_PROXY" not in options["env"]
+        if failure == "launch":
+            raise OSError("private executable diagnostic")
+        return Watchdog()
+
+    monkeypatch.setenv("WFC_SYNTHETIC_CREDENTIAL", "synthetic-canary")
+    monkeypatch.setenv("HTTPS_PROXY", "http://fixture:synthetic-canary@proxy.invalid")
+    monkeypatch.setattr(sandbox.subprocess, "Popen", launch)
+    if failure == "readiness":
+        clock = iter((10.0, 14.0))
+        monkeypatch.setattr(sandbox.time, "monotonic", lambda: next(clock))
+
+    expected = {
+        "launch": "cannot launch independent sandbox watchdog",
+        "exited": "independent sandbox watchdog terminated",
+        "readiness": "independent sandbox watchdog did not acknowledge readiness",
+    }[failure]
+    with pytest.raises(RuntimeExecutionError, match=expected) as error:
+        SandboxManager._start_watchdog(scope, "a" * 32)
+    assert "private" not in str(error.value)
+    assert len(calls) == 1
+    assert "agent_workflow.infrastructure.runtime.sandbox_watchdog" in calls[0][0]
+    assert calls[0][1]["stdin"] is subprocess.DEVNULL
+    assert calls[0][1]["stdout"] is subprocess.DEVNULL
+    assert calls[0][1]["stderr"] is subprocess.DEVNULL
+
+
+@pytest.mark.parametrize("failure", ["info", "inventory", "persistent", "contract"])
 def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failure):
     dispatch = "a" * 32
     identifier = "c" * 64
@@ -969,6 +1164,8 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
         assert sandbox._DOCKER_HOST.get() == _FIXTURE_HOST
         if args[0] == "info":
             info_calls += 1
+            if failure == "contract" and info_calls == 2:
+                return _ENGINE_INFO.replace(b"fixture-daemon-a", b"fixture-daemon-b")
             if info_calls > 1 and (
                 failure == "persistent" or (failure == "info" and info_calls == 2)
             ):
@@ -1000,6 +1197,9 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
     stamp = scope.with_name(scope.name + ".expired")
     if failure == "persistent":
         assert info_calls == 4 and owned and not stamp.exists()
+    elif failure == "contract":
+        assert info_calls == 4 and not owned
+        assert stamp.read_text(encoding="ascii") == "deadline-cleanup-confirmed"
     else:
         assert (
             not owned
@@ -1039,7 +1239,7 @@ def test_create_fence_clears_only_on_definitive_rejection(
     monkeypatch.setattr(sandbox, "_docker", docker)
     monkeypatch.setattr(sandbox.subprocess, "run", create)
     terminal = outcome in {"not-launched", "rejected"}
-    expected = sandbox.DockerCreateRejected if terminal else BusinessRuleError
+    expected = sandbox.DockerCreateRejected if terminal else RuntimeContractError
     with pytest.raises(expected) as error:
         manager.run(
             SandboxPolicy(),
