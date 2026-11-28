@@ -113,7 +113,7 @@ def test_declared_image_volumes_fail_closed(monkeypatch):
         ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="without declared volumes"):
+    with pytest.raises(RuntimeAdmissionError, match="without declared volumes"):
         sandbox._local_image("sandbox-fixture")
 
 
@@ -146,14 +146,68 @@ def test_docker_transport_failures_have_runtime_execution_ownership(
     assert "private" not in str(error.value)
 
 
+def test_local_image_translates_runtime_transport_error(monkeypatch):
+    def unavailable(_args):
+        raise RuntimeExecutionError("private Docker transport detail")
+
+    monkeypatch.setattr(sandbox, "_docker", unavailable)
+    with pytest.raises(
+        RuntimeAdmissionError,
+        match="^sandbox requires a local Linux image without declared volumes$",
+    ) as error:
+        sandbox._local_image("sandbox-fixture")
+    assert "private" not in str(error.value)
+
+
+def test_local_image_propagates_native_deadline_timeout(monkeypatch):
+    def deadline(_args):
+        raise TimeoutError("dispatch deadline exceeded")
+
+    monkeypatch.setattr(sandbox, "_docker", deadline)
+    with pytest.raises(TimeoutError, match="^dispatch deadline exceeded$"):
+        sandbox._local_image("sandbox-fixture")
+
+
 def test_workspace_hardlink_is_rejected(tmp_path):
     source = tmp_path / "outside-synthetic"
     source.write_text("fixture", encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     os.link(source, workspace / "alias")
-    with pytest.raises(BusinessRuleError, match="link or special file"):
+    with pytest.raises(RuntimeAdmissionError, match="link or special file"):
         sandbox._workspace_bind(workspace, True)
+
+
+def test_noncanonical_workspace_is_an_admission_error():
+    with pytest.raises(RuntimeAdmissionError, match="canonical workspace directory"):
+        sandbox._workspace_bind(Path("relative-workspace"), True)
+
+
+def test_unavailable_workspace_is_an_execution_error(tmp_path):
+    with pytest.raises(
+        RuntimeExecutionError, match="^sandbox workspace unavailable$"
+    ) as error:
+        sandbox._workspace_bind(tmp_path / "missing-workspace", True)
+    assert error.value.__cause__ is None
+
+
+def test_missing_immutable_image_pin_is_an_admission_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        sandbox,
+        "_selected_host",
+        lambda: pytest.fail("invalid image pin must fail before Docker access"),
+    )
+    manager = SandboxManager(tmp_path / "fences")
+    with pytest.raises(RuntimeAdmissionError, match="approved immutable image ID"):
+        manager.run(
+            SandboxPolicy(),
+            dispatch_id="a" * 32,
+            workspace=tmp_path,
+            image="sandbox-fixture",
+            approved_image_id="mutable-tag",
+            command=("code",),
+        )
+    assert not (tmp_path / "fences").exists()
 
 
 @pytest.mark.parametrize(
@@ -267,7 +321,7 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         return
     else:
         with pytest.raises(
-            BusinessRuleError, match="container image differs from approved pin"
+            RuntimeContractError, match="container image differs from approved pin"
         ):
             run()
 
@@ -306,7 +360,7 @@ def test_retagged_image_does_not_create_container(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(
-        BusinessRuleError, match="image reference differs from approved pin"
+        RuntimeContractError, match="image reference differs from approved pin"
     ):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
@@ -618,7 +672,7 @@ def test_image_with_unapproved_secret_env_is_rejected(monkeypatch):
         ).encode()
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="local Linux image"):
+    with pytest.raises(RuntimeAdmissionError, match="local Linux image"):
         sandbox._local_image("fixture:secret")
 
 
@@ -847,6 +901,53 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
     assert not manager._scope_path(dispatch).exists()
 
 
+def test_invalid_created_container_identifier_is_a_contract_error(
+    monkeypatch, tmp_path
+):
+    manager = SandboxManager(tmp_path / "fences")
+    calls = []
+    monkeypatch.setattr(sandbox, "_require_engine", lambda: "fixture-daemon-a")
+    monkeypatch.setattr(sandbox, "_local_image", lambda _image: _FIXTURE_PIN)
+    monkeypatch.setattr(sandbox, "_selected_host", lambda: _FIXTURE_HOST)
+    monkeypatch.setattr(sandbox, "_workspace_bind", lambda *_args: "mount")
+    monkeypatch.setattr(
+        sandbox,
+        "_docker",
+        lambda args: calls.append(args) or b"not-a-container-id",
+    )
+    for method in (
+        "_record_scope",
+        "_record_create",
+        "_update_scope",
+        "_assert_scope",
+        "_settle_create",
+        "_cleanup",
+        "_clear_scope",
+        "_clear_create",
+    ):
+        monkeypatch.setattr(manager, method, lambda *_args: None)
+
+    with pytest.raises(RuntimeContractError, match="Docker did not identify"):
+        manager.run(
+            SandboxPolicy(),
+            dispatch_id="a" * 32,
+            workspace=tmp_path,
+            image="sandbox-fixture",
+            approved_image_id=_FIXTURE_PIN,
+            command=("code",),
+        )
+    assert [args[0] for args in calls] == ["create"]
+    assert not (tmp_path / "fences").exists()
+
+
+def test_container_identity_verification_failure_is_a_contract_error(monkeypatch):
+    monkeypatch.setattr(sandbox, "_docker", lambda _args: b"malformed inspect output")
+    with pytest.raises(
+        RuntimeContractError, match="could not verify sandbox container"
+    ):
+        SandboxManager._inspect_image("a" * 64, "sandbox-name", "b" * 32)
+
+
 @pytest.mark.parametrize("failure", ["info", "inventory", "persistent"])
 def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failure):
     dispatch = "a" * 32
@@ -971,7 +1072,7 @@ def test_approved_image_env_name_cannot_carry_proxy_credentials(monkeypatch):
     image = json.loads(_image_metadata(_FIXTURE_PIN))
     image[0]["Config"]["Env"] = ["LANG=https://fixture:synthetic-canary@proxy.invalid"]
     monkeypatch.setattr(sandbox, "_docker", lambda args: json.dumps(image).encode())
-    with pytest.raises(BusinessRuleError, match="local Linux image"):
+    with pytest.raises(RuntimeAdmissionError, match="local Linux image"):
         sandbox._local_image("fixture")
 
 
