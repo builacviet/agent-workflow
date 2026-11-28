@@ -17,6 +17,7 @@ from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPas
 from agent_workflow.application.exceptions import (
     RuntimeAdmissionError,
     RuntimeContractError,
+    RuntimeExecutionError,
 )
 from agent_workflow.application.runtime.ports import RuntimeAdapters
 from agent_workflow.application.runtime.services.agent_execution import (
@@ -348,7 +349,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
         )
 
         def unavailable():
-            raise BusinessRuleError("synthetic Docker outage")
+            raise RuntimeExecutionError("synthetic Docker outage")
 
         monkeypatch.setattr(docker_runtime, "_require_engine", unavailable)
 
@@ -356,7 +357,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
         config, service, ledger, isolated_sandbox_state
     )
     expected_error = (
-        RuntimeAdmissionError if failure == "invalid-model" else BusinessRuleError
+        RuntimeAdmissionError if failure == "invalid-model" else RuntimeExecutionError
     )
     expected_message = (
         "unsupported runtime"
@@ -468,7 +469,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
             name = args[args.index("--name") + 1]
             if definitive:
                 raise sandbox.DockerCreateRejected("simulated definitive rejection")
-            raise BusinessRuleError("simulated create timeout")
+            raise RuntimeExecutionError("simulated create timeout")
         if args[:2] == ["container", "ls"]:
             if visible:
                 return json.dumps(
@@ -508,7 +509,8 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         )
         pytest.fail("an uncertain create must never start a workload")
 
-    with pytest.raises(BusinessRuleError):
+    expected_error = sandbox.DockerCreateRejected if definitive else BusinessRuleError
+    with pytest.raises(expected_error):
         _dispatch_pass(service, ledger, Mock(execute=execute)).execute({"TEST"})
     assert name is not None
     assert ledger.claim({"NEXT"}, 60) is None

@@ -1,6 +1,6 @@
 """Layer: Infrastructure
 Responsibility: Execute and reconcile trusted, isolated Docker runtime plans.
-Dependencies: Application runtime contracts, Domain errors and dispatch budgets.
+Dependencies: Application errors, runtime contracts and dispatch budgets.
 """
 
 from __future__ import annotations
@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.application.runtime.dtos import (
     credential_env_name,
     nonsecret_env_value,
@@ -77,7 +82,7 @@ _LOCAL_HOST = re.compile(r"(?:unix:///[^\s\x00]+|npipe:////\./pipe/[A-Za-z0-9_.-
 _DOCKER_HOST: ContextVar[str | None] = ContextVar("sandbox_docker_host", default=None)
 
 
-class DockerCreateRejected(BusinessRuleError):
+class DockerCreateRejected(RuntimeExecutionError):
     """Affirmative evidence that Docker did not accept the create request."""
 
 
@@ -104,11 +109,13 @@ def _selected_host() -> str:
                 timeout=operation_timeout(5),
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
-            raise BusinessRuleError(
+            raise RuntimeExecutionError(
                 "cannot resolve the local Docker endpoint"
             ) from None
     if not _valid_host(host):
-        raise BusinessRuleError("sandbox requires a local Docker socket or named pipe")
+        raise RuntimeAdmissionError(
+            "sandbox requires a local Docker socket or named pipe"
+        )
     return host
 
 
@@ -116,7 +123,7 @@ def _selected_host() -> str:
 def _bind_host(host: str) -> Iterator[None]:
     bound = _DOCKER_HOST.get()
     if not _valid_host(host) or (bound is not None and bound != host):
-        raise BusinessRuleError("Docker endpoint changed; dispatch remains blocked")
+        raise RuntimeContractError("Docker endpoint changed; dispatch remains blocked")
     token = _DOCKER_HOST.set(host)
     try:
         yield
@@ -146,14 +153,14 @@ def _docker_invocation(args: list[str]) -> tuple[list[str], dict[str, str] | Non
 
 def _assert_daemon(daemon_id: str) -> None:
     if _require_engine() != daemon_id:
-        raise BusinessRuleError(
+        raise RuntimeContractError(
             "Docker daemon identity changed; dispatch remains blocked"
         )
 
 
 def _assert_selected_host(host: str) -> None:
     if _selected_host() != host:
-        raise BusinessRuleError("Docker endpoint changed during execution")
+        raise RuntimeContractError("Docker endpoint changed during execution")
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +214,7 @@ def docker_security_args(policy: SandboxPolicy) -> list[str]:
 
 def docker_command(args: list[str]) -> bytes:
     if not args or args[0] != "docker":
-        raise BusinessRuleError("Controller may only launch Docker")
+        raise RuntimeAdmissionError("Controller may only launch Docker")
     # Use fixed operation names only. Arguments and subprocess output can
     # contain host paths, environment values or untrusted content.
     operation = "command"
@@ -232,7 +239,7 @@ def docker_command(args: list[str]) -> bytes:
         ).stdout
     except subprocess.TimeoutExpired:
         check_deadline()
-        raise BusinessRuleError(f"Docker {operation} timed out") from None
+        raise RuntimeExecutionError(f"Docker {operation} timed out") from None
     except subprocess.CalledProcessError as error:
         if operation == "create" and error.returncode == 1:
             # Only an exact daemon rejection of the requested immutable image
@@ -250,15 +257,15 @@ def docker_command(args: list[str]) -> bytes:
                 raise DockerCreateRejected(
                     "Docker rejected the sandbox image"
                 ) from None
-        raise BusinessRuleError(
+        raise RuntimeExecutionError(
             f"Docker {operation} failed (exit {error.returncode})"
         ) from None
     except (FileNotFoundError, PermissionError):
         if operation == "create":
             raise DockerCreateRejected("could not launch Docker create") from None
-        raise BusinessRuleError(f"could not launch Docker {operation}") from None
+        raise RuntimeExecutionError(f"could not launch Docker {operation}") from None
     except OSError:
-        raise BusinessRuleError(f"Docker {operation} I/O failed") from None
+        raise RuntimeExecutionError(f"Docker {operation} I/O failed") from None
 
 
 def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
@@ -283,13 +290,13 @@ def run_container(args: list[str], prompt: str, remaining: int) -> bytes:
                         time.monotonic() - started >= remaining
                         or os.fstat(output.fileno()).st_size > 4_000_000
                     ):
-                        raise BusinessRuleError(
+                        raise RuntimeExecutionError(
                             "runtime deadline or output budget exceeded"
                         )
             check_deadline()
             size = output.tell()
             if process.returncode or size > 4_000_000:
-                raise BusinessRuleError(
+                raise RuntimeExecutionError(
                     "coder/test container failed or output exceeded limit"
                 )
             output.seek(0)
@@ -323,7 +330,7 @@ def _require_engine() -> str:
             json.loads(item) for item in raw
         )
     except (TypeError, ValueError):
-        raise BusinessRuleError("invalid Docker capability response") from None
+        raise RuntimeContractError("invalid Docker capability response") from None
     if (
         not isinstance(daemon, str)
         or not _DAEMON_ID.fullmatch(daemon)
@@ -332,7 +339,7 @@ def _require_engine() -> str:
         or not isinstance(security, list)
         or "name=seccomp,profile=builtin" not in security
     ):
-        raise BusinessRuleError(
+        raise RuntimeAdmissionError(
             "Docker cannot enforce sandbox resource and security policy"
         )
     return daemon
@@ -897,7 +904,7 @@ class SandboxManager:
         for identifier in identifiers:
             try:
                 _docker(["rm", "-f", identifier])
-            except BusinessRuleError:
+            except (BusinessRuleError, RuntimeExecutionError):
                 # A concurrent removal can still be visible when rm fails.
                 if not self._wait_for_removal(dispatch_id, name_pattern, identifier):
                     raise

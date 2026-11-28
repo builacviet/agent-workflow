@@ -19,6 +19,11 @@ import pytest
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime import sandbox, sandbox_watchdog
 from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
@@ -83,7 +88,7 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
         return b'"fixture-daemon-a" "linux" true false true true ["name=seccomp,profile=builtin"]'
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="cannot enforce"):
+    with pytest.raises(RuntimeAdmissionError, match="cannot enforce"):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
             dispatch_id="a" * 32,
@@ -110,6 +115,35 @@ def test_declared_image_volumes_fail_closed(monkeypatch):
     monkeypatch.setattr(sandbox, "_docker", docker)
     with pytest.raises(BusinessRuleError, match="without declared volumes"):
         sandbox._local_image("sandbox-fixture")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("exit", r"^Docker info failed \(exit 7\)$"),
+        ("timeout", r"^Docker info timed out$"),
+        ("launch", r"^could not launch Docker info$"),
+        ("io", r"^Docker info I/O failed$"),
+    ],
+)
+def test_docker_transport_failures_have_runtime_execution_ownership(
+    monkeypatch, failure, expected
+):
+    def failed_run(*args, **kwargs):
+        if failure == "exit":
+            raise subprocess.CalledProcessError(
+                7, args[0], stderr=b"private Docker diagnostic"
+            )
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        if failure == "launch":
+            raise FileNotFoundError("private executable path")
+        raise OSError("private host diagnostic")
+
+    monkeypatch.setattr(sandbox.subprocess, "run", failed_run)
+    with pytest.raises(RuntimeExecutionError, match=expected) as error:
+        sandbox.docker_command(["docker", "info"])
+    assert "private" not in str(error.value)
 
 
 def test_workspace_hardlink_is_rejected(tmp_path):
@@ -224,7 +258,9 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         with pytest.raises(TimeoutError, match="fixture deadline exceeded"):
             run()
     elif outcome == "rm-failure":
-        with pytest.raises(BusinessRuleError, match=r"^Docker rm failed \(exit 1\)$"):
+        with pytest.raises(
+            RuntimeExecutionError, match=r"^Docker rm failed \(exit 1\)$"
+        ):
             run()
         assert owned is not None
         assert (tmp_path / "fences" / f"{dispatch}.scope").exists()
@@ -301,7 +337,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
             case "create":
                 requested_name = args[args.index("--name") + 1]
                 assert (fences / dispatch).read_text() == requested_name
-                raise BusinessRuleError("create client timed out")
+                raise RuntimeExecutionError("create client timed out")
             case "container":
                 assert args[1] == "ls"
                 if present:
@@ -528,7 +564,7 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
     ).stdout.strip()
     assert re.fullmatch(r"[0-9a-f]{64}", fixture)
     try:
-        with pytest.raises((TimeoutError, BusinessRuleError), match="deadline"):
+        with pytest.raises((TimeoutError, RuntimeExecutionError), match="deadline"):
             run(
                 "from pathlib import Path; import time; "
                 "Path('started').touch(); time.sleep(30)",
@@ -618,7 +654,7 @@ def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_require_engine", lambda: engine["id"])
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="daemon identity changed"):
+    with pytest.raises(RuntimeContractError, match="daemon identity changed"):
         manager.stop(dispatch)
     assert scope.exists() and not engine["removed"]
     engine["id"] = "daemon-A-123"
@@ -679,7 +715,7 @@ import sys
 from pathlib import Path
 
 if "agent_workflow.infrastructure.runtime.sandbox_watchdog" in sys.orig_argv:
-    from agent_workflow.domain.exceptions import BusinessRuleError
+    from agent_workflow.application.exceptions import RuntimeExecutionError
     from agent_workflow.infrastructure.runtime import sandbox
 
     original = sandbox._docker
@@ -691,7 +727,7 @@ if "agent_workflow.infrastructure.runtime.sandbox_watchdog" in sys.orig_argv:
             assert "WFC_SYNTHETIC_CREDENTIAL" not in os.environ
             assert "HTTPS_PROXY" not in os.environ
             fault.touch()
-            raise BusinessRuleError("synthetic watchdog daemon outage")
+            raise RuntimeExecutionError("synthetic watchdog daemon outage")
         return original(args)
 
     sandbox._docker = injected
@@ -798,7 +834,7 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
         lambda *args: pytest.fail("attached after switch"),
     )
     manager = SandboxManager(tmp_path / "fences")
-    with pytest.raises(BusinessRuleError, match="endpoint changed during execution"):
+    with pytest.raises(RuntimeContractError, match="endpoint changed during execution"):
         manager.run(
             SandboxPolicy(),
             dispatch_id=dispatch,
@@ -835,12 +871,12 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
             if info_calls > 1 and (
                 failure == "persistent" or (failure == "info" and info_calls == 2)
             ):
-                raise BusinessRuleError("synthetic daemon outage")
+                raise RuntimeExecutionError("synthetic daemon outage")
             return _ENGINE_INFO
         if args[:2] == ["container", "ls"]:
             inventory_calls += 1
             if failure == "inventory" and inventory_calls == 1:
-                raise BusinessRuleError("synthetic inventory failure")
+                raise RuntimeExecutionError("synthetic inventory failure")
             return (
                 json.dumps(
                     {
