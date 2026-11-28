@@ -2,10 +2,15 @@
 
 import base64
 import json
+import subprocess
 
 import pytest
 
-from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.workers.trusted_git.app_auth import (
     BOT,
     REPOSITORY,
@@ -23,6 +28,8 @@ class Transport:
         self.now = now
         self.slug = "builacviet-wfc-coder"
         self.head = HEAD
+        self.compare_status = "ahead"
+        self.bot_login = BOT
 
     def __call__(self, method, endpoint, token, payload=None):
         self.calls.append((method, endpoint, payload))
@@ -40,11 +47,11 @@ class Transport:
                 ).isoformat(),
             }
         if endpoint == "/users/" + BOT:
-            return {"id": 123, "login": BOT, "type": "Bot"}
+            return {"id": 123, "login": self.bot_login, "type": "Bot"}
         if "/branches/" in endpoint:
             return {"commit": {"sha": self.head}}
         if "/compare/" in endpoint:
-            return {"status": "ahead"}
+            return {"status": self.compare_status}
         return None
 
 
@@ -95,7 +102,7 @@ def test_jwt_cache_refresh_scope_and_identity(app):
 def test_app_identity_and_stale_sha_fail_closed(app):
     client, transport, _ = app
     transport.slug = "wrong-app"
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(RuntimeContractError):
         client.token()
     transport.slug = "builacviet-wfc-coder"
     verifier = AppVerifier(client)
@@ -104,19 +111,36 @@ def test_app_identity_and_stale_sha_fail_closed(app):
         transport.calls[-2][1]
         == "/repos/builacviet/agent-workflow/branches/codex%2Ftest"
     )
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(RuntimeContractError):
         verifier(REPOSITORY, "codex/test", BASE, BASE)
+    transport.compare_status = "behind"
+    with pytest.raises(RuntimeContractError, match="not an ancestor"):
+        verifier(REPOSITORY, "codex/test", BASE, HEAD)
     calls_before_rejection = list(transport.calls)
     for repository in ("other/repository", "builacviet/techlead-review-poc"):
-        with pytest.raises(BusinessRuleError, match="repository is not authorized"):
+        with pytest.raises(RuntimeAdmissionError, match="repository is not authorized"):
             verifier(repository, "codex/test", BASE, HEAD)
         assert transport.calls == calls_before_rejection
 
 
 @pytest.mark.parametrize("ids", [(True, 2), (0, 2), (1, -2), ("1", 2)])
 def test_invalid_app_ids(app, ids):
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(RuntimeAdmissionError):
         GitHubApp(*ids, app[0].pem)
+
+
+def test_app_requires_secret_pem_file(app, tmp_path):
+    outside = tmp_path / "outside.pem"
+    outside.write_text("synthetic key")
+    with pytest.raises(RuntimeAdmissionError, match="PEM must be a file in .secret"):
+        GitHubApp(1, 2, outside)
+
+
+def test_app_bot_identity_mismatch_is_contract_error(app):
+    client, transport, _ = app
+    transport.bot_login = "other-bot[bot]"
+    with pytest.raises(RuntimeContractError, match="bot identity mismatch"):
+        client.identity()
 
 
 def test_malformed_and_expired_installation_tokens(app):
@@ -129,8 +153,35 @@ def test_malformed_and_expired_installation_tokens(app):
         return original(method, endpoint, token, payload)
 
     client.transport = broken
-    with pytest.raises(BusinessRuleError, match="invalid installation"):
+    with pytest.raises(RuntimeContractError, match="invalid installation"):
         client.token()
+
+
+@pytest.mark.parametrize("nested_error", [RuntimeExecutionError, RuntimeContractError])
+def test_request_json_sanitizes_nested_runtime_errors(monkeypatch, nested_error):
+    import agent_workflow.workers.trusted_git.app_auth as module
+
+    def fail(_data):
+        raise nested_error("private synthetic detail")
+
+    monkeypatch.setattr(module, "_run_http_worker", fail)
+    with pytest.raises(RuntimeExecutionError) as error:
+        module.request_json("GET", "/app", "synthetic-token")
+    assert str(error.value) == (
+        "GitHub App request failed or timed out; reconciliation required"
+    )
+    assert error.value.__suppress_context__
+    assert "private" not in str(error.value)
+
+
+def test_request_json_rejects_invalid_endpoint_as_admission_error(monkeypatch):
+    import agent_workflow.workers.trusted_git.app_auth as module
+
+    monkeypatch.setattr(
+        module, "_run_http_worker", lambda *_args: pytest.fail("transport was called")
+    )
+    with pytest.raises(RuntimeAdmissionError, match="invalid GitHub endpoint"):
+        module.request_json("GET", "//evil.invalid", "synthetic-token")
 
 
 def test_app_http_error_never_exposes_token(monkeypatch):
@@ -140,6 +191,62 @@ def test_app_http_error_never_exposes_token(monkeypatch):
         raise OSError("secret synthetic-token")
 
     monkeypatch.setattr(module, "_run_http_worker", fail)
-    with pytest.raises(BusinessRuleError) as error:
+    with pytest.raises(RuntimeExecutionError) as error:
         module.request_json("GET", "/app", "synthetic-token")
     assert "synthetic-token" not in str(error.value)
+
+
+def test_http_worker_nonzero_exit_is_runtime_execution_error(monkeypatch):
+    import agent_workflow.workers.trusted_git.app_auth as module
+
+    class Process:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, *_args, **_kwargs):
+            return b"private synthetic output", None
+
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: Process())
+    with pytest.raises(RuntimeExecutionError, match="GitHub App request failed"):
+        module._run_http_worker(b"synthetic request")
+
+
+def test_http_worker_termination_failure_is_runtime_contract_error():
+    from agent_workflow.workers.trusted_git.app_auth import _stop_http_worker
+
+    class Process:
+        killed = False
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+        def communicate(self, **_kwargs):
+            raise subprocess.TimeoutExpired("synthetic-http-worker", 5)
+
+    process = Process()
+    with pytest.raises(
+        RuntimeContractError,
+        match="HTTP worker termination unconfirmed; reconciliation required",
+    ):
+        _stop_http_worker(process)
+    assert process.killed
+
+
+def test_signing_failure_is_runtime_execution_error(monkeypatch, app):
+    import agent_workflow.workers.trusted_git.app_auth as module
+
+    def fail(*_args, **_kwargs):
+        raise OSError("private synthetic signer output")
+
+    monkeypatch.setattr(module.subprocess, "run", fail)
+    with pytest.raises(
+        RuntimeExecutionError, match="GitHub App signing failed"
+    ) as error:
+        module.sign_rs256(b"synthetic data", app[0].pem)
+    assert error.value.__suppress_context__
+    assert "private" not in str(error.value)

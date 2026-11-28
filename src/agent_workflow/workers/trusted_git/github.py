@@ -4,7 +4,11 @@ import json
 import subprocess
 from urllib.parse import quote
 
-from agent_workflow.domain.exceptions import BusinessRuleError
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.domain.workflow_identity import validate_sha
 
 
@@ -24,16 +28,16 @@ class GitHubVerifier:
             return json.loads(result.stdout)
         except (OSError, subprocess.SubprocessError, ValueError):
             # Do not return credential-bearing subprocess output or headers.
-            raise BusinessRuleError("GitHub verification unavailable") from None
+            raise RuntimeExecutionError("GitHub verification unavailable") from None
 
     def __call__(self, repository: str, branch: str, base: str, head: str) -> None:
         if repository not in self.allowed:
-            raise BusinessRuleError("repository is not authorized")
+            raise RuntimeAdmissionError("repository is not authorized")
         validate_sha(base)
         validate_sha(head)
         branch_data = self._get(f"repos/{repository}/branches/{quote(branch, safe='')}")
         if branch_data.get("commit", {}).get("sha") != head:
-            raise BusinessRuleError("remote branch head is stale or does not match")
+            raise RuntimeContractError("remote branch head is stale or does not match")
         comparison = self._get(f"repos/{repository}/compare/{base}...{head}")
         if comparison.get("status") not in {"ahead", "identical"}:
-            raise BusinessRuleError("base is not an ancestor of remote head")
+            raise RuntimeContractError("base is not an ancestor of remote head")
