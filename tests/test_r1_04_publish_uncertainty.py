@@ -301,7 +301,7 @@ def test_publish_rejects_staged_content_mismatch_before_commit_or_push(
     )
     with pytest.raises(RuntimeContractError, match=expected):
         worker.publish(data, app)
-    assert not any(args[0] == "commit" for args in git_calls)
+    assert not any("commit" in args for args in git_calls)
     assert not any(args[0] == "push" for args in git_calls)
     assert api_calls == []
     assert not (tmp_path / "result.json").exists()
