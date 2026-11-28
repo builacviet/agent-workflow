@@ -17,7 +17,6 @@ from agent_workflow.application.ci.use_cases.record_ci_evidence import (
 from agent_workflow.application.ci.verification import verify_ci
 from agent_workflow.application.exceptions import InvalidApplicationRequestError
 from agent_workflow.domain.ci_evidence import CiEvidence
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.workflow_identity import REPOSITORY
 
 
@@ -99,7 +98,9 @@ class ReconcileCiUseCase:
                         ("workflow_run", "completed"),
                     }
                 ):
-                    raise BusinessRuleError("CI inbox has incompatible notification")
+                    raise InvalidApplicationRequestError(
+                        "CI inbox has incompatible notification"
+                    )
             observations = self.observe_all()
             # BLOCKED means CI evidence is not terminal, even when GitHub was
             # reachable. Keep the signed wake-up until a fresh observation decides

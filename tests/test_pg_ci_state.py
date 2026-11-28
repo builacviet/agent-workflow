@@ -311,6 +311,71 @@ def setup():
                     )
 
 
+@pytest.mark.parametrize(
+    ("method", "limit", "message"),
+    [
+        ("tracked", 0, "bounded CI task scan"),
+        ("tracked", 33, "bounded CI task scan"),
+        ("tracked", True, "bounded CI task scan"),
+        ("pending_events", 0, "bounded webhook scan"),
+        ("pending_events", 21, "bounded webhook scan"),
+        ("pending_events", True, "bounded webhook scan"),
+    ],
+)
+def test_ci_reader_rejects_invalid_limits_before_opening_session(
+    method, limit, message
+):
+    session_scope = Mock()
+    reader = SqlAlchemyCiStateReader(session_scope)
+
+    with pytest.raises(InvalidApplicationRequestError, match=message):
+        getattr(reader, method)(limit)
+
+    session_scope.assert_not_called()
+
+
+def test_tracked_overflow_fails_without_partial_result_and_rolls_back(monkeypatch):
+    session = MagicMock(spec=Session)
+    transaction = Mock(is_active=True)
+    session.begin.return_value.__enter__.return_value = transaction
+    session.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            task_id="task-1",
+            pr_number=21,
+            head_sha=HEAD,
+            verdict="BLOCKED",
+            repair_heads=0,
+        ),
+        SimpleNamespace(
+            task_id="task-2",
+            pr_number=22,
+            head_sha=NEXT,
+            verdict="BLOCKED",
+            repair_heads=0,
+        ),
+    ]
+    monkeypatch.setattr(
+        "agent_workflow.infrastructure.database.repositories.ci_state_reader.transaction_options.set_repository_transaction_options",
+        Mock(),
+    )
+
+    @contextmanager
+    def session_context():
+        yield session
+
+    session_scope = Mock(side_effect=session_context)
+    reader = SqlAlchemyCiStateReader(session_scope)
+    result = None
+
+    with pytest.raises(ApplicationError, match="too many in-flight CI tasks"):
+        result = reader.tracked(limit=1)
+
+    assert result is None
+    session_scope.assert_called_once()
+    transaction.rollback.assert_called_once()
+    transaction.commit.assert_not_called()
+
+
 @pytest.fixture
 def mcp_provider_env(setup, monkeypatch):
     config, *_ = setup
@@ -419,7 +484,9 @@ def test_authorized_binding_and_exact_identity(setup, mcp_provider_env):
     with pytest.raises(FrozenInstanceError):
         tracked[0].head_sha = NEXT
     for invalid_limit in (0, 33, True):
-        with pytest.raises(ValueError, match="bounded CI task scan"):
+        with pytest.raises(
+            InvalidApplicationRequestError, match="bounded CI task scan"
+        ):
             reader.tracked(invalid_limit)
     assert not approved(task_id, HEAD)
     assert not approved(task_id, "abbreviated")
@@ -994,12 +1061,12 @@ def test_pending_delivery_order_concurrent_settlement_and_fk(setup):
     assert reader.pending_events(limit=1) == [first]
     assert reader.pending_events() == [first, second]
     for invalid_limit in (0, 21, True):
-        with pytest.raises(ValueError, match="bounded"):
+        with pytest.raises(InvalidApplicationRequestError, match="bounded"):
             reader.pending_events(invalid_limit)
     with pytest.raises(BusinessRuleError, match="invalid"):
         acknowledge(first.delivery_id.upper())
     missing = str(uuid4())
-    with pytest.raises(BusinessRuleError, match="unknown"):
+    with pytest.raises(InvalidApplicationRequestError, match="unknown"):
         acknowledge(missing)
     with pytest.raises(IntegrityError) as fk:
         with factory.transaction() as conn:

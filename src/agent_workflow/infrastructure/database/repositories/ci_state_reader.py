@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session
 
 from agent_workflow.application.ci.dtos import CiTrackedTaskSnapshot
 from agent_workflow.application.exceptions import (
+    ApplicationError,
     CorruptedPersistenceDataError,
+    InvalidApplicationRequestError,
     PersistenceUnavailableError,
 )
 from agent_workflow.domain.ci_evidence import WebhookNotification
 from agent_workflow.domain.ci_tracking import CiApprovalSnapshot
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import CiVerdict, WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 from agent_workflow.infrastructure.database import transaction_options
@@ -75,7 +76,7 @@ class SqlAlchemyCiStateReader:
 
     def tracked(self, limit: int = 32) -> tuple[CiTrackedTaskSnapshot, ...]:
         if type(limit) is not int or not 1 <= limit <= 32:
-            raise ValueError("bounded CI task scan required")
+            raise InvalidApplicationRequestError("bounded CI task scan required")
         try:
             with self._read_session() as session:
                 bindings = session.scalars(
@@ -103,7 +104,7 @@ class SqlAlchemyCiStateReader:
                     for task in validated
                 )
                 if len(result) > limit:
-                    raise BusinessRuleError("too many in-flight CI tasks")
+                    raise ApplicationError("too many in-flight CI tasks")
                 return result
         except ValidationError:
             raise CorruptedPersistenceDataError(_OPERATION_ERROR) from None
@@ -174,7 +175,7 @@ class SqlAlchemyCiStateReader:
 
     def pending_events(self, limit: int = 20) -> list[WebhookNotification]:
         if type(limit) is not int or not 1 <= limit <= 20:
-            raise ValueError("bounded webhook scan required")
+            raise InvalidApplicationRequestError("bounded webhook scan required")
         try:
             with self._read_session() as session:
                 rows = session.scalars(
