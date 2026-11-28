@@ -5,8 +5,12 @@ import stat
 import subprocess
 from pathlib import Path, PurePosixPath
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.budget import check_deadline, operation_timeout
-from agent_workflow.domain.exceptions import BusinessRuleError
 
 DENIED = {".git", ".secret", ".runtime", ".codex", ".env", "AGENTS.md"}
 GENERATED = {".pytest_cache", "__pycache__"}
@@ -41,7 +45,7 @@ def safe_path(value: str) -> str:
         )
         or path.suffix.lower() in {".pem", ".key"}
     ):
-        raise BusinessRuleError("unsafe coder path")
+        raise RuntimeAdmissionError("unsafe coder path")
     return value
 
 
@@ -62,7 +66,7 @@ def independent_path(path: Path, *, directory: bool = False) -> None:
     for candidate in (path, path.resolve()):
         directories = candidate.parts if directory else candidate.parts[:-1]
         if any(part.casefold().startswith(forbidden) for part in directories):
-            raise BusinessRuleError("v2 paths are forbidden")
+            raise RuntimeAdmissionError("v2 paths are forbidden")
 
 
 def command(
@@ -85,7 +89,7 @@ def command(
         check_deadline()
         return result
     except (OSError, subprocess.SubprocessError):
-        raise BusinessRuleError("trusted command failed; output withheld") from None
+        raise RuntimeExecutionError("trusted command failed; output withheld") from None
 
 
 def git(root: Path, *args: str) -> bytes:
@@ -101,7 +105,7 @@ def snapshot(root: Path, sha: str, destination: Path) -> dict[str, tuple[str, by
         mode, kind, oid = meta.decode().split()
         path = raw_path.decode("utf-8")
         if mode not in {"100644", "100755"} or kind != "blob":
-            raise BusinessRuleError("symlinks and submodules are not supported")
+            raise RuntimeAdmissionError("symlinks and submodules are not supported")
         # Context may include AGENTS.md, but it is never publishable by the coder.
         template = (
             path == ".env.example"
@@ -115,7 +119,7 @@ def snapshot(root: Path, sha: str, destination: Path) -> dict[str, tuple[str, by
             len(content) + sum(len(item[1]) for item in baseline.values()) > MAX_BYTES
             or len(baseline) >= 2000
         ):
-            raise BusinessRuleError("source snapshot limit exceeded")
+            raise RuntimeAdmissionError("source snapshot limit exceeded")
         target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
@@ -134,7 +138,7 @@ def changes(stage: Path, baseline: dict, prefixes: list[str]) -> list[dict]:
         for name in list(dirs):
             path = Path(directory) / name
             if is_linked(path):
-                raise BusinessRuleError("snapshot contains a linked directory")
+                raise RuntimeAdmissionError("snapshot contains a linked directory")
             if name in GENERATED:
                 dirs.remove(name)
         for name in names:
@@ -147,7 +151,7 @@ def changes(stage: Path, baseline: dict, prefixes: list[str]) -> list[dict]:
                 or info.st_nlink != 1
                 or info.st_size > MAX_BYTES
             ):
-                raise BusinessRuleError("snapshot contains unsafe file")
+                raise RuntimeAdmissionError("snapshot contains unsafe file")
             # Mode is preserved from Git for existing files; additions are ordinary files.
             mode = baseline.get(relative, ("100644", b""))[0]
             files[relative] = (mode, path.read_bytes())
@@ -155,13 +159,13 @@ def changes(stage: Path, baseline: dict, prefixes: list[str]) -> list[dict]:
                 len(files) > 2000
                 or sum(len(item[1]) for item in files.values()) > MAX_BYTES
             ):
-                raise BusinessRuleError("snapshot file count exceeded")
+                raise RuntimeAdmissionError("snapshot file count exceeded")
     result = []
     for path in sorted(set(files) | set(baseline)):
         if files.get(path) == baseline.get(path):
             continue
         if not writable(path, prefixes):
-            raise BusinessRuleError("coder modified a path outside the allowlist")
+            raise RuntimeAdmissionError("coder modified a path outside the allowlist")
         result.append(
             {
                 "path": path,
@@ -170,5 +174,5 @@ def changes(stage: Path, baseline: dict, prefixes: list[str]) -> list[dict]:
             }
         )
     if not result:
-        raise BusinessRuleError("coder produced no source changes")
+        raise RuntimeContractError("coder produced no source changes")
     return result
