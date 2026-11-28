@@ -117,6 +117,35 @@ def test_declared_image_volumes_fail_closed(monkeypatch):
         sandbox._local_image("sandbox-fixture")
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("exit", r"^Docker info failed \(exit 7\)$"),
+        ("timeout", r"^Docker info timed out$"),
+        ("launch", r"^could not launch Docker info$"),
+        ("io", r"^Docker info I/O failed$"),
+    ],
+)
+def test_docker_transport_failures_have_runtime_execution_ownership(
+    monkeypatch, failure, expected
+):
+    def failed_run(*args, **kwargs):
+        if failure == "exit":
+            raise subprocess.CalledProcessError(
+                7, args[0], stderr=b"private Docker diagnostic"
+            )
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        if failure == "launch":
+            raise FileNotFoundError("private executable path")
+        raise OSError("private host diagnostic")
+
+    monkeypatch.setattr(sandbox.subprocess, "run", failed_run)
+    with pytest.raises(RuntimeExecutionError, match=expected) as error:
+        sandbox.docker_command(["docker", "info"])
+    assert "private" not in str(error.value)
+
+
 def test_workspace_hardlink_is_rejected(tmp_path):
     source = tmp_path / "outside-synthetic"
     source.write_text("fixture", encoding="utf-8")
