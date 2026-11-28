@@ -408,7 +408,9 @@ def test_missing_pin_after_pre_launch_retirement_holds_slot(
     if pin_written:
         runtime.sandbox._engine_path(dispatch_id).unlink()
     assert not ledger.is_pre_launch(dispatch_id)
-    with pytest.raises(BusinessRuleError, match="lacks its original Docker endpoint"):
+    with pytest.raises(
+        RuntimeContractError, match="lacks its original Docker endpoint"
+    ):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
@@ -421,7 +423,9 @@ def test_missing_pre_launch_marker_and_pin_holds_slot(
     claim = ledger.claim({"TEST"}, 60)
     dispatch_id = claim.dispatch_id
     ledger.block(dispatch_id)
-    with pytest.raises(BusinessRuleError, match="lacks its original Docker endpoint"):
+    with pytest.raises(
+        RuntimeContractError, match="lacks its original Docker endpoint"
+    ):
         runtime.reconcile(dispatch_id)
     assert ledger.claim({"NEXT"}, 60) is None
 
@@ -509,14 +513,16 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         )
         pytest.fail("an uncertain create must never start a workload")
 
-    expected_error = sandbox.DockerCreateRejected if definitive else BusinessRuleError
+    expected_error = (
+        sandbox.DockerCreateRejected if definitive else RuntimeContractError
+    )
     with pytest.raises(expected_error):
         _dispatch_pass(service, ledger, Mock(execute=execute)).execute({"TEST"})
     assert name is not None
     assert ledger.claim({"NEXT"}, 60) is None
     if not definitive:
         # Empty inventory is not proof an accepted request cannot appear later.
-        with pytest.raises(BusinessRuleError, match="create remains uncertain"):
+        with pytest.raises(RuntimeContractError, match="create remains uncertain"):
             runtime.reconcile(dispatch_id)
         assert ledger.claim({"NEXT"}, 60) is None
         visible = True
