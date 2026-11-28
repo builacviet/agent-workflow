@@ -10,6 +10,7 @@ from agent_workflow.application.dispatch.ports import DispatchClaim
 from agent_workflow.application.exceptions import (
     InvalidApplicationRequestError,
     RuntimeAdmissionError,
+    RuntimeContractError,
 )
 from agent_workflow.application.review.dtos import ReviewTask
 from agent_workflow.application.review.use_cases.get_review_context import (
@@ -31,7 +32,6 @@ from agent_workflow.application.runtime.services.agent_execution import (
 from agent_workflow.application.task.use_cases.get_coder_assignment import (
     CoderAssignmentOutput,
 )
-from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.domain.states import WorkflowStatus
 from agent_workflow.domain.workflow_identity import REPOSITORY
 
@@ -200,7 +200,7 @@ def test_explicit_ci_policy_does_not_read_ambient_environment(
     workspace = factory.return_value.workspace
     monkeypatch.setenv("WFC_CI_GATE_REQUIRED", "0")
     required = AgentExecutionService(**dependencies, require_ci_tracking=True)
-    with pytest.raises(RuntimeError, match="CI tracking required"):
+    with pytest.raises(RuntimeContractError, match="CI tracking required"):
         required.execute(CLAIM, ASSIGNMENT, Mock())
     assert all(not port.mock_calls for port in dependencies.values())
 
@@ -223,7 +223,7 @@ def test_terminal_cleanup_is_bound_to_the_same_dispatch_and_engine(dependencies)
     service = AgentExecutionService(**dependencies, require_ci_tracking=True)
     engine = dependencies["adapter_factory"].return_value.engine
     execution = AgentExecutionResult(CLAIM.dispatch_id, "c" * 40, engine)
-    with pytest.raises(BusinessRuleError, match="differs from admitted Worker"):
+    with pytest.raises(RuntimeContractError, match="differs from admitted Worker"):
         service.release_engine("other", execution)
     engine.release_engine.assert_not_called()
     service.release_engine(CLAIM.dispatch_id, execution)
