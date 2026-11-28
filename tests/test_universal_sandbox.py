@@ -337,7 +337,7 @@ def test_late_create_is_fenced_until_owned_container_appears(monkeypatch, tmp_pa
             case "create":
                 requested_name = args[args.index("--name") + 1]
                 assert (fences / dispatch).read_text() == requested_name
-                raise BusinessRuleError("create client timed out")
+                raise RuntimeExecutionError("create client timed out")
             case "container":
                 assert args[1] == "ls"
                 if present:
@@ -564,7 +564,7 @@ def test_s08_timeout_and_cleanup_ownership(live_sandbox):
     ).stdout.strip()
     assert re.fullmatch(r"[0-9a-f]{64}", fixture)
     try:
-        with pytest.raises((TimeoutError, BusinessRuleError), match="deadline"):
+        with pytest.raises((TimeoutError, RuntimeExecutionError), match="deadline"):
             run(
                 "from pathlib import Path; import time; "
                 "Path('started').touch(); time.sleep(30)",
@@ -715,7 +715,7 @@ import sys
 from pathlib import Path
 
 if "agent_workflow.infrastructure.runtime.sandbox_watchdog" in sys.orig_argv:
-    from agent_workflow.domain.exceptions import BusinessRuleError
+    from agent_workflow.application.exceptions import RuntimeExecutionError
     from agent_workflow.infrastructure.runtime import sandbox
 
     original = sandbox._docker
@@ -727,7 +727,7 @@ if "agent_workflow.infrastructure.runtime.sandbox_watchdog" in sys.orig_argv:
             assert "WFC_SYNTHETIC_CREDENTIAL" not in os.environ
             assert "HTTPS_PROXY" not in os.environ
             fault.touch()
-            raise BusinessRuleError("synthetic watchdog daemon outage")
+            raise RuntimeExecutionError("synthetic watchdog daemon outage")
         return original(args)
 
     sandbox._docker = injected

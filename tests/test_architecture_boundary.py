@@ -349,7 +349,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
         )
 
         def unavailable():
-            raise BusinessRuleError("synthetic Docker outage")
+            raise RuntimeExecutionError("synthetic Docker outage")
 
         monkeypatch.setattr(docker_runtime, "_require_engine", unavailable)
 
@@ -357,7 +357,7 @@ def test_worker_reconciliation_accepts_proven_pre_launch_without_docker(
         config, service, ledger, isolated_sandbox_state
     )
     expected_error = (
-        RuntimeAdmissionError if failure == "invalid-model" else BusinessRuleError
+        RuntimeAdmissionError if failure == "invalid-model" else RuntimeExecutionError
     )
     expected_message = (
         "unsupported runtime"
@@ -509,7 +509,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         )
         pytest.fail("an uncertain create must never start a workload")
 
-    expected_error = RuntimeExecutionError if definitive else BusinessRuleError
+    expected_error = sandbox.DockerCreateRejected if definitive else BusinessRuleError
     with pytest.raises(expected_error):
         _dispatch_pass(service, ledger, Mock(execute=execute)).execute({"TEST"})
     assert name is not None
