@@ -5,6 +5,11 @@ from types import SimpleNamespace
 import pytest
 from starlette.requests import Request
 
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.application.review.dtos import ReviewQueueItem
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.interfaces.cli.admin import BASE, REPO
@@ -116,14 +121,30 @@ def test_github_verifier_fail_closed_and_escapes_branch(monkeypatch):
     verify = GitHubVerifier({REPO})
     verify(REPO, "task/test", BASE, HEAD)
     assert "task%2Ftest" in calls[0][-1]
-    with pytest.raises(BusinessRuleError):
+    with pytest.raises(RuntimeAdmissionError):
         verify("unknown/repo", "x", BASE, HEAD)
+
+    calls.clear()
+
+    def wrong_head(args, **kwargs):
+        return SimpleNamespace(stdout='{"commit":{"sha":"' + NEXT + '"}}')
+
+    monkeypatch.setattr(subprocess, "run", wrong_head)
+    with pytest.raises(RuntimeContractError, match="head is stale"):
+        verify(REPO, "task/test", BASE, HEAD)
+
+    def invalid_sha(*args, **kwargs):
+        pytest.fail("invalid Domain SHA must be rejected before remote access")
+
+    monkeypatch.setattr(subprocess, "run", invalid_sha)
+    with pytest.raises(BusinessRuleError):
+        verify(REPO, "task/test", "invalid", HEAD)
 
     def fail(*args, **kwargs):
         raise subprocess.TimeoutExpired("gh", 15)
 
     monkeypatch.setattr(subprocess, "run", fail)
-    with pytest.raises(BusinessRuleError, match="unavailable"):
+    with pytest.raises(RuntimeExecutionError, match="unavailable"):
         verify(REPO, "task/test", BASE, HEAD)
 
 
