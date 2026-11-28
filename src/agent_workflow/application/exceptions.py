@@ -13,6 +13,10 @@ class RuntimeContractError(ApplicationError):
     """A runtime plan, result or evidence violates its contract."""
 
 
+class RuntimeExecutionError(ApplicationError):
+    """A runtime could not carry out an admitted execution request."""
+
+
 class InvalidApplicationRequestError(ApplicationError):
     """Invalid caller input or application configuration."""
 

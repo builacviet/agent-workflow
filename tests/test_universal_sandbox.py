@@ -19,6 +19,11 @@ import pytest
 
 from agent_workflow import budget
 from agent_workflow.app_config import AppConfig
+from agent_workflow.application.exceptions import (
+    RuntimeAdmissionError,
+    RuntimeContractError,
+    RuntimeExecutionError,
+)
 from agent_workflow.domain.exceptions import BusinessRuleError
 from agent_workflow.infrastructure.runtime import sandbox, sandbox_watchdog
 from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime
@@ -83,7 +88,7 @@ def test_unavailable_engine_enforcement_prevents_launch(monkeypatch, tmp_path):
         return b'"fixture-daemon-a" "linux" true false true true ["name=seccomp,profile=builtin"]'
 
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="cannot enforce"):
+    with pytest.raises(RuntimeAdmissionError, match="cannot enforce"):
         SandboxManager(tmp_path / "fences").run(
             SandboxPolicy(),
             dispatch_id="a" * 32,
@@ -224,7 +229,9 @@ def test_docker_argument_boundary_and_cleanup(monkeypatch, tmp_path, outcome):
         with pytest.raises(TimeoutError, match="fixture deadline exceeded"):
             run()
     elif outcome == "rm-failure":
-        with pytest.raises(BusinessRuleError, match=r"^Docker rm failed \(exit 1\)$"):
+        with pytest.raises(
+            RuntimeExecutionError, match=r"^Docker rm failed \(exit 1\)$"
+        ):
             run()
         assert owned is not None
         assert (tmp_path / "fences" / f"{dispatch}.scope").exists()
@@ -618,7 +625,7 @@ def test_wrong_daemon_cannot_release_running_dispatch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "_require_engine", lambda: engine["id"])
     monkeypatch.setattr(sandbox, "_docker", docker)
-    with pytest.raises(BusinessRuleError, match="daemon identity changed"):
+    with pytest.raises(RuntimeContractError, match="daemon identity changed"):
         manager.stop(dispatch)
     assert scope.exists() and not engine["removed"]
     engine["id"] = "daemon-A-123"
@@ -798,7 +805,7 @@ def test_switch_during_create_cleans_original_and_never_attaches(monkeypatch, tm
         lambda *args: pytest.fail("attached after switch"),
     )
     manager = SandboxManager(tmp_path / "fences")
-    with pytest.raises(BusinessRuleError, match="endpoint changed during execution"):
+    with pytest.raises(RuntimeContractError, match="endpoint changed during execution"):
         manager.run(
             SandboxPolicy(),
             dispatch_id=dispatch,
@@ -835,12 +842,12 @@ def test_detached_watchdog_retries_or_retains_scope(monkeypatch, tmp_path, failu
             if info_calls > 1 and (
                 failure == "persistent" or (failure == "info" and info_calls == 2)
             ):
-                raise BusinessRuleError("synthetic daemon outage")
+                raise RuntimeExecutionError("synthetic daemon outage")
             return _ENGINE_INFO
         if args[:2] == ["container", "ls"]:
             inventory_calls += 1
             if failure == "inventory" and inventory_calls == 1:
-                raise BusinessRuleError("synthetic inventory failure")
+                raise RuntimeExecutionError("synthetic inventory failure")
             return (
                 json.dumps(
                     {

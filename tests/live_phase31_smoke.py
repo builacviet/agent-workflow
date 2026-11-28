@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agent_workflow.app_config import AppConfig  # noqa: E402
 from agent_workflow.application.dispatch.ports import DispatchClaim  # noqa: E402
+from agent_workflow.application.exceptions import RuntimeExecutionError  # noqa: E402
 from agent_workflow.domain.exceptions import BusinessRuleError  # noqa: E402
 from agent_workflow.infrastructure.runtime.docker_runtime import DockerRuntime  # noqa: E402
 from agent_workflow.infrastructure.runtime.sandbox import SandboxManager  # noqa: E402
@@ -90,7 +91,7 @@ def main() -> None:
     try:
         try:
             runtime.docker(claim, timeout_stage, "test")
-        except (BusinessRuleError, TimeoutError):
+        except (BusinessRuleError, TimeoutError, RuntimeExecutionError):
             pass
         else:
             raise AssertionError("timeout probe unexpectedly completed")

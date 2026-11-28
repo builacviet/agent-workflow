@@ -17,6 +17,7 @@ from agent_workflow.application.dispatch.run_dispatch_pass import RunDispatchPas
 from agent_workflow.application.exceptions import (
     RuntimeAdmissionError,
     RuntimeContractError,
+    RuntimeExecutionError,
 )
 from agent_workflow.application.runtime.ports import RuntimeAdapters
 from agent_workflow.application.runtime.services.agent_execution import (
@@ -468,7 +469,7 @@ def test_global_slot_release_requires_affirmative_create_settlement(
             name = args[args.index("--name") + 1]
             if definitive:
                 raise sandbox.DockerCreateRejected("simulated definitive rejection")
-            raise BusinessRuleError("simulated create timeout")
+            raise RuntimeExecutionError("simulated create timeout")
         if args[:2] == ["container", "ls"]:
             if visible:
                 return json.dumps(
@@ -508,7 +509,8 @@ def test_global_slot_release_requires_affirmative_create_settlement(
         )
         pytest.fail("an uncertain create must never start a workload")
 
-    with pytest.raises(BusinessRuleError):
+    expected_error = RuntimeExecutionError if definitive else BusinessRuleError
+    with pytest.raises(expected_error):
         _dispatch_pass(service, ledger, Mock(execute=execute)).execute({"TEST"})
     assert name is not None
     assert ledger.claim({"NEXT"}, 60) is None
